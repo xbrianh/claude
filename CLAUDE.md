@@ -8,14 +8,14 @@ Personal Claude Code config, bidirectionally mirrored with `~/.claude/` (plus `~
 
 ## Tracked paths
 
-Only the paths in `FILE_PAIRS` and `DIR_PAIRS` at the top of `scripts/sync.sh` are synced. Anything outside those paths is untracked by the sync.
+Only the paths in `FILE_PAIRS` and `DIR_PAIRS` at the top of `scripts/sync.sh` are synced. Anything outside those paths is untracked by the sync. The list below is kept in sync manually with `scripts/sync.sh` — update both together.
 
 - `FILE_PAIRS`: `home/CLAUDE.md` → `~/.claude/CLAUDE.md`, `settings.json` → `~/.claude/settings.json`, `bin/ghimplement.sh` → `~/bin/ghimplement.sh`.
-- `DIR_PAIRS`: `skills/`, `agents/`, `commands/` ↔ `~/.claude/{skills,agents,commands}/`.
+- `DIR_PAIRS`: `skills/`, `agents/`, `commands/` ↔ `~/.claude/{skills,agents,commands}/`. A tracked directory that doesn't yet exist on the source side is skipped (not created) — e.g. `commands/` is tracked but currently empty and won't be mirrored until it has contents.
 
 ## Directory mirroring caveat
 
-`DIR_PAIRS` sync with `rsync --delete` — deletions on either side are real. Pending deletions count toward `DELETE_THRESHOLD` (5); above that, `push`/`pull` refuse without `--force`.
+`DIR_PAIRS` sync with `rsync --delete` — deletions on either side are real. Pending deletions count toward `DELETE_THRESHOLD` (5); non-dry-run `push`/`pull` refuse above that threshold unless `--force` is used, while `--dry-run` still previews the deletions.
 
 ## Adding a new skill / agent / command
 
@@ -23,7 +23,7 @@ Create the file under the corresponding repo directory (`skills/<name>/SKILL.md`
 
 ## The `gh*` skill pipeline
 
-[`bin/ghimplement.sh`](bin/ghimplement.sh) chains the four `gh*` skills (`/ghplan` → implement → `/ghreview` → `/ghaddress`) into an end-to-end GitHub-issue-driven workflow.
+The `ghimplement` skill invokes [`bin/ghimplement.sh`](bin/ghimplement.sh) to run an end-to-end GitHub-issue-driven workflow: `/ghplan`, an implementation + PR creation stage, `/ghreview`, and `/ghaddress`.
 
 ## Not tracked
 
