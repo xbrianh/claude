@@ -1,11 +1,11 @@
 ---
 name: ghimplement
-description: Run the end-to-end plan → implement → review → address workflow by invoking ~/bin/ghimplement.sh. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them.
+description: Run the end-to-end plan → implement → review → address workflow by invoking ~/.claude/skills/ghimplement/ghimplement.sh. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them.
 argument-hint: [-r <ref>] <instructions>
-allowed-tools: Bash(~/bin/ghimplement.sh:*)
+allowed-tools: Bash(~/.claude/skills/ghimplement/ghimplement.sh:*)
 ---
 
-You are running the `ghimplement` workflow. This is a thin wrapper over the shell script at `~/bin/ghimplement.sh`, which orchestrates six `claude -p` + `gh` steps end-to-end.
+You are running the `ghimplement` workflow. This is a thin wrapper over the shell script at `~/.claude/skills/ghimplement/ghimplement.sh`, which orchestrates six `claude -p` + `gh` steps end-to-end.
 
 ## Arguments
 
@@ -18,7 +18,7 @@ Forward them verbatim to the script. Quote the instructions string so shell word
 Run the script:
 
 ```
-~/bin/ghimplement.sh $ARGUMENTS
+~/.claude/skills/ghimplement/ghimplement.sh $ARGUMENTS
 ```
 
 Stream its output directly so the user can see per-step progress (`[1/6] running /ghplan`, etc.). When it finishes, the script prints the final PR URL — echo that URL back to the user as your answer.

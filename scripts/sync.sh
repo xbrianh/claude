@@ -3,7 +3,6 @@
 # Tracks:
 #   ~/.claude/CLAUDE.md, ~/.claude/settings.json
 #   ~/.claude/skills/, ~/.claude/agents/, ~/.claude/commands/
-#   ~/bin/ghimplement.sh
 # Excludes: settings.local.json (local-only)
 
 set -euo pipefail
@@ -19,7 +18,6 @@ DELETE_THRESHOLD=5
 FILE_PAIRS=(
     "home/CLAUDE.md:$CLAUDE_DIR/CLAUDE.md"
     "settings.json:$CLAUDE_DIR/settings.json"
-    "bin/ghimplement.sh:$HOME/bin/ghimplement.sh"
 )
 DIR_PAIRS=(
     "skills:$CLAUDE_DIR/skills"

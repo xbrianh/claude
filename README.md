@@ -1,6 +1,6 @@
 # Claude Code config
 
-Personal [Claude Code](https://claude.com/claude-code) configuration — global instructions, settings, skills, agents, and the `ghimplement` workflow. The repo is bidirectionally mirrored with `~/.claude/` (plus `~/bin/ghimplement.sh`) via [`scripts/sync.sh`](scripts/sync.sh).
+Personal [Claude Code](https://claude.com/claude-code) configuration — global instructions, settings, skills, agents, and the `ghimplement` workflow. The repo is bidirectionally mirrored with `~/.claude/` via [`scripts/sync.sh`](scripts/sync.sh).
 
 ## Layout
 
@@ -8,16 +8,15 @@ Personal [Claude Code](https://claude.com/claude-code) configuration — global 
 CLAUDE.md             # repo-level doc for Claude, loaded when cwd is this repo (not synced)
 home/CLAUDE.md        # global preferences, synced to ~/.claude/CLAUDE.md
 settings.json         # harness settings: hooks, permissions, plugins
-bin/ghimplement.sh    # chained plan → implement → review → address pipeline
 skills/
   ghplan/             # /ghplan: draft a plan, post it as a GitHub issue
-  ghimplement/        # /ghimplement: run the full pipeline via bin/ghimplement.sh
+  ghimplement/        # /ghimplement: run the full pipeline (wrapper + colocated ghimplement.sh)
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
 agents/
   pragmatic-developer.md
 commands/             # slash commands (created on first sync; no files tracked yet)
-scripts/sync.sh       # bidirectional sync with ~/.claude and ~/bin
+scripts/sync.sh       # bidirectional sync with ~/.claude
 ```
 
 Intentionally untracked: `settings.local.json` and `.claude/` — see [`.gitignore`](.gitignore).
@@ -41,11 +40,11 @@ Directory pairs (`skills/`, `agents/`, `commands/`) sync with `rsync --delete`, 
 The four `gh*` skills compose into a GitHub-issue-driven workflow:
 
 - [`/ghplan`](skills/ghplan/SKILL.md) — draft a plan and post it as a new GitHub issue.
-- [`/ghimplement`](skills/ghimplement/SKILL.md) — run the full pipeline end-to-end via [`bin/ghimplement.sh`](bin/ghimplement.sh).
+- [`/ghimplement`](skills/ghimplement/SKILL.md) — run the full pipeline end-to-end via [`skills/ghimplement/ghimplement.sh`](skills/ghimplement/ghimplement.sh).
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
 
-`bin/ghimplement.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
+`skills/ghimplement/ghimplement.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
 ## Getting started
 
