@@ -1,6 +1,6 @@
 # This repo
 
-Personal Claude Code config, bidirectionally mirrored with `~/.claude/` (plus `~/bin/ghimplement.sh`) via [`scripts/sync.sh`](scripts/sync.sh). See [`README.md`](README.md) for the full overview.
+Personal Claude Code config, bidirectionally mirrored with `~/.claude/` via [`scripts/sync.sh`](scripts/sync.sh). See [`README.md`](README.md) for the full overview.
 
 ## Source of truth
 
@@ -10,7 +10,7 @@ Personal Claude Code config, bidirectionally mirrored with `~/.claude/` (plus `~
 
 Only the paths in `FILE_PAIRS` and `DIR_PAIRS` at the top of `scripts/sync.sh` are synced. Anything outside those paths is untracked by the sync. The list below is kept in sync manually with `scripts/sync.sh` — update both together.
 
-- `FILE_PAIRS`: `home/CLAUDE.md` → `~/.claude/CLAUDE.md`, `settings.json` → `~/.claude/settings.json`, `bin/ghimplement.sh` → `~/bin/ghimplement.sh`.
+- `FILE_PAIRS`: `home/CLAUDE.md` → `~/.claude/CLAUDE.md`, `settings.json` → `~/.claude/settings.json`.
 - `DIR_PAIRS`: `skills/`, `agents/`, `commands/` ↔ `~/.claude/{skills,agents,commands}/`. A tracked directory that doesn't yet exist on the source side is skipped (not created) — e.g. `commands/` is tracked but currently empty and won't be mirrored until it has contents.
 
 ## Directory mirroring caveat
@@ -23,7 +23,7 @@ Create the file under the corresponding repo directory (`skills/<name>/SKILL.md`
 
 ## The `gh*` skill pipeline
 
-The `ghimplement` skill invokes [`bin/ghimplement.sh`](bin/ghimplement.sh) to run an end-to-end GitHub-issue-driven workflow: `/ghplan`, an implementation + PR creation stage, `/ghreview`, and `/ghaddress`.
+The `ghimplement` skill invokes [`skills/ghimplement/ghimplement.sh`](skills/ghimplement/ghimplement.sh) to run an end-to-end GitHub-issue-driven workflow: `/ghplan`, an implementation + PR creation stage, `/ghreview`, and `/ghaddress`.
 
 ## Not tracked
 
