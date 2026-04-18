@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh *)",
+      "Bash(grep *)",
+      "Bash(find *)"
+    ],
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -q 'python3' && echo '{\"decision\":\"block\",\"reason\":\"Use `python` not `python3`. Your environment uses `python` as the correct command.\"}' || true"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | { read -r cmd; echo \"$cmd\" | grep -qw 'pip' && ! echo \"$cmd\" | grep -q 'uv pip' && echo '{\"decision\":\"block\",\"reason\":\"Use `uv pip` instead of bare `pip`.\"}' || true; }"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '\\a'"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "github@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true
+  },
+  "skipAutoPermissionPrompt": true
+}
