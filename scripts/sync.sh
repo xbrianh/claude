@@ -155,7 +155,16 @@ check_deletions() {
     fi
 }
 
+# Warn about stale files left behind by past FILE_PAIRS entries that have since
+# been removed. FILE_PAIRS has no delete semantics, so users need a nudge.
+warn_stale_files() {
+    if [[ -f "$HOME/bin/ghimplement.sh" ]]; then
+        echo "note: $HOME/bin/ghimplement.sh is no longer tracked; remove it with: rm $HOME/bin/ghimplement.sh" >&2
+    fi
+}
+
 do_pull() {
+    warn_stale_files
     for pair in "${FILE_PAIRS[@]}"; do
         split_pair "$pair"
         sync_file "$HOME_PATH" "$REPO_PATH"
@@ -167,6 +176,7 @@ do_pull() {
 }
 
 do_push() {
+    warn_stale_files
     for pair in "${FILE_PAIRS[@]}"; do
         split_pair "$pair"
         sync_file "$REPO_PATH" "$HOME_PATH"
