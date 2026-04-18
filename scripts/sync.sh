@@ -12,6 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 
+# Threshold above which `push`/`pull` refuse to delete without --force.
+DELETE_THRESHOLD=5
+
 # "<repo-relative-path>:<absolute-home-path>"
 FILE_PAIRS=(
     "CLAUDE.md:$CLAUDE_DIR/CLAUDE.md"
@@ -24,34 +27,52 @@ DIR_PAIRS=(
     "commands:$CLAUDE_DIR/commands"
 )
 
-usage() {
+help_text() {
     cat <<EOF
 Usage: $(basename "$0") <command> [options]
 
 Commands:
-  pull        Copy from ~/.claude/ into this repo (mirror: deletes extras in repo)
-  push        Copy from this repo into ~/.claude/ (mirror: deletes extras in ~/.claude)
+  pull        Copy from ~/.claude/ into this repo (mirror: deletes extras in repo dirs)
+  push        Copy from this repo into ~/.claude/ (mirror: deletes extras in ~/.claude dirs)
   diff        Show differences between repo and ~/.claude/
   status      Alias for diff
 
 Options:
   -y, --yes       Skip confirmation prompt
   -n, --dry-run   Show what would change without writing
+  -f, --force     Allow deleting more than $DELETE_THRESHOLD files during push/pull
+  -h, --help      Show this help
 EOF
+}
+
+die_usage() {
+    [[ -n "${1:-}" ]] && echo "$1" >&2
+    help_text >&2
     exit 1
 }
 
-[[ $# -lt 1 ]] && usage
+# Handle help flag before extracting CMD so `./sync.sh --help` works.
+case "${1:-}" in
+    -h|--help)
+        help_text
+        exit 0
+        ;;
+    "")
+        die_usage
+        ;;
+esac
 
 CMD="$1"; shift || true
 YES=0
 DRY=0
+FORCE=0
 for arg in "$@"; do
     case "$arg" in
         -y|--yes)     YES=1 ;;
         -n|--dry-run) DRY=1 ;;
-        -h|--help)    usage ;;
-        *) echo "Unknown option: $arg" >&2; usage ;;
+        -f|--force)   FORCE=1 ;;
+        -h|--help)    help_text; exit 0 ;;
+        *) die_usage "Unknown option: $arg" ;;
     esac
 done
 
@@ -84,10 +105,56 @@ sync_dir() {
     rsync "${BASE_FLAGS[@]}" --delete "$src/" "$dst/"
 }
 
+# Count files rsync would delete from dst when syncing src -> dst.
+count_deletions_dir() {
+    local src="$1" dst="$2"
+    [[ ! -d "$src" || ! -d "$dst" ]] && { echo 0; return; }
+    rsync -a --delete --dry-run --itemize-changes "$src/" "$dst/" 2>/dev/null \
+        | grep -c '^\*deleting' || true
+}
+
 # Split "repo_rel:home_abs" into globals REPO_PATH and HOME_PATH.
 split_pair() {
     REPO_PATH="$REPO_ROOT/${1%%:*}"
     HOME_PATH="${1#*:}"
+}
+
+# Count total pending deletions for a direction ("pull" or "push") across DIR_PAIRS.
+# Prints a number and a human-readable per-dir breakdown on stderr.
+count_pending_deletions() {
+    local direction="$1"
+    local total=0 n
+    for pair in "${DIR_PAIRS[@]}"; do
+        split_pair "$pair"
+        if [[ "$direction" == "push" ]]; then
+            n=$(count_deletions_dir "$REPO_PATH" "$HOME_PATH")
+        else
+            n=$(count_deletions_dir "$HOME_PATH" "$REPO_PATH")
+        fi
+        if [[ "$n" -gt 0 ]]; then
+            echo "  $HOME_PATH <- $REPO_PATH: $n file(s) would be deleted" >&2
+        fi
+        total=$((total + n))
+    done
+    echo "$total"
+}
+
+# Warn about pending deletions and enforce --force threshold.
+# Args: direction ("push"|"pull")
+check_deletions() {
+    local direction="$1"
+    local n
+    echo "Checking pending deletions..." >&2
+    n=$(count_pending_deletions "$direction")
+    if [[ "$n" -gt 0 ]]; then
+        echo "Total files to be deleted: $n" >&2
+        if [[ "$n" -gt "$DELETE_THRESHOLD" && $FORCE -ne 1 && $DRY -ne 1 ]]; then
+            echo "Refusing to delete more than $DELETE_THRESHOLD files; pass --force to override." >&2
+            exit 1
+        fi
+    else
+        echo "No deletions pending." >&2
+    fi
 }
 
 do_pull() {
@@ -117,7 +184,7 @@ do_diff() {
     for pair in "${FILE_PAIRS[@]}"; do
         split_pair "$pair"
         if [[ -e "$REPO_PATH" || -e "$HOME_PATH" ]]; then
-            diff -u "$REPO_PATH" "$HOME_PATH" || rc=1
+            diff -uN "$REPO_PATH" "$HOME_PATH" || rc=1
         fi
     done
     for pair in "${DIR_PAIRS[@]}"; do
@@ -131,16 +198,19 @@ do_diff() {
 
 case "$CMD" in
     pull)
-        confirm "Pull tracked files into $REPO_ROOT/ (will delete extras in repo dirs)?" || { echo "aborted"; exit 1; }
+        check_deletions pull
+        confirm "Pull tracked files into $REPO_ROOT/ (will mirror skills/agents/commands into repo, deleting extras in those dirs)?" || { echo "aborted"; exit 1; }
         do_pull
         ;;
     push)
-        confirm "Push tracked files from $REPO_ROOT/ into \$HOME (will delete extras in home dirs)?" || { echo "aborted"; exit 1; }
+        check_deletions push
+        confirm "Push tracked files from $REPO_ROOT/ into \$HOME (will mirror skills/agents/commands into \$HOME/.claude, deleting extras in those dirs)?" || { echo "aborted"; exit 1; }
         do_push
         ;;
     diff|status)
         do_diff || true
         ;;
     *)
-        usage ;;
+        die_usage "Unknown command: $CMD"
+        ;;
 esac
