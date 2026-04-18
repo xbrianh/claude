@@ -5,7 +5,8 @@ Personal [Claude Code](https://claude.com/claude-code) configuration — global 
 ## Layout
 
 ```
-CLAUDE.md             # global instructions, loaded into every session's system prompt
+CLAUDE.md             # repo-level doc for Claude, loaded when cwd is this repo (not synced)
+home/CLAUDE.md        # global preferences, synced to ~/.claude/CLAUDE.md
 settings.json         # harness settings: hooks, permissions, plugins
 bin/ghimplement.sh    # chained plan → implement → review → address pipeline
 skills/
@@ -49,7 +50,7 @@ The four `gh*` skills compose into a GitHub-issue-driven workflow:
 ## Getting started
 
 1. Clone this repo.
-2. Review [`settings.json`](settings.json) and [`CLAUDE.md`](CLAUDE.md) — these land in `~/.claude/` on `push`.
+2. Review [`settings.json`](settings.json) and [`home/CLAUDE.md`](home/CLAUDE.md) — these land in `~/.claude/` on `push`.
 3. Run `scripts/sync.sh diff` to see what would change against your current `~/.claude/`.
 4. **If you have existing content in `~/.claude/skills/`, `~/.claude/agents/`, or `~/.claude/commands/`, run `scripts/sync.sh push --dry-run` first.** `push` mirrors these directories with `rsync --delete`, so any files not present in this repo will be removed from `~/.claude/`. The `DELETE_THRESHOLD` guardrail catches large deletions, but smaller losses still slip through.
 5. Run `scripts/sync.sh push` to install.
