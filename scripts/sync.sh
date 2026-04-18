@@ -17,7 +17,7 @@ DELETE_THRESHOLD=5
 
 # "<repo-relative-path>:<absolute-home-path>"
 FILE_PAIRS=(
-    "CLAUDE.md:$CLAUDE_DIR/CLAUDE.md"
+    "home/CLAUDE.md:$CLAUDE_DIR/CLAUDE.md"
     "settings.json:$CLAUDE_DIR/settings.json"
     "bin/ghimplement.sh:$HOME/bin/ghimplement.sh"
 )
