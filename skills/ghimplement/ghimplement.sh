@@ -132,7 +132,7 @@ PRE_HEAD=$(git rev-parse HEAD)
 set_stage implement
 echo "==> [2a/6] implementing plan"
 IMPL_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" \
-  "Implement the plan in GitHub issue $ISSUE_URL. Read the issue body for the full plan, then make the code changes in this repo. Do not commit or push yet." \
+  "Implement the plan in GitHub issue $ISSUE_URL. Read the issue body for the full plan, then make the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. The plan lives in the GitHub issue and reviews go to PR comments; the only changes in this working tree should be product code." \
   | progress_tee)
 IMPL_SESSION=$(extract_session_id "$IMPL_OUT")
 

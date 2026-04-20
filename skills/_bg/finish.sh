@@ -47,8 +47,9 @@ SETUP_KIND=$(jq  -r '.setup_kind   // empty' "$STATE_FILE" 2>/dev/null || true)
 
 # Worktree cleanup: on success only, for both setup kinds. ghimplement
 # (SETUP_KIND=worktree) has already pushed its branch; localimplement
-# (SETUP_KIND=worktree-branch) has committed its .claude-workflow/<ts>/
-# artifacts to the branch, which persists after worktree removal.
+# (SETUP_KIND=worktree-branch) has committed code changes to its branch, and
+# its plan/review artifacts live under $STATE_DIR/artifacts/ — outside the
+# worktree, so they survive removal independently.
 # On failure (EC != 0) we leave the worktree in place for debugging.
 if [[ "$EC" == "0" \
       && ( "$SETUP_KIND" == "worktree" || "$SETUP_KIND" == "worktree-branch" ) \
