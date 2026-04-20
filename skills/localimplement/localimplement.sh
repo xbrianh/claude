@@ -47,17 +47,13 @@ done
 command -v claude >/dev/null || die "claude CLI not found"
 command -v jq >/dev/null     || die "jq not found"
 
-# Session directory under CWD. Everything produced by this run — the original
-# plan, the revised plan, both rounds of reviews, and implicitly any
-# working-tree diff — lives here so the user can inspect or discard the full
-# artifact set as a unit.
+# Session directory under CWD. Everything produced by this run — the plan,
+# both code reviews, and implicitly any working-tree diff — lives here so the
+# user can inspect or discard the full artifact set as a unit.
 TS=$(date +%Y%m%d-%H%M%S)
 SESSION_DIR=".claude-workflow/$TS"
 mkdir -p "$SESSION_DIR"
 PLAN_FILE="$SESSION_DIR/plan.md"
-REVISED_PLAN_FILE="$SESSION_DIR/plan-revised.md"
-REVIEW_PLAN_A="$SESSION_DIR/review-plan-holistic-$MODEL_A.md"
-REVIEW_PLAN_B="$SESSION_DIR/review-plan-detail-$MODEL_B.md"
 REVIEW_CODE_A="$SESSION_DIR/review-code-holistic-$MODEL_A.md"
 REVIEW_CODE_B="$SESSION_DIR/review-code-detail-$MODEL_B.md"
 
@@ -68,27 +64,21 @@ CLAUDE_FLAGS=(--permission-mode bypassPermissions --output-format stream-json --
 IN_GIT=0
 git rev-parse --git-dir >/dev/null 2>&1 && IN_GIT=1
 
-# Reviewer focuses. Same pair of lenses (holistic / detail) is reused for the
-# plan-review round and the code-review round, but the language is adapted to
-# the artifact actually under review. Each lens is told to stay out of the
-# other's lane so the two reviews are complementary, not redundant. The lens
-# prose lives in four sibling files (lens-{holistic,detail}-{plan,code}.md) so
-# prompt edits don't churn this script.
+# Reviewer focuses. Two complementary lenses (holistic / detail) are told to
+# stay out of each other's lane so the two code reviews are complementary, not
+# redundant. The lens prose lives in sibling files so prompt edits don't churn
+# this script.
 
-for lens in lens-holistic-plan.md lens-detail-plan.md lens-holistic-code.md lens-detail-code.md; do
+for lens in lens-holistic-code.md lens-detail-code.md; do
   [[ -s "$SCRIPT_DIR/$lens" ]] || die "missing or empty lens file: $SCRIPT_DIR/$lens"
 done
-FOCUS_PLAN_A=$(cat "$SCRIPT_DIR/lens-holistic-plan.md")
-FOCUS_PLAN_B=$(cat "$SCRIPT_DIR/lens-detail-plan.md")
 FOCUS_CODE_A=$(cat "$SCRIPT_DIR/lens-holistic-code.md")
 FOCUS_CODE_B=$(cat "$SCRIPT_DIR/lens-detail-code.md")
 
-# Generic reviewer runner. CONTEXT describes what is being reviewed (the plan,
-# or an implementation diff against the plan); FOCUS is the lens prompt above;
-# WHERE_FIELD is the field label used to cite findings (e.g. "**File:** path:line"
-# for code reviews, "**Where:** plan section / task" for plan reviews).
-# Both rounds funnel through here so the holistic/detail split is identical
-# across plan-review and code-review.
+# Generic reviewer runner. CONTEXT describes what is being reviewed (an
+# implementation diff against the plan); FOCUS is the lens prompt above;
+# WHERE_FIELD is the field label used to cite findings (e.g.
+# "**File:** path:line" for code reviews).
 run_review() {
   local model="$1" out_file="$2" focus="$3" context="$4" where_field="$5"
   claude -p --model "$model" "${CLAUDE_FLAGS[@]}" \
@@ -119,8 +109,7 @@ Do NOT make any code changes — only write the review file."
 }
 
 # Run two reviewers in parallel with the same context but different lenses,
-# then validate that both produced non-empty output. The two-reviewer parallel
-# pattern is identical for plan-review and code-review, so factor it out.
+# then validate that both produced non-empty output.
 #
 # The `( ... ; exit ${PIPESTATUS[0]} ) &` wrapping is deliberate: without it,
 # `$!` captures the PID of `progress_tee` (the last stage of the pipeline),
@@ -141,7 +130,7 @@ run_dual_review() {
   [[ -s "$out_b" ]] || die "review $MODEL_B did not produce $out_b"
 }
 
-echo "==> [1/6] planning -> $PLAN_FILE"
+echo "==> [1/4] planning -> $PLAN_FILE"
 claude -p "${CLAUDE_FLAGS[@]}" \
   "Create a detailed implementation plan for the following task and write it to the file \`$PLAN_FILE\`. Use this structure:
 
@@ -164,26 +153,6 @@ Task: $INSTRUCTIONS" \
   | progress_tee >/dev/null
 [[ -s "$PLAN_FILE" ]] || die "plan stage did not produce $PLAN_FILE"
 
-echo "==> [2/6] reviewing plan in parallel (models: $MODEL_A, $MODEL_B)"
-PLAN_REVIEW_CONTEXT="You are reviewing the implementation plan at \`$PLAN_FILE\`. Read the plan first, then read whatever code in the repo it touches so your review reflects what the implementation will actually have to deal with."
-run_dual_review "$PLAN_REVIEW_CONTEXT" "$FOCUS_PLAN_A" "$FOCUS_PLAN_B" "$REVIEW_PLAN_A" "$REVIEW_PLAN_B" "**Where:** plan section / task title"
-echo "    holistic plan review ($MODEL_A): $REVIEW_PLAN_A"
-echo "    detail plan review   ($MODEL_B): $REVIEW_PLAN_B"
-
-echo "==> [3/6] addressing plan reviews -> $REVISED_PLAN_FILE"
-claude -p "${CLAUDE_FLAGS[@]}" \
-  "Two independent reviews of the implementation plan at \`$PLAN_FILE\` are at:
-- \`$REVIEW_PLAN_A\` — **holistic** reviewer (model: $MODEL_A).
-- \`$REVIEW_PLAN_B\` — **detail** reviewer (model: $MODEL_B).
-
-Read the original plan and both reviews. The reviewers have different lenses by design, so their findings will mostly be complementary — still deduplicate where they overlap. For every finding you agree with, revise the plan accordingly. For findings you disagree with or choose to skip, record them briefly with a reason.
-
-Write the revised plan to \`$REVISED_PLAN_FILE\`. You may restructure freely — the original \`$PLAN_FILE\` is preserved separately, so a human can diff the two to see what changed. End \`$REVISED_PLAN_FILE\` with a short '## Address notes' section listing what you incorporated, what you skipped, and why.
-
-Do NOT make any code changes — only write \`$REVISED_PLAN_FILE\`." \
-  | progress_tee >/dev/null
-[[ -s "$REVISED_PLAN_FILE" ]] || die "address-plan stage did not produce $REVISED_PLAN_FILE"
-
 # Commit planning artifacts to the branch so the session dir survives worktree
 # removal. -f bypasses a user-side .gitignore that lists .claude-workflow/.
 if [[ $IN_GIT -eq 1 ]]; then
@@ -192,7 +161,7 @@ if [[ $IN_GIT -eq 1 ]]; then
     || git commit -m "Add planning artifacts (localimplement $TS)" >/dev/null
 fi
 
-echo "==> [4/6] implementing (from $REVISED_PLAN_FILE)"
+echo "==> [2/4] implementing (from $PLAN_FILE)"
 PRE_HEAD=""
 PRE_IMPL_SENTINEL=""
 if [[ $IN_GIT -eq 1 ]]; then
@@ -203,10 +172,10 @@ else
 fi
 
 IMPL_COMMIT_INSTR="."
-[[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references \`$REVISED_PLAN_FILE\`. Do NOT stage anything under \`.claude-workflow/\` — those files are owned by the workflow script and will be committed separately. Do not push."
+[[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references \`$PLAN_FILE\`. Do NOT stage anything under \`.claude-workflow/\` — those files are owned by the workflow script and will be committed separately. Do not push."
 
 claude -p "${CLAUDE_FLAGS[@]}" \
-  "Read the revised implementation plan at \`$REVISED_PLAN_FILE\` and implement every task in it by editing code in this repo. The original (un-revised) plan is at \`$PLAN_FILE\` for reference, but the revised plan is the source of truth. When the implementation is complete${IMPL_COMMIT_INSTR}" \
+  "Read the implementation plan at \`$PLAN_FILE\` and implement every task in it by editing code in this repo. When the implementation is complete${IMPL_COMMIT_INSTR}" \
   | progress_tee >/dev/null
 
 # Guard: the implement stage must have actually changed something (spec
@@ -225,7 +194,7 @@ else
   fi
 fi
 
-echo "==> [5/6] reviewing code in parallel (models: $MODEL_A, $MODEL_B)"
+echo "==> [3/4] reviewing code in parallel (models: $MODEL_A, $MODEL_B)"
 
 CODE_SCOPE=""
 if [[ $IN_GIT -eq 1 ]]; then
@@ -233,14 +202,14 @@ if [[ $IN_GIT -eq 1 ]]; then
 else
   CODE_SCOPE="Review the uncommitted changes in this directory (\`git diff\` if available, otherwise inspect recently modified files)."
 fi
-CODE_REVIEW_CONTEXT="You are reviewing an implementation of the revised plan at \`$REVISED_PLAN_FILE\` (the original plan is at \`$PLAN_FILE\` for reference, but the revised plan is the source of truth). Read the revised plan first for context.
+CODE_REVIEW_CONTEXT="You are reviewing an implementation of the plan at \`$PLAN_FILE\`. Read the plan first for context.
 
 $CODE_SCOPE"
 run_dual_review "$CODE_REVIEW_CONTEXT" "$FOCUS_CODE_A" "$FOCUS_CODE_B" "$REVIEW_CODE_A" "$REVIEW_CODE_B" "**File:** \`path/to/file.ext:<line>\`"
 echo "    holistic code review ($MODEL_A): $REVIEW_CODE_A"
 echo "    detail code review   ($MODEL_B): $REVIEW_CODE_B"
 
-echo "==> [6/6] addressing code reviews"
+echo "==> [4/4] addressing code reviews"
 ADDRESS_COMMIT_INSTR=""
 [[ $IN_GIT -eq 1 ]] && ADDRESS_COMMIT_INSTR="After making all fixes, stage the changed files by name and create a single git commit titled 'Address review feedback' whose body references both review files. Do not push."
 

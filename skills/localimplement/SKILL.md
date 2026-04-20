@@ -1,6 +1,6 @@
 ---
 name: localimplement
-description: Run the end-to-end plan → review-plan → address-plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. All artifacts (original plan, revised plan, both review rounds) land inside the isolated workdir's `.claude-workflow/<timestamp>/`; each review round uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
+description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. All artifacts (plan, code reviews) land inside the isolated workdir's `.claude-workflow/<timestamp>/`; the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
 argument-hint: [-a <model>] [-b <model>] <instructions>
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
@@ -20,7 +20,7 @@ The pipeline commits both code changes and `.claude-workflow/<timestamp>/` artif
 
 - `~/.claude/workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
 - `~/.claude/workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path, branch name.
-- `bg/localimplement/<workflow-id>` — durable branch with the code changes plus `.claude-workflow/<ts>/` (plan.md, plan-revised.md, review-plan-*.md, review-code-*.md). From the main working tree: `git checkout bg/localimplement/<workflow-id>` to inspect, merge, or discard.
+- `bg/localimplement/<workflow-id>` — durable branch with the code changes plus `.claude-workflow/<ts>/` (plan.md, review-code-*.md). From the main working tree: `git checkout bg/localimplement/<workflow-id>` to inspect, merge, or discard.
 
 Commits on the branch, in order: planning artifacts → implementation → "Address review feedback" (absent if reviewers found nothing) → code-review artifacts.
 
