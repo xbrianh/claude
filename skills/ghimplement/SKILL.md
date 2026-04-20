@@ -22,11 +22,18 @@ Forward them verbatim to the launcher. Quote the instructions string so shell wo
 
 ## What to do
 
-Run the launcher:
+Before invoking the launcher, compose a short (≤60 characters) human-readable phrase that summarizes the task — this becomes the workflow's `description` in status views (`/workflows`, session-summary hook). Examples:
+
+- task "refactor the auth middleware to drop the session-token caching layer" → `"drop auth middleware session caching"`
+- task "fix regression where empty PRs pass review" → `"fix empty-PR review regression"`
+
+Pass it as `--description "<phrase>"` before the `ghimplement` kind argument:
 
 ```
-~/.claude/skills/_bg/launch.sh ghimplement $ARGUMENTS
+~/.claude/skills/_bg/launch.sh --description "<phrase>" ghimplement $ARGUMENTS
 ```
+
+If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
 
 Report the workflow id, workdir, and log path that it prints. Make clear to the user:
 

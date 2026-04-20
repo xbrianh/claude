@@ -8,11 +8,25 @@ die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
     cat >&2 <<'EOF'
-usage: launch.sh <kind> [pipeline-args...]
+usage: launch.sh [--description <phrase>] <kind> [pipeline-args...]
        kind ∈ {ghimplement, localimplement}
 EOF
     exit 1
 }
+
+DESCRIPTION=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --description)
+            [[ $# -ge 2 ]] || usage
+            DESCRIPTION="$2"
+            shift 2
+            ;;
+        --) shift; break ;;
+        -*) die "unknown flag: $1" ;;
+        *)  break ;;
+    esac
+done
 
 [[ $# -ge 1 ]] || usage
 KIND="$1"
@@ -76,6 +90,12 @@ fi
 
 INSTR_RAW="$*"
 INSTR_SUMMARY="${INSTR_RAW:0:200}"
+# Description: explicit --description wins; otherwise fall back to a truncated
+# slice of the raw instructions so the status views always have something to
+# print (weaker signal than a hand-crafted phrase, but better than empty).
+if [[ -z "$DESCRIPTION" ]]; then
+    DESCRIPTION="${INSTR_RAW:0:60}"
+fi
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 STATE_FILE="$STATE_DIR/state.json"
@@ -90,9 +110,11 @@ jq -n \
     --arg status        "running" \
     --arg started_at    "$NOW_ISO" \
     --arg instructions  "$INSTR_SUMMARY" \
+    --arg description   "$DESCRIPTION" \
     '{id: $id, kind: $kind, project_root: $project_root, workdir: $workdir,
       setup_kind: $setup_kind, branch: $branch, status: $status,
-      started_at: $started_at, instructions: $instructions, pid: null}' \
+      started_at: $started_at, instructions: $instructions,
+      description: $description, stage: "starting", pid: null}' \
     > "$STATE_TMP" || die "failed to write initial state"
 mv "$STATE_TMP" "$STATE_FILE"
 

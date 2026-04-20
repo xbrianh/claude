@@ -13,6 +13,43 @@ command -v jq >/dev/null 2>&1 || exit 0
 STATE_ROOT="$HOME/.claude/workflows"
 [[ -d "$STATE_ROOT" ]] || exit 0
 
+# Source the shared liveness classifier. Both this hook and `workflows.sh`
+# should agree on "is this pipeline still alive". Degrade gracefully if the
+# library isn't installed yet — hooks must never break a session.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/liveness.sh" ]]; then
+    # shellcheck disable=SC1090,SC1091
+    source "$SCRIPT_DIR/liveness.sh"
+elif [[ -f "$HOME/.claude/skills/_bg/liveness.sh" ]]; then
+    # shellcheck disable=SC1090
+    source "$HOME/.claude/skills/_bg/liveness.sh"
+else
+    # Library not installed yet (can happen during a partial sync between this
+    # repo and ~/.claude/). Inline a minimal classifier so a crashed pipeline
+    # doesn't get reported as "running" forever. The full library adds a stall
+    # heuristic on top of this; we skip it in the fallback.
+    liveness_of_state_file() {
+        local sf="$1" wdir st p ec
+        [[ -f "$sf" ]] || return 0
+        wdir=$(dirname "$sf")
+        if [[ -f "$wdir/finished" ]]; then
+            echo "dead:finished"
+            return 0
+        fi
+        IFS=$'\x1f' read -r st p ec < <(
+            jq -r '[.status, (.pid // "" | tostring),
+                    (.exit_code // "" | tostring)] | join("\u001f")' \
+                "$sf" 2>/dev/null || true
+        )
+        if [[ "$st" == "running" && -n "$p" && "$p" != "null" ]] \
+           && ! kill -0 "$p" 2>/dev/null; then
+            echo "dead:crashed (pid $p gone)"
+            return 0
+        fi
+        echo "${st:-running}"
+    }
+fi
+
 # Read hook input JSON from stdin if present.
 INPUT=""
 if [[ ! -t 0 ]]; then
@@ -48,13 +85,16 @@ for sf in "$STATE_ROOT"/*/state.json; do
     [[ -f "$sf" ]] || continue
     wdir=$(dirname "$sf")
 
-    # Read all fields in one jq fork (tab-delimited) instead of seven.
-    # `fork+exec` is expensive on macOS; this keeps hook latency down when
-    # many workflow dirs accumulate.
-    IFS=$'\t' read -r pr id kind status workdir pid exit_code < <(
+    # One jq fork per state file. Fields joined by ASCII Unit Separator
+    # (\x1f) rather than tab: bash classifies tab as IFS-whitespace, so
+    # consecutive tabs (e.g. two empty fields in a row) collapse and silently
+    # lose columns. US is non-whitespace, so `read` preserves empty fields.
+    IFS=$'\x1f' read -r pr id kind status workdir pid exit_code stage description < <(
         jq -r '[.project_root, .id, .kind, .status, .workdir,
                 (.pid // "" | tostring),
-                (.exit_code // "" | tostring)] | @tsv' "$sf" 2>/dev/null || true
+                (.exit_code // "" | tostring),
+                (.stage // ""),
+                (.description // .instructions // "")] | join("\u001f")' "$sf" 2>/dev/null || true
     )
     [[ "$pr" == "$PROJECT_ROOT" ]] || continue
 
@@ -62,21 +102,32 @@ for sf in "$STATE_ROOT"/*/state.json; do
     ack_marker="$wdir/acknowledged"
     log="$wdir/log"
 
+    desc_suffix=""
+    [[ -n "$description" ]] && desc_suffix=" — _${description}_"
+
     if [[ -f "$finished_marker" && ! -f "$ack_marker" ]]; then
-        FINISHED_BLOCK+="- \`$id\` ($kind): **$status**${exit_code:+ (exit $exit_code)} — log: $log${NL}"
+        FINISHED_BLOCK+="- \`$id\` ($kind): **$status**${exit_code:+ (exit $exit_code)}${desc_suffix} — log: $log${NL}"
         NEWLY_ACK_DIRS+=("$wdir")
         FINISHED_COUNT=$((FINISHED_COUNT + 1))
         continue
     fi
 
     if [[ "$status" == "running" ]]; then
-        # Sanity check: if the recorded PID is gone but no `finished` marker
-        # exists, the pipeline died silently without invoking finish.sh.
-        if [[ -n "$pid" && "$pid" != "null" ]] && ! kill -0 "$pid" 2>/dev/null; then
-            RUNNING_BLOCK+="- \`$id\` ($kind): **crashed** (pid $pid gone, no finish marker) — log: $log${NL}"
-        else
-            RUNNING_BLOCK+="- \`$id\` ($kind): running (pid ${pid:-?}, workdir $workdir) — log: $log${NL}"
-        fi
+        live=$(liveness_of_state_file "$sf")
+        stage_disp="${stage:-?}"
+        case "$live" in
+            dead:*)
+                reason="${live#dead:}"
+                RUNNING_BLOCK+="- \`$id\` ($kind): **$reason** (stage: $stage_disp)${desc_suffix} — log: $log${NL}"
+                ;;
+            stalled:*)
+                reason="${live#stalled:}"
+                RUNNING_BLOCK+="- \`$id\` ($kind): **stalled?** ($reason, stage: $stage_disp, pid ${pid:-?})${desc_suffix} — log: $log${NL}"
+                ;;
+            *)
+                RUNNING_BLOCK+="- \`$id\` ($kind): running (stage: $stage_disp, pid ${pid:-?})${desc_suffix} — log: $log${NL}"
+                ;;
+        esac
     fi
 done
 

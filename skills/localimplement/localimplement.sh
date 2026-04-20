@@ -10,6 +10,16 @@ trap 'trap - INT TERM; kill -- -$$ 2>/dev/null; exit 130' INT TERM
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# Stage helper: only meaningful when this script runs under the _bg launcher
+# (which exports WF_ID and creates ~/.claude/workflows/<WF_ID>/state.json).
+# A direct CLI invocation has no WF_ID and set_stage no-ops.
+SET_STAGE_SH="$HOME/.claude/skills/_bg/set-stage.sh"
+set_stage() {
+  [[ -n "${WF_ID:-}" ]] || return 0
+  [[ -x "$SET_STAGE_SH" ]] || return 0
+  "$SET_STAGE_SH" "$WF_ID" "$@" >/dev/null 2>&1 || true
+}
+
 # Tee stream-json to stdout while printing a live progress trace of tool_use
 # events to stderr. Optional LABEL prefix lets parallel reviewers be told apart.
 progress_tee() {
@@ -122,14 +132,45 @@ run_dual_review() {
   local pid_a=$!
   ( run_review "$MODEL_B" "$out_b" "$focus_b" "$context" "$where_field" | progress_tee "$MODEL_B" >/dev/null; exit "${PIPESTATUS[0]}" ) &
   local pid_b=$!
-  local fail=0
-  wait "$pid_a" || { echo "review $MODEL_A failed" >&2; fail=1; }
-  wait "$pid_b" || { echo "review $MODEL_B failed" >&2; fail=1; }
+
+  # Inner function names leak to the global namespace in bash — prefix with
+  # the outer function name so a grep for `emit_sub_stage` doesn't land here
+  # and so redefinitions from anywhere else can't collide.
+  _run_dual_review_emit_sub() {
+    set_stage review-code "$(jq -cn \
+        --arg a "$MODEL_A" --arg b "$MODEL_B" \
+        --arg as "$1"      --arg bs "$2" \
+        '{($a): $as, ($b): $bs}')"
+  }
+
+  local fail=0 a_status="running" b_status="running"
+  _run_dual_review_emit_sub "$a_status" "$b_status"
+
+  # Poll: whenever a reviewer process exits, harvest its exit code and emit a
+  # sub-stage update so the status command can show mid-flight progress.
+  # Correctness depends on bash auto-reaping backgrounded children in
+  # non-interactive script mode, so `kill -0 $pid` on an exited child returns
+  # ESRCH (we treat that as "exited") rather than succeeding against a zombie.
+  while [[ "$a_status" == "running" || "$b_status" == "running" ]]; do
+    if [[ "$a_status" == "running" ]] && ! kill -0 "$pid_a" 2>/dev/null; then
+      wait "$pid_a" || { echo "review $MODEL_A failed" >&2; fail=1; }
+      a_status="done"
+      _run_dual_review_emit_sub "$a_status" "$b_status"
+    fi
+    if [[ "$b_status" == "running" ]] && ! kill -0 "$pid_b" 2>/dev/null; then
+      wait "$pid_b" || { echo "review $MODEL_B failed" >&2; fail=1; }
+      b_status="done"
+      _run_dual_review_emit_sub "$a_status" "$b_status"
+    fi
+    [[ "$a_status" == "running" || "$b_status" == "running" ]] && sleep 2
+  done
+
   [[ $fail -eq 0 ]] || die "one or more reviews failed"
   [[ -s "$out_a" ]] || die "review $MODEL_A did not produce $out_a"
   [[ -s "$out_b" ]] || die "review $MODEL_B did not produce $out_b"
 }
 
+set_stage plan
 echo "==> [1/4] planning -> $PLAN_FILE"
 claude -p "${CLAUDE_FLAGS[@]}" \
   "Create a detailed implementation plan for the following task and write it to the file \`$PLAN_FILE\`. Use this structure:
@@ -161,6 +202,7 @@ if [[ $IN_GIT -eq 1 ]]; then
     || git commit -m "Add planning artifacts (localimplement $TS)" >/dev/null
 fi
 
+set_stage implement
 echo "==> [2/4] implementing (from $PLAN_FILE)"
 PRE_HEAD=""
 PRE_IMPL_SENTINEL=""
@@ -194,6 +236,7 @@ else
   fi
 fi
 
+set_stage review-code
 echo "==> [3/4] reviewing code in parallel (models: $MODEL_A, $MODEL_B)"
 
 CODE_SCOPE=""
@@ -209,6 +252,7 @@ run_dual_review "$CODE_REVIEW_CONTEXT" "$FOCUS_CODE_A" "$FOCUS_CODE_B" "$REVIEW_
 echo "    holistic code review ($MODEL_A): $REVIEW_CODE_A"
 echo "    detail code review   ($MODEL_B): $REVIEW_CODE_B"
 
+set_stage address-code
 echo "==> [4/4] addressing code reviews"
 ADDRESS_COMMIT_INSTR=""
 [[ $IN_GIT -eq 1 ]] && ADDRESS_COMMIT_INSTR="After making all fixes, stage the changed files by name and create a single git commit titled 'Address review feedback' whose body references both review files. Do not push."
