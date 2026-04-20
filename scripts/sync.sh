@@ -163,6 +163,24 @@ warn_stale_files() {
     fi
 }
 
+# Snapshot ~/.claude/ into /tmp so a bad push is recoverable. Caller must gate
+# on DRY=0; we do not second-guess that here. Snapshots the whole tree (including
+# session data under projects/) by design — a narrower copy wouldn't cover
+# untracked-but-cared-about files, which is the main recovery use case.
+backup_claude_dir() {
+    if [[ ! -d "$CLAUDE_DIR" ]]; then
+        echo "note: $CLAUDE_DIR does not exist; skipping backup." >&2
+        return 0
+    fi
+    local backup_dir
+    echo "Backing up $CLAUDE_DIR before push..." >&2
+    backup_dir=$(mktemp -d "/tmp/claude-backup-$(date +%Y%m%d-%H%M%S)-XXXXXX") \
+        || { echo "error: failed to create backup directory under /tmp; aborting push." >&2; return 1; }
+    rsync -a "$CLAUDE_DIR/" "$backup_dir/" \
+        || { echo "error: failed to snapshot $CLAUDE_DIR into $backup_dir (incomplete — remove $backup_dir before retrying); aborting push." >&2; return 1; }
+    echo "Backup created: $backup_dir" >&2
+}
+
 do_pull() {
     warn_stale_files
     for pair in "${FILE_PAIRS[@]}"; do
@@ -176,6 +194,7 @@ do_pull() {
 }
 
 do_push() {
+    [[ $DRY -eq 0 ]] && backup_claude_dir
     warn_stale_files
     for pair in "${FILE_PAIRS[@]}"; do
         split_pair "$pair"

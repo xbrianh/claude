@@ -38,6 +38,8 @@ Flags: `-n`/`--dry-run` to preview, `-f`/`--force` to allow more than `DELETE_TH
 
 Directory pairs (`skills/`, `agents/`, `commands/`) sync with `rsync --delete`, so `push` and `pull` mirror — extras on the destination side are removed. Only those directory-pair deletions count toward `DELETE_THRESHOLD`: the guardrail refuses a non-dry-run sync that would delete more than 5 files this way unless `--force` is passed. With `--dry-run`, the script still previews the deletions but does not refuse the run.
 
+Before any non-dry-run `push`, the script snapshots `~/.claude/` into `/tmp/claude-backup-<timestamp>-<suffix>/` and prints the path. If a push clobbers something, recover by copying files back out of that directory. Retention follows the OS `/tmp` policy — no built-in cleanup.
+
 ## Skills
 
 The skills cluster into a GitHub-issue-driven pipeline and a local pipeline (`/localimplement`), with `/design` as an optional first step for either and `/ghreview` / `/ghaddress` usable on their own:
