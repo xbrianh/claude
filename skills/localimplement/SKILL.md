@@ -16,15 +16,15 @@ A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for 
 
 ## Where artifacts go
 
-The pipeline writes its per-stage artifacts (original plan, revised plan, two rounds of reviews) to `.claude-workflow/<timestamp>/` **inside the isolated workdir** — not inside the user's project directory. Point the user at:
+The pipeline commits both code changes and `.claude-workflow/<timestamp>/` artifacts to the `bg/localimplement/<workflow-id>` branch in the user's main repo. Point the user at:
 
 - `~/.claude/workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
 - `~/.claude/workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path, branch name.
-- `<workdir>/.claude-workflow/<ts>/` — plan.md, plan-revised.md, review-plan-*.md, review-code-*.md.
+- `bg/localimplement/<workflow-id>` — durable branch with the code changes plus `.claude-workflow/<ts>/` (plan.md, plan-revised.md, review-plan-*.md, review-code-*.md). From the main working tree: `git checkout bg/localimplement/<workflow-id>` to inspect, merge, or discard.
 
-The worktree and the `bg/localimplement/<workflow-id>` branch are **not** cleaned up when the pipeline finishes — the pipeline commits the code changes to that branch, so preserving it is what keeps the work accessible. The user can `git checkout bg/localimplement/<workflow-id>` from their main working tree to inspect, merge, or discard. To tear everything down once they're done: `git worktree remove <workdir>` then `git branch -D bg/localimplement/<workflow-id>`.
+Commits on the branch, in order: planning artifacts → implementation → "Address review feedback" (absent if reviewers found nothing) → code-review artifacts.
 
-Note: the worktree lives under `$TMPDIR`, so the `.claude-workflow/<ts>/` files may be cleaned up by the OS eventually; the branch and its commits live in the main repo's `.git` and persist indefinitely.
+On success the isolated worktree is removed — `state.json`'s `workdir` field will point to a nonexistent path, which is expected (the branch is the durable artifact). On failure the worktree is preserved for debugging at the path still recorded in `state.json`.
 
 ## Arguments
 

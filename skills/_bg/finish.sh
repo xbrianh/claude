@@ -2,9 +2,10 @@
 # Terminal bookkeeping for a background workflow: invoked by launch.sh's spawned
 # child once the pipeline exits. Touches a `finished` marker (always — that's
 # the signal session-summary.sh watches for), then best-effort updates
-# state.json with the final status/exit_code/ended_at. For ghimplement only,
-# best-effort removes the git worktree afterwards — localimplement keeps its
-# worktree and named branch so the user can inspect commits and artifacts.
+# state.json with the final status/exit_code/ended_at. On success (EC == 0),
+# best-effort removes the git worktree for both ghimplement and localimplement.
+# On failure the worktree is preserved so the user can debug. The branch is
+# always preserved — refs outlive `git worktree remove`.
 set -euo pipefail
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -44,10 +45,13 @@ PROJECT_ROOT=$(jq -r '.project_root // empty' "$STATE_FILE" 2>/dev/null || true)
 WORKDIR=$(jq     -r '.workdir      // empty' "$STATE_FILE" 2>/dev/null || true)
 SETUP_KIND=$(jq  -r '.setup_kind   // empty' "$STATE_FILE" 2>/dev/null || true)
 
-# Worktree cleanup: only for ghimplement (which has already pushed its branch).
-# For localimplement we deliberately leave the worktree and its named branch
-# in place so the user can inspect commits and .claude-workflow/<ts>/ artifacts.
-if [[ "$KIND" != "localimplement" && "$SETUP_KIND" == "worktree" \
+# Worktree cleanup: on success only, for both setup kinds. ghimplement
+# (SETUP_KIND=worktree) has already pushed its branch; localimplement
+# (SETUP_KIND=worktree-branch) has committed its .claude-workflow/<ts>/
+# artifacts to the branch, which persists after worktree removal.
+# On failure (EC != 0) we leave the worktree in place for debugging.
+if [[ "$EC" == "0" \
+      && ( "$SETUP_KIND" == "worktree" || "$SETUP_KIND" == "worktree-branch" ) \
       && -n "$PROJECT_ROOT" && -n "$WORKDIR" ]]; then
     git -C "$PROJECT_ROOT" worktree remove --force "$WORKDIR" 2>/dev/null || true
     git -C "$PROJECT_ROOT" worktree prune                     2>/dev/null || true

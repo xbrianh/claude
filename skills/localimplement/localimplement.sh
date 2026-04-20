@@ -184,6 +184,14 @@ Do NOT make any code changes — only write \`$REVISED_PLAN_FILE\`." \
   | progress_tee >/dev/null
 [[ -s "$REVISED_PLAN_FILE" ]] || die "address-plan stage did not produce $REVISED_PLAN_FILE"
 
+# Commit planning artifacts to the branch so the session dir survives worktree
+# removal. -f bypasses a user-side .gitignore that lists .claude-workflow/.
+if [[ $IN_GIT -eq 1 ]]; then
+  git add -f "$SESSION_DIR"
+  git diff --cached --quiet \
+    || git commit -m "Add planning artifacts (localimplement $TS)" >/dev/null
+fi
+
 echo "==> [4/6] implementing (from $REVISED_PLAN_FILE)"
 PRE_HEAD=""
 PRE_IMPL_SENTINEL=""
@@ -195,7 +203,7 @@ else
 fi
 
 IMPL_COMMIT_INSTR="."
-[[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references \`$REVISED_PLAN_FILE\`. Do not push."
+[[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references \`$REVISED_PLAN_FILE\`. Do NOT stage anything under \`.claude-workflow/\` — those files are owned by the workflow script and will be committed separately. Do not push."
 
 claude -p "${CLAUDE_FLAGS[@]}" \
   "Read the revised implementation plan at \`$REVISED_PLAN_FILE\` and implement every task in it by editing code in this repo. The original (un-revised) plan is at \`$PLAN_FILE\` for reference, but the revised plan is the source of truth. When the implementation is complete${IMPL_COMMIT_INSTR}" \
@@ -247,6 +255,14 @@ $ADDRESS_COMMIT_INSTR
 
 End with a short summary (to stdout) of: what you addressed, what you skipped and why." \
   | progress_tee >/dev/null
+
+# Commit code-review artifacts. The guard is load-bearing: the model's
+# "Address review feedback" commit above may already have swept in review files.
+if [[ $IN_GIT -eq 1 ]]; then
+  git add -f "$SESSION_DIR"
+  git diff --cached --quiet \
+    || git commit -m "Add code-review artifacts (localimplement $TS)" >/dev/null
+fi
 
 echo ""
 echo "done. session artifacts in: $SESSION_DIR"
