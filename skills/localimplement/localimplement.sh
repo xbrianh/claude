@@ -155,11 +155,14 @@ run_dual_review() {
   # Inner function names leak to the global namespace in bash — prefix with
   # the outer function name so a grep for `emit_sub_stage` doesn't land here
   # and so redefinitions from anywhere else can't collide.
+  # Use stable labels "holistic"/"detail" as keys (not model names) so the
+  # JSON object stays unambiguous even when MODEL_A==MODEL_B. Include the
+  # model name inside each value so it's still visible in the status output.
   _run_dual_review_emit_sub() {
     set_stage review-code "$(jq -cn \
-        --arg a "$MODEL_A" --arg b "$MODEL_B" \
-        --arg as "$1"      --arg bs "$2" \
-        '{($a): $as, ($b): $bs}')"
+        --arg am "$MODEL_A" --arg bm "$MODEL_B" \
+        --arg as "$1"       --arg bs "$2" \
+        '{"holistic": "\($as) (\($am))", "detail": "\($bs) (\($bm))"}')"
   }
 
   local fail=0 a_status="running" b_status="running"
