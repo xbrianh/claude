@@ -10,7 +10,7 @@ set -u
 # Missing jq → nothing to report. Bail before `set -e` would bite us anywhere.
 command -v jq >/dev/null 2>&1 || exit 0
 
-STATE_ROOT="$HOME/.claude/workflows"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
 [[ -d "$STATE_ROOT" ]] || exit 0
 
 # Source the shared liveness classifier. Both this hook and `workflows.sh`

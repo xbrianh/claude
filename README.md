@@ -49,7 +49,7 @@ The skills cluster into a GitHub-issue-driven pipeline and a local pipeline (`/l
 - [`/ghimplement`](skills/ghimplement/SKILL.md) — run the full pipeline end-to-end via [`skills/ghimplement/ghimplement.sh`](skills/ghimplement/ghimplement.sh).
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
-- [`/localimplement`](skills/localimplement/SKILL.md) — local (no-GitHub) counterpart to `/ghimplement`: runs plan → implement → review-code ×2 → address-code locally via [`skills/localimplement/localimplement.sh`](skills/localimplement/localimplement.sh), with all artifacts written to `~/.claude/workflows/<id>/artifacts/` (off the product branch).
+- [`/localimplement`](skills/localimplement/SKILL.md) — local (no-GitHub) counterpart to `/ghimplement`: runs plan → implement → review-code ×2 → address-code locally via [`skills/localimplement/localimplement.sh`](skills/localimplement/localimplement.sh), with all artifacts written to `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<id>/artifacts/` (off the product branch).
 
 `skills/ghimplement/ghimplement.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
@@ -59,7 +59,7 @@ Both `/ghimplement` and `/localimplement` run **in the background**. Their SKILL
 
 - Creates an isolated worktree (via `git worktree add --detach` for git projects, `cp -a` otherwise) so concurrent invocations don't collide.
 - Spawns the pipeline detached (subshell + `nohup`), so it survives `Ctrl-C`, shell exit, and Claude Code quitting.
-- Records per-workflow state under `~/.claude/workflows/<id>/` (`state.json`, combined `log`, `finished` / `acknowledged` markers) — intentionally **not** synced, since it's runtime state, not config. [`skills/_bg/finish.sh`](skills/_bg/finish.sh) writes the terminal `status` / `exit_code` and drops the `finished` marker that `session-summary.sh` keys off.
+- Records per-workflow state under `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<id>/` (`state.json`, combined `log`, `finished` / `acknowledged` markers) — deliberately rooted outside `~/.claude/` so Claude Code's sensitive-file guardrail doesn't block subagent writes. [`skills/_bg/finish.sh`](skills/_bg/finish.sh) writes the terminal `status` / `exit_code` and drops the `finished` marker that `session-summary.sh` keys off.
 - Returns within ~1s with the workflow id, workdir, log path, and state-file path.
 
 A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes [`skills/_bg/session-summary.sh`](skills/_bg/session-summary.sh), which reports running and newly-finished workflows for the current project so you're notified the next time you open Claude Code in that tree. Acknowledged state dirs older than 14 days are pruned on the next hook firing.

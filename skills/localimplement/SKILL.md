@@ -1,6 +1,6 @@
 ---
 name: localimplement
-description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Plan and code reviews land in `~/.claude/workflows/<workflow-id>/artifacts/` alongside the run log (kept off the product branch); the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
+description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Plan and code reviews land in `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<workflow-id>/artifacts/` alongside the run log (kept off the product branch); the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
 argument-hint: [-a <model>] [-b <model>] <instructions>
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
@@ -9,7 +9,7 @@ You are running the `localimplement` workflow **in the background**. The skill i
 
 1. Creates an isolated git worktree of the current project on a fresh branch named `bg/localimplement/<workflow-id>` (or `cp -a` copies the tree for non-git projects).
 2. Spawns the real pipeline (`~/.claude/skills/localimplement/localimplement.sh`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
-3. Records per-workflow state under `~/.claude/workflows/<workflow-id>/` (`state.json`, combined `log`, markers).
+3. Records per-workflow state under `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<workflow-id>/` (`state.json`, combined `log`, markers).
 4. Returns within ~1s.
 
 A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for this project when the workflow finishes.
@@ -18,10 +18,10 @@ A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for 
 
 Plan and code-review artifacts live outside the product branch — they are scaffolding, not product. Point the user at:
 
-- `~/.claude/workflows/<workflow-id>/artifacts/plan.md` — the implementation plan.
-- `~/.claude/workflows/<workflow-id>/artifacts/review-code-holistic-<model>.md` and `review-code-detail-<model>.md` — the two parallel code reviews.
-- `~/.claude/workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
-- `~/.claude/workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path, branch name.
+- `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<workflow-id>/artifacts/plan.md` — the implementation plan.
+- `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<workflow-id>/artifacts/review-code-holistic-<model>.md` and `review-code-detail-<model>.md` — the two parallel code reviews.
+- `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
+- `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path, branch name.
 - `bg/localimplement/<workflow-id>` — durable branch with **only** the code changes (no scaffolding). From the main working tree: `git checkout bg/localimplement/<workflow-id>` to inspect, merge, or discard. A squash-merge pulls in product code cleanly.
 
 Commits on the branch, in order: implementation → "Address review feedback" (absent if reviewers found nothing).

@@ -16,7 +16,7 @@ SUB_STAGE="${3:-}"
 
 [[ -n "$WF_ID" && -n "$STAGE" ]] || exit 0
 
-STATE_FILE="$HOME/.claude/workflows/$WF_ID/state.json"
+STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/$WF_ID/state.json"
 [[ -f "$STATE_FILE" ]] || exit 0
 
 command -v jq >/dev/null 2>&1 || exit 0

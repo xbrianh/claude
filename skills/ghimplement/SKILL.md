@@ -9,7 +9,7 @@ You are running the `ghimplement` workflow **in the background**. The skill is a
 
 1. Creates an isolated git worktree of the current project (detached HEAD).
 2. Spawns the real pipeline (`~/.claude/skills/ghimplement/ghimplement.sh`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
-3. Records per-workflow state under `~/.claude/workflows/<workflow-id>/` (`state.json`, combined `log`, markers).
+3. Records per-workflow state under `${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<workflow-id>/` (`state.json`, combined `log`, markers).
 4. Returns within ~1s.
 
 A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for this project when the workflow finishes.

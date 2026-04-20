@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Generic launcher for background skill workflows (ghimplement, localimplement).
-# Sets up an isolated workdir, writes per-workflow state under ~/.claude/workflows/,
-# spawns the real pipeline detached from the caller's session, and returns fast.
+# Sets up an isolated workdir, writes per-workflow state under
+# ${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/, spawns the real
+# pipeline detached from the caller's session, and returns fast.
 set -euo pipefail
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -155,7 +156,7 @@ RANDHEX=$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 6 || true
 [[ -n "$RANDHEX" ]] || RANDHEX="xxxxxx"
 WF_ID="${SLUG}-${RANDHEX}"
 
-STATE_ROOT="$HOME/.claude/workflows"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
 STATE_DIR="$STATE_ROOT/$WF_ID"
 mkdir -p "$STATE_DIR" || die "could not create state dir: $STATE_DIR"
 

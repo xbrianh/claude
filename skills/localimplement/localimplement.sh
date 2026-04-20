@@ -11,7 +11,8 @@ trap 'trap - INT TERM; kill -- -$$ 2>/dev/null; exit 130' INT TERM
 die() { echo "error: $*" >&2; exit 1; }
 
 # Stage helper: only meaningful when this script runs under the _bg launcher
-# (which exports WF_ID and creates ~/.claude/workflows/<WF_ID>/state.json).
+# (which exports WF_ID and creates the workflow's state.json under
+# ${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<WF_ID>/).
 # A direct CLI invocation has no WF_ID and set_stage no-ops.
 SET_STAGE_SH="$HOME/.claude/skills/_bg/set-stage.sh"
 set_stage() {
@@ -23,8 +24,9 @@ set_stage() {
 # Tee stream-json to a per-stage raw file under $SESSION_DIR while writing a
 # human-readable trace of every meaningful event (init / assistant text /
 # tool_use / tool_result / final result) to stderr. Under the _bg launcher
-# stderr is redirected to ~/.claude/workflows/<id>/log; the raw file is the
-# diagnostic artifact that survives even when the trace is lost.
+# stderr is redirected to the workflow's log under
+# ${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<id>/log; the raw
+# file is the diagnostic artifact that survives even when the trace is lost.
 #
 # Replaces an older `progress_tee` that used `tee >(jq ... >&2)` — the
 # process-substitution stderr empirically didn't reach the log under _bg, so
@@ -98,23 +100,26 @@ done
 command -v claude >/dev/null || die "claude CLI not found"
 command -v jq >/dev/null     || die "jq not found"
 
-# Session directory. Under the _bg launcher (WF_ID set) artifacts live under
-# ~/.claude/workflows/<WF_ID>/artifacts/ so they stay out of the product branch
-# and survive worktree removal. Direct CLI invocation falls back to the old
-# in-tree `.claude-workflow/<ts>/` path — convenient for ad-hoc use, but the
-# user is on their own to gitignore or clean it up.
+# Session directory. Artifacts always live under the XDG state root so they
+# stay out of the product branch and survive worktree removal. Under the _bg
+# launcher WF_ID names the workflow dir; a direct CLI invocation synthesizes a
+# "<ts>-direct-<rand>" id for symmetry.
 #
-# WF_ID is interpolated into a filesystem path under $HOME, so validate it
-# against a conservative charset to prevent path traversal (e.g. "../") or
-# embedded slashes when it's set externally. The _bg launcher produces IDs
-# matching ^[a-z0-9-]+$, so this pattern is a strict superset.
+# WF_ID is interpolated into a filesystem path, so validate it against a
+# conservative charset to prevent path traversal (e.g. "../") or embedded
+# slashes when it's set externally. The _bg launcher produces IDs matching
+# ^[a-z0-9-]+$, so this pattern is a strict superset.
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
 TS=$(date +%Y%m%d-%H%M%S)
 if [[ -n "${WF_ID:-}" ]]; then
   [[ "$WF_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid WF_ID: $WF_ID"
-  SESSION_DIR="$HOME/.claude/workflows/$WF_ID/artifacts"
+  SESSION_ID="$WF_ID"
 else
-  SESSION_DIR=".claude-workflow/$TS"
+  RAND=$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 6 || true)
+  [[ -n "$RAND" ]] || RAND="xxxxxx"
+  SESSION_ID="$TS-direct-$RAND"
 fi
+SESSION_DIR="$STATE_ROOT/$SESSION_ID/artifacts"
 mkdir -p "$SESSION_DIR"
 PLAN_FILE="$SESSION_DIR/plan.md"
 REVIEW_CODE_A="$SESSION_DIR/review-code-holistic-$MODEL_A.md"
@@ -267,8 +272,8 @@ fi
 
 IMPL_COMMIT_INSTR="."
 # The commit message references `plan.md` (the artifact basename) rather than
-# `$PLAN_FILE` — under the _bg launcher the latter is an absolute user-specific
-# path under ~/.claude/workflows/ that would end up in git history otherwise.
+# `$PLAN_FILE` — the latter is an absolute user-specific path under the XDG
+# state root that would end up in git history otherwise.
 [[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references the implementation plan (refer to it as \`plan.md\` in the commit message, not by absolute path). Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. Do not push."
 
 claude -p --model "$MODEL_IMPL" "${CLAUDE_FLAGS[@]}" \
