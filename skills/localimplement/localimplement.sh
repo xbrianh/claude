@@ -20,17 +20,51 @@ set_stage() {
   "$SET_STAGE_SH" "$WF_ID" "$@" >/dev/null 2>&1 || true
 }
 
-# Tee stream-json to stdout while printing a live progress trace of tool_use
-# events to stderr. Optional LABEL prefix lets parallel reviewers be told apart.
-progress_tee() {
+# Tee stream-json to a per-stage raw file under $SESSION_DIR while writing a
+# human-readable trace of every meaningful event (init / assistant text /
+# tool_use / tool_result / final result) to stderr. Under the _bg launcher
+# stderr is redirected to ~/.claude/workflows/<id>/log; the raw file is the
+# diagnostic artifact that survives even when the trace is lost.
+#
+# Replaces an older `progress_tee` that used `tee >(jq ... >&2)` — the
+# process-substitution stderr empirically didn't reach the log under _bg, so
+# the prior trace was effectively a no-op. The synchronous `tee | jq`
+# pipeline here keeps fd inheritance simple.
+#
+# The inner pipeline is terminated with `|| true` so a jq parse failure
+# (e.g. on a truncated JSON line emitted by a crashing `claude -p`) cannot
+# abort the caller's stage under `set -euo pipefail`. Logging is
+# observational; the raw file is already flushed by `tee` regardless.
+#
+# Args: label (e.g. "plan" or "review-code:opus"; may be empty), raw_file path.
+log_stream() {
   local label="${1:-}"
-  local prefix="    ·"
-  [[ -n "$label" ]] && prefix="    [$label] ·"
-  tee >(jq -r --unbuffered --arg prefix "$prefix" '
-    select(.type=="assistant") | .message.content[]?
-    | select(.type=="tool_use")
-    | "\($prefix) \(.name) \(.input.file_path // .input.command // .input.pattern // "")"
-  ' 2>/dev/null >&2)
+  local raw_file="${2:-}"
+  [[ -n "$raw_file" ]] || die "log_stream: raw_file required"
+  tee "$raw_file" | jq -r --unbuffered --arg label "$label" '
+    def trunc: if (length // 0) > 200 then .[:200] + "..." else . end;
+    ($label | if length > 0 then "[\(.)] " else "" end) as $prefix
+    | if .type == "system" then
+        select(.subtype == "init")
+        | "\($prefix)init session=\(.session_id // "?") model=\(.model // "?") cwd=\(.cwd // "?")"
+      elif .type == "assistant" then
+        .message.content[]?
+        | if .type == "text" then
+            "\($prefix)text: \((.text // "") | gsub("\n"; " ") | trunc)"
+          elif .type == "tool_use" then
+            ((.input.file_path // .input.command // .input.pattern // .input.url // .input.output_file // "") | tostring | gsub("\n"; " ") | trunc) as $arg
+            | "\($prefix)tool: \(.name) \($arg)"
+          else empty end
+      elif .type == "user" then
+        .message.content[]?
+        | select(.type == "tool_result")
+        | (if .is_error == true then " ERROR" else "" end) as $err
+        | (.content | (if type == "string" then . elif type == "array" then (map(.text? // "") | join(" ")) else tostring end) | gsub("\n"; " ") | trunc) as $body
+        | "\($prefix)result\($err): \($body)"
+      elif .type == "result" then
+        "\($prefix)final: subtype=\(.subtype // "?") turns=\(.num_turns // "?") cost=\(.total_cost_usd // .cost_usd // "?")"
+      else empty end
+  ' >&2 || true
 }
 
 MODEL_A="opus"
@@ -133,16 +167,20 @@ Do NOT make any code changes — only write the review file."
 # Run two reviewers in parallel with the same context but different lenses,
 # then validate that both produced non-empty output.
 #
-# The `( ... ; exit ${PIPESTATUS[0]} ) &` wrapping is deliberate: without it,
-# `$!` captures the PID of `progress_tee` (the last stage of the pipeline),
-# and `tee` exits 0 whenever its stdin closes — so a non-zero exit from
-# `claude -p` would be silently swallowed. PIPESTATUS[0] propagates the
-# reviewer's exit code out of the subshell instead.
+# The `( ... ) &` subshell wrapping is deliberate: without it, `$!` captures
+# the PID of `log_stream` (the last stage of the pipeline), and `log_stream`
+# exits 0 whenever its input closes — so a non-zero exit from `claude -p`
+# would be silently swallowed. Wrapping in a subshell makes `$!` the
+# subshell PID, whose exit code reflects the pipeline under `set -e pipefail`
+# (any non-zero stage fails the pipeline, `set -e` then exits the subshell).
+# The trailing `exit "${PIPESTATUS[0]}"` is a defensive belt-and-braces for
+# callers running without `set -e`; under the current options it is only
+# reached on the success path, where PIPESTATUS[0] is 0.
 run_dual_review() {
   local context="$1" focus_a="$2" focus_b="$3" out_a="$4" out_b="$5" where_field="$6"
-  ( run_review "$MODEL_A" "$out_a" "$focus_a" "$context" "$where_field" | progress_tee "$MODEL_A" >/dev/null; exit "${PIPESTATUS[0]}" ) &
+  ( run_review "$MODEL_A" "$out_a" "$focus_a" "$context" "$where_field" | log_stream "review-code:$MODEL_A" "$SESSION_DIR/stream-review-code-$MODEL_A.jsonl"; exit "${PIPESTATUS[0]}" ) &
   local pid_a=$!
-  ( run_review "$MODEL_B" "$out_b" "$focus_b" "$context" "$where_field" | progress_tee "$MODEL_B" >/dev/null; exit "${PIPESTATUS[0]}" ) &
+  ( run_review "$MODEL_B" "$out_b" "$focus_b" "$context" "$where_field" | log_stream "review-code:$MODEL_B" "$SESSION_DIR/stream-review-code-$MODEL_B.jsonl"; exit "${PIPESTATUS[0]}" ) &
   local pid_b=$!
 
   # Inner function names leak to the global namespace in bash — prefix with
@@ -203,7 +241,7 @@ Anything that needs discussion before implementation.
 Read any relevant code in the repo to inform the plan. Do NOT make any code changes yet — only write the plan file.
 
 Task: $INSTRUCTIONS" \
-  | progress_tee >/dev/null
+  | log_stream "plan" "$SESSION_DIR/stream-plan.jsonl"
 [[ -s "$PLAN_FILE" ]] || die "plan stage did not produce $PLAN_FILE"
 
 set_stage implement
@@ -225,7 +263,7 @@ IMPL_COMMIT_INSTR="."
 
 claude -p "${CLAUDE_FLAGS[@]}" \
   "Read the implementation plan at \`$PLAN_FILE\` and implement every task in it by editing code in this repo. When the implementation is complete${IMPL_COMMIT_INSTR}" \
-  | progress_tee >/dev/null
+  | log_stream "implement" "$SESSION_DIR/stream-implement.jsonl"
 
 # Guard: the implement stage must have actually changed something (spec
 # invariant: "an empty implementation should never flow into code review").
@@ -274,7 +312,7 @@ Read both reviews. The two reviewers have different lenses by design, so their f
 $ADDRESS_COMMIT_INSTR
 
 End with a short summary (to stdout) of: what you addressed, what you skipped and why." \
-  | progress_tee >/dev/null
+  | log_stream "address-code" "$SESSION_DIR/stream-address.jsonl"
 
 echo ""
 echo "done. session artifacts in: $SESSION_DIR"
