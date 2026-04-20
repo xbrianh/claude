@@ -62,8 +62,14 @@ command -v jq >/dev/null     || die "jq not found"
 # and survive worktree removal. Direct CLI invocation falls back to the old
 # in-tree `.claude-workflow/<ts>/` path — convenient for ad-hoc use, but the
 # user is on their own to gitignore or clean it up.
+#
+# WF_ID is interpolated into a filesystem path under $HOME, so validate it
+# against a conservative charset to prevent path traversal (e.g. "../") or
+# embedded slashes when it's set externally. The _bg launcher produces IDs
+# matching ^[a-z0-9-]+$, so this pattern is a strict superset.
 TS=$(date +%Y%m%d-%H%M%S)
 if [[ -n "${WF_ID:-}" ]]; then
+  [[ "$WF_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid WF_ID: $WF_ID"
   SESSION_DIR="$HOME/.claude/workflows/$WF_ID/artifacts"
 else
   SESSION_DIR=".claude-workflow/$TS"
@@ -212,7 +218,10 @@ else
 fi
 
 IMPL_COMMIT_INSTR="."
-[[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references \`$PLAN_FILE\`. Do not push."
+# The commit message references `plan.md` (the artifact basename) rather than
+# `$PLAN_FILE` — under the _bg launcher the latter is an absolute user-specific
+# path under ~/.claude/workflows/ that would end up in git history otherwise.
+[[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references the implementation plan (refer to it as \`plan.md\` in the commit message, not by absolute path). Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. Do not push."
 
 claude -p "${CLAUDE_FLAGS[@]}" \
   "Read the implementation plan at \`$PLAN_FILE\` and implement every task in it by editing code in this repo. When the implementation is complete${IMPL_COMMIT_INSTR}" \
