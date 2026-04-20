@@ -32,6 +32,26 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/skills/_bg/session-summary.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/skills/_bg/session-summary.sh"
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
