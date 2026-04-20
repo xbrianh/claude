@@ -9,12 +9,13 @@ CLAUDE.md             # repo-level doc for Claude, loaded when cwd is this repo 
 home/CLAUDE.md        # global preferences, synced to ~/.claude/CLAUDE.md
 settings.json         # harness settings: hooks, permissions, plugins
 skills/
-  _bg/                # shared background-workflow launcher + SessionStart hook
+  _bg/                # background-workflow scripts: launch.sh, finish.sh, session-summary.sh
+  design/             # /design: chat-driven spec writer; hands off to /ghimplement or /localimplement
   ghplan/             # /ghplan: draft a plan, post it as a GitHub issue
   ghimplement/        # /ghimplement: run the full pipeline in the background via skills/_bg/launch.sh
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
-  localimplement/     # /localimplement: full local pipeline in the background via skills/_bg/launch.sh
+  localimplement/     # /localimplement: full local pipeline via skills/_bg/launch.sh; sibling lens-*.md files hold reviewer prompts
 agents/
   pragmatic-developer.md
 commands/             # slash commands (created on first sync; no files tracked yet)
@@ -39,8 +40,9 @@ Directory pairs (`skills/`, `agents/`, `commands/`) sync with `rsync --delete`, 
 
 ## Skills
 
-The four `gh*` skills compose into a GitHub-issue-driven workflow:
+The skills cluster into a GitHub-issue-driven pipeline and a local pipeline (`/localimplement`), with `/design` as an optional first step for either and `/ghreview` / `/ghaddress` usable on their own:
 
+- [`/design`](skills/design/SKILL.md) — runs a WHAT-focused spec conversation; writes the spec to `/tmp/design-<slug>.md` by default; can hand off to `/ghimplement` or `/localimplement`.
 - [`/ghplan`](skills/ghplan/SKILL.md) — draft a plan and post it as a new GitHub issue.
 - [`/ghimplement`](skills/ghimplement/SKILL.md) — run the full pipeline end-to-end via [`skills/ghimplement/ghimplement.sh`](skills/ghimplement/ghimplement.sh).
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
@@ -55,7 +57,7 @@ Both `/ghimplement` and `/localimplement` run **in the background**. Their SKILL
 
 - Creates an isolated worktree (via `git worktree add --detach` for git projects, `cp -a` otherwise) so concurrent invocations don't collide.
 - Spawns the pipeline detached (subshell + `nohup`), so it survives `Ctrl-C`, shell exit, and Claude Code quitting.
-- Records per-workflow state under `~/.claude/workflows/<id>/` (`state.json`, combined `log`, `finished` / `acknowledged` markers). This directory is intentionally **not** synced — it's runtime state, not config.
+- Records per-workflow state under `~/.claude/workflows/<id>/` (`state.json`, combined `log`, `finished` / `acknowledged` markers) — intentionally **not** synced, since it's runtime state, not config. [`skills/_bg/finish.sh`](skills/_bg/finish.sh) writes the terminal `status` / `exit_code` and drops the `finished` marker that `session-summary.sh` keys off.
 - Returns within ~1s with the workflow id, workdir, log path, and state-file path.
 
 A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes [`skills/_bg/session-summary.sh`](skills/_bg/session-summary.sh), which reports running and newly-finished workflows for the current project so you're notified the next time you open Claude Code in that tree. Acknowledged state dirs older than 14 days are pruned on the next hook firing.
