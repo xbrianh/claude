@@ -3,6 +3,14 @@ set -euo pipefail
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# Stage helper: only meaningful when invoked via the _bg launcher (WF_ID set).
+SET_STAGE_SH="$HOME/.claude/skills/_bg/set-stage.sh"
+set_stage() {
+  [[ -n "${WF_ID:-}" ]] || return 0
+  [[ -x "$SET_STAGE_SH" ]] || return 0
+  "$SET_STAGE_SH" "$WF_ID" "$@" >/dev/null 2>&1 || true
+}
+
 # Tee stream-json to stdout while printing a live progress trace of tool_use
 # events to stderr.
 progress_tee() {
@@ -108,6 +116,7 @@ extract_session_id() {
   echo "$sid"
 }
 
+set_stage plan
 echo "==> [1/6] running /ghplan"
 PLAN_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" "/ghplan ${REF:+$REF }${INSTRUCTIONS}" | progress_tee)
 ISSUE_URL=$(extract_gh_url "$PLAN_OUT" \
@@ -120,6 +129,7 @@ echo "    issue: $ISSUE_URL"
 # Record state before 2a so we can verify the model actually did work.
 PRE_HEAD=$(git rev-parse HEAD)
 
+set_stage implement
 echo "==> [2a/6] implementing plan"
 IMPL_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" \
   "Implement the plan in GitHub issue $ISSUE_URL. Read the issue body for the full plan, then make the code changes in this repo. Do not commit or push yet." \
@@ -136,6 +146,7 @@ if [[ -z "$(git status --porcelain)" ]]; then
   die "implementation step produced no changes; refusing to open empty PR"
 fi
 
+set_stage commit-pr
 echo "==> [2b/6] committing + opening PR"
 PR_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" --resume "$IMPL_SESSION" \
   "Now create a new branch named 'issue-${ISSUE_NUM}-<short-slug>' from the default branch, commit the changes with a descriptive message ending in 'Closes #${ISSUE_NUM}', push the branch, and open a PR with 'gh pr create' whose body contains 'Closes #${ISSUE_NUM}'. Print ONLY the PR URL on the final line of your response." | progress_tee)
@@ -146,13 +157,16 @@ PR_URL=$(extract_gh_url "$PR_OUT" \
 PR_NUM=$(basename "$PR_URL")
 echo "    PR: $PR_URL"
 
+set_stage request-copilot
 echo "==> [3/6] requesting Copilot review"
 gh pr edit "$PR_NUM" --repo "$REPO" --add-reviewer copilot-pull-request-reviewer >/dev/null \
   || die "could not request Copilot review (is it enabled in repo settings?)"
 
+set_stage ghreview
 echo "==> [4/6] running /ghreview"
 claude -p "${CLAUDE_FLAGS[@]}" "/ghreview $PR_URL" | progress_tee >/dev/null
 
+set_stage wait-copilot
 echo "==> [5/6] waiting for Copilot review (20s interval, 10min timeout)"
 deadline=$(( $(date +%s) + 600 ))
 while true; do
@@ -171,6 +185,7 @@ while true; do
   sleep 20
 done
 
+set_stage ghaddress
 echo "==> [6/6] running /ghaddress"
 claude -p "${CLAUDE_FLAGS[@]}" "/ghaddress $PR_URL" | progress_tee >/dev/null
 
