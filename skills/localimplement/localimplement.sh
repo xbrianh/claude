@@ -31,6 +31,11 @@ set_stage() {
 # the prior trace was effectively a no-op. The synchronous `tee | jq`
 # pipeline here keeps fd inheritance simple.
 #
+# The inner pipeline is terminated with `|| true` so a jq parse failure
+# (e.g. on a truncated JSON line emitted by a crashing `claude -p`) cannot
+# abort the caller's stage under `set -euo pipefail`. Logging is
+# observational; the raw file is already flushed by `tee` regardless.
+#
 # Args: label (e.g. "plan" or "review-code:opus"; may be empty), raw_file path.
 log_stream() {
   local label="${1:-}"
@@ -59,7 +64,7 @@ log_stream() {
       elif .type == "result" then
         "\($prefix)final: subtype=\(.subtype // "?") turns=\(.num_turns // "?") cost=\(.total_cost_usd // .cost_usd // "?")"
       else empty end
-  ' >&2
+  ' >&2 || true
 }
 
 MODEL_A="opus"
@@ -162,11 +167,15 @@ Do NOT make any code changes — only write the review file."
 # Run two reviewers in parallel with the same context but different lenses,
 # then validate that both produced non-empty output.
 #
-# The `( ... ; exit ${PIPESTATUS[0]} ) &` wrapping is deliberate: without it,
-# `$!` captures the PID of `log_stream` (the last stage of the pipeline),
-# and its `tee | jq` exits 0 whenever stdin closes — so a non-zero exit
-# from `claude -p` would be silently swallowed. PIPESTATUS[0] propagates
-# the reviewer's exit code out of the subshell instead.
+# The `( ... ) &` subshell wrapping is deliberate: without it, `$!` captures
+# the PID of `log_stream` (the last stage of the pipeline), and `log_stream`
+# exits 0 whenever its input closes — so a non-zero exit from `claude -p`
+# would be silently swallowed. Wrapping in a subshell makes `$!` the
+# subshell PID, whose exit code reflects the pipeline under `set -e pipefail`
+# (any non-zero stage fails the pipeline, `set -e` then exits the subshell).
+# The trailing `exit "${PIPESTATUS[0]}"` is a defensive belt-and-braces for
+# callers running without `set -e`; under the current options it is only
+# reached on the success path, where PIPESTATUS[0] is 0.
 run_dual_review() {
   local context="$1" focus_a="$2" focus_b="$3" out_a="$4" out_b="$5" where_field="$6"
   ( run_review "$MODEL_A" "$out_a" "$focus_a" "$context" "$where_field" | log_stream "review-code:$MODEL_A" "$SESSION_DIR/stream-review-code-$MODEL_A.jsonl"; exit "${PIPESTATUS[0]}" ) &
