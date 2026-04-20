@@ -48,15 +48,15 @@ for sf in "$STATE_ROOT"/*/state.json; do
     [[ -f "$sf" ]] || continue
     wdir=$(dirname "$sf")
 
-    pr=$(jq -r '.project_root // empty' "$sf" 2>/dev/null || true)
+    # Read all fields in one jq fork (tab-delimited) instead of seven.
+    # `fork+exec` is expensive on macOS; this keeps hook latency down when
+    # many workflow dirs accumulate.
+    IFS=$'\t' read -r pr id kind status workdir pid exit_code < <(
+        jq -r '[.project_root, .id, .kind, .status, .workdir,
+                (.pid // "" | tostring),
+                (.exit_code // "" | tostring)] | @tsv' "$sf" 2>/dev/null || true
+    )
     [[ "$pr" == "$PROJECT_ROOT" ]] || continue
-
-    id=$(jq        -r '.id          // empty' "$sf" 2>/dev/null || true)
-    kind=$(jq      -r '.kind        // empty' "$sf" 2>/dev/null || true)
-    status=$(jq    -r '.status      // empty' "$sf" 2>/dev/null || true)
-    workdir=$(jq   -r '.workdir     // empty' "$sf" 2>/dev/null || true)
-    pid=$(jq       -r '.pid         // empty' "$sf" 2>/dev/null || true)
-    exit_code=$(jq -r '.exit_code   // empty' "$sf" 2>/dev/null || true)
 
     finished_marker="$wdir/finished"
     ack_marker="$wdir/acknowledged"
@@ -113,6 +113,10 @@ if [[ -n "$SUMMARY" ]]; then
 
     printf '%s' "$SUMMARY" >&2
 
+    # Schema verified against https://code.claude.com/docs/en/hooks (fetched
+    # 2026-04-20): both SessionStart and UserPromptSubmit accept
+    # {hookSpecificOutput: {hookEventName, additionalContext}} and inject
+    # additionalContext into Claude's context.
     EVENT_OUT="${HOOK_EVENT:-SessionStart}"
     jq -n \
         --arg event "$EVENT_OUT" \

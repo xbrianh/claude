@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/skills/_bg/session-summary.sh"
+            "command": "$HOME/.claude/skills/_bg/session-summary.sh"
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/skills/_bg/session-summary.sh"
+            "command": "$HOME/.claude/skills/_bg/session-summary.sh"
           }
         ]
       }

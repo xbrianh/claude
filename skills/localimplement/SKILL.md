@@ -7,7 +7,7 @@ allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 
 You are running the `localimplement` workflow **in the background**. The skill is a thin wrapper over `~/.claude/skills/_bg/launch.sh`, which:
 
-1. Creates an isolated git worktree of the current project (detached HEAD), or `cp -a` copies the tree for non-git projects.
+1. Creates an isolated git worktree of the current project on a fresh branch named `bg/localimplement/<workflow-id>` (or `cp -a` copies the tree for non-git projects).
 2. Spawns the real pipeline (`~/.claude/skills/localimplement/localimplement.sh`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-workflow state under `~/.claude/workflows/<workflow-id>/` (`state.json`, combined `log`, markers).
 4. Returns within ~1s.
@@ -19,10 +19,12 @@ A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for 
 The pipeline writes its per-stage artifacts (original plan, revised plan, two rounds of reviews) to `.claude-workflow/<timestamp>/` **inside the isolated workdir** — not inside the user's project directory. Point the user at:
 
 - `~/.claude/workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
-- `~/.claude/workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path.
+- `~/.claude/workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path, branch name.
 - `<workdir>/.claude-workflow/<ts>/` — plan.md, plan-revised.md, review-plan-*.md, review-code-*.md.
 
-The worktree is removed automatically once the pipeline finishes; move any artifacts you want to keep before that (or before the OS GCs `$TMPDIR`).
+The worktree and the `bg/localimplement/<workflow-id>` branch are **not** cleaned up when the pipeline finishes — the pipeline commits the code changes to that branch, so preserving it is what keeps the work accessible. The user can `git checkout bg/localimplement/<workflow-id>` from their main working tree to inspect, merge, or discard. To tear everything down once they're done: `git worktree remove <workdir>` then `git branch -D bg/localimplement/<workflow-id>`.
+
+Note: the worktree lives under `$TMPDIR`, so the `.claude-workflow/<ts>/` files may be cleaned up by the OS eventually; the branch and its commits live in the main repo's `.git` and persist indefinitely.
 
 ## Arguments
 

@@ -32,7 +32,12 @@ fi
 PIPELINE="$HOME/.claude/skills/$KIND/$KIND.sh"
 [[ -x "$PIPELINE" ]] || die "pipeline script not executable: $PIPELINE"
 
-PROJECT_ROOT="$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null || pwd)"
+if PROJECT_ROOT=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null); then
+    IS_GIT=1
+else
+    PROJECT_ROOT=$(pwd)
+    IS_GIT=0
+fi
 [[ -n "$PROJECT_ROOT" && -d "$PROJECT_ROOT" ]] || die "could not resolve project root"
 
 RANDHEX=$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 6 || true)
@@ -43,13 +48,26 @@ STATE_ROOT="$HOME/.claude/workflows"
 STATE_DIR="$STATE_ROOT/$WF_ID"
 mkdir -p "$STATE_DIR" || die "could not create state dir: $STATE_DIR"
 
-# Isolated workdir: git worktree (detached HEAD) for git repos, cp -a otherwise.
-if git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-    SETUP_KIND="worktree"
+# Isolated workdir setup. For localimplement in a git repo we create a named
+# branch (bg/localimplement/<WF_ID>) so the commits the pipeline makes stay
+# reachable after finish.sh runs — the worktree itself is also preserved on
+# disk so the user can inspect .claude-workflow/<ts>/ artifacts. For
+# ghimplement we use --detach because the pipeline's stage 2b creates and
+# pushes its own issue-N-<slug> branch; a named bg/* ref would be a no-op.
+BRANCH=""
+if [[ $IS_GIT -eq 1 ]]; then
     WORKDIR=$(mktemp -d -t "aibg-$KIND.XXXXXX") || die "mktemp failed"
     rmdir "$WORKDIR" || die "rmdir $WORKDIR failed"
-    git -C "$PROJECT_ROOT" worktree add --detach "$WORKDIR" HEAD >/dev/null \
-        || die "git worktree add failed"
+    if [[ "$KIND" == "localimplement" ]]; then
+        SETUP_KIND="worktree-branch"
+        BRANCH="bg/localimplement/$WF_ID"
+        git -C "$PROJECT_ROOT" worktree add -b "$BRANCH" "$WORKDIR" HEAD >/dev/null \
+            || die "git worktree add -b failed"
+    else
+        SETUP_KIND="worktree"
+        git -C "$PROJECT_ROOT" worktree add --detach "$WORKDIR" HEAD >/dev/null \
+            || die "git worktree add failed"
+    fi
 else
     SETUP_KIND="copy"
     WORKDIR=$(mktemp -d -t "aibg-$KIND.XXXXXX") || die "mktemp failed"
@@ -68,12 +86,13 @@ jq -n \
     --arg project_root  "$PROJECT_ROOT" \
     --arg workdir       "$WORKDIR" \
     --arg setup_kind    "$SETUP_KIND" \
+    --arg branch        "$BRANCH" \
     --arg status        "running" \
     --arg started_at    "$NOW_ISO" \
     --arg instructions  "$INSTR_SUMMARY" \
     '{id: $id, kind: $kind, project_root: $project_root, workdir: $workdir,
-      setup_kind: $setup_kind, status: $status, started_at: $started_at,
-      instructions: $instructions, pid: null}' \
+      setup_kind: $setup_kind, branch: $branch, status: $status,
+      started_at: $started_at, instructions: $instructions, pid: null}' \
     > "$STATE_TMP" || die "failed to write initial state"
 mv "$STATE_TMP" "$STATE_FILE"
 
