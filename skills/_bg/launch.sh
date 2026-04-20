@@ -14,6 +14,30 @@ EOF
     exit 1
 }
 
+# slugify <text> — reduce arbitrary input to [a-z0-9-]+ (max 40 chars),
+# suitable as both a git-ref component and a filesystem directory name.
+# Empty/whitespace-only input produces empty output so the caller can fall
+# back. The restricted charset is chosen by construction — no runtime
+# validation needed downstream.
+slugify() {
+    local input="$1" slug max=40
+    slug=$(printf '%s' "$input" \
+        | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+        | LC_ALL=C tr -c 'a-z0-9' '-' \
+        | LC_ALL=C sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
+    if (( ${#slug} > max )); then
+        local trimmed="${slug:0:max}"
+        # Prefer trimming at the last hyphen so we don't cut mid-word, but
+        # only if doing so leaves a substantial slug (>=20 chars).
+        local head="${trimmed%-*}"
+        if [[ "$head" != "$trimmed" && ${#head} -ge 20 ]]; then
+            trimmed="$head"
+        fi
+        slug="${trimmed%-}"
+    fi
+    printf '%s' "$slug"
+}
+
 DESCRIPTION=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -54,9 +78,82 @@ else
 fi
 [[ -n "$PROJECT_ROOT" && -d "$PROJECT_ROOT" ]] || die "could not resolve project root"
 
+INSTR_RAW="$*"
+INSTR_SUMMARY="${INSTR_RAW:0:200}"
+
+# Slug source resolution, in priority order. This runs *before* the
+# DESCRIPTION-from-INSTR_RAW fallback so the file-path branch isn't
+# shadowed by the fallback (which would feed the slugifier a path like
+# `/tmp/test-spec-slug.md` and produce `tmp-test-spec-slug-md`).
+#   1. Explicit --description (SKILL.md callers compose a clean ≤60-char phrase).
+#   2. If the first positional argument is a readable file, use its first
+#      `# heading` line, or fall back to its basename without extension.
+#   3. The raw instructions with leading flags stripped, first 80 chars.
+#   4. Literal "workflow" last-resort (applied after slugify if result empty).
+SLUG_SOURCE=""
+if [[ -n "$DESCRIPTION" ]]; then
+    SLUG_SOURCE="$DESCRIPTION"
+else
+    # Walk $@ skipping leading flags (and their values) to find the first
+    # positional arg — this avoids contaminating slugs with "-a opus -b sonnet".
+    # Heuristic: assumes each flag takes one value. Boolean flags followed
+    # by a positional will swallow the positional; on miss we still produce a
+    # usable slug from the raw-instructions fallback below.
+    _args=("$@")
+    _i=0
+    while (( _i < ${#_args[@]} )); do
+        _a="${_args[_i]}"
+        if [[ "$_a" == "--" ]]; then
+            _i=$((_i + 1))
+            break
+        elif [[ "$_a" == -* ]]; then
+            _i=$((_i + 1))
+            if (( _i < ${#_args[@]} )) && [[ "${_args[_i]}" != -* ]]; then
+                _i=$((_i + 1))
+            fi
+        else
+            break
+        fi
+    done
+    _first_positional=""
+    (( _i < ${#_args[@]} )) && _first_positional="${_args[_i]}"
+    if [[ -n "$_first_positional" && -f "$_first_positional" ]]; then
+        # Quit on first `# …` line — BSD sed doesn't accept a line-range
+        # with a nested {…} block, so we use a plain pattern with `q` and
+        # cap the scan to 50 lines by piping through head (sed stops reading
+        # once `q` fires, so this is only a safety bound).
+        _title=$(head -n 50 "$_first_positional" 2>/dev/null \
+                 | sed -nE '/^#+[[:space:]]+.+/{s/^#+[[:space:]]+//p;q;}' \
+                 || true)
+        if [[ -n "$_title" ]]; then
+            SLUG_SOURCE="$_title"
+        else
+            _base="${_first_positional##*/}"
+            SLUG_SOURCE="${_base%.*}"
+        fi
+    else
+        _rem=""
+        for (( _j=_i; _j<${#_args[@]}; _j++ )); do
+            _rem+="${_args[_j]} "
+        done
+        SLUG_SOURCE="${_rem% }"
+        SLUG_SOURCE="${SLUG_SOURCE:0:80}"
+    fi
+fi
+
+SLUG=$(slugify "$SLUG_SOURCE")
+[[ -z "$SLUG" ]] && SLUG="workflow"
+
+# Description fallback: explicit --description wins; otherwise fall back to
+# a truncated slice of the raw instructions so the status views always have
+# something to print.
+if [[ -z "$DESCRIPTION" ]]; then
+    DESCRIPTION="${INSTR_RAW:0:60}"
+fi
+
 RANDHEX=$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 6 || true)
 [[ -n "$RANDHEX" ]] || RANDHEX="xxxxxx"
-WF_ID="$(date -u +%Y%m%d-%H%M%S)-$$-$RANDHEX"
+WF_ID="${SLUG}-${RANDHEX}"
 
 STATE_ROOT="$HOME/.claude/workflows"
 STATE_DIR="$STATE_ROOT/$WF_ID"
@@ -88,14 +185,6 @@ else
     cp -a "$PROJECT_ROOT/." "$WORKDIR/" || die "cp -a failed"
 fi
 
-INSTR_RAW="$*"
-INSTR_SUMMARY="${INSTR_RAW:0:200}"
-# Description: explicit --description wins; otherwise fall back to a truncated
-# slice of the raw instructions so the status views always have something to
-# print (weaker signal than a hand-crafted phrase, but better than empty).
-if [[ -z "$DESCRIPTION" ]]; then
-    DESCRIPTION="${INSTR_RAW:0:60}"
-fi
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 STATE_FILE="$STATE_DIR/state.json"

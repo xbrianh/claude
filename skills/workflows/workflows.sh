@@ -67,14 +67,25 @@ if [[ $HERE_ONLY -eq 1 ]]; then
     HERE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 fi
 
-short_id() {
-    # Workflow id is "<UTC-stamp>-<pid>-<rand6>". Return the trailing rand6 for
-    # a compact table column; fall back to last 8 chars if the format differs.
+display_id() {
+    # New-format workflow id: "<slug>-<rand6>". The slug is human-readable, so
+    # show the full id — it's what correlates with git branches and state
+    # directories, and it's what `--ack <id>` matches against.
+    # Old-format id: "<YYYYMMDD-HHMMSS>-<pid>-<rand6>". For those, the trailing
+    # rand6 is the only compact, unambiguous handle, so keep the historical
+    # compact rendering to avoid a wide column full of timestamp noise.
+    # PID segment is any positive number of digits: Linux/macOS PIDs can be
+    # 1 digit (early boot) or 7+ digits on systems with pid_max > 999999.
+    # Trailing segment accepts either [a-f0-9]{6} or the literal "xxxxxx"
+    # fallback that launch.sh emits when /dev/urandom is unreadable.
+    # The leading YYYYMMDD-HHMMSS anchor is distinctive enough that a
+    # slug-based id of the same shape is effectively impossible in practice
+    # (slugs derive from heading/description text, not pure digits).
     local id="$1"
-    if [[ "$id" =~ -([a-f0-9]{6})$ ]]; then
-        echo "${BASH_REMATCH[1]}"
+    if [[ "$id" =~ ^[0-9]{8}-[0-9]{6}-[0-9]+-([a-f0-9]{6}|xxxxxx)$ ]]; then
+        echo "${id##*-}"
     else
-        echo "${id: -8}"
+        echo "$id"
     fi
 }
 
@@ -209,8 +220,12 @@ for sf in "$STATE_ROOT"/*/state.json; do
     sub_disp=$(render_sub_stage "$sub")
     [[ -n "$sub_disp" ]] && stage_disp+=" ($sub_disp)"
 
-    # Trim noisy long fields.
-    stage_trim="${stage_disp:0:38}"
+    # Trim noisy long fields. Widths rebalanced to budget ~47 chars for the
+    # now-human-readable ID column without wrapping on a typical ~180-col
+    # terminal. Liveness keeps its historical width because truncating it
+    # hides death reasons (e.g. "dead:crashed (pid NNNNN gone)"); stage is
+    # shaved instead.
+    stage_trim="${stage_disp:0:22}"
     live_trim="${live:0:28}"
     desc_trim="${desc:0:60}"
     age=$(humanize_age "$started_at")
@@ -219,7 +234,7 @@ for sf in "$STATE_ROOT"/*/state.json; do
         ghimplement)    kind_short=gh    ;;
         *)              kind_short="$kind" ;;
     esac
-    sid=$(short_id "$id")
+    sid=$(display_id "$id")
 
     # started_at sorts lexicographically because the format is ISO-8601-Z.
     # Use US (\x1f) as the in-band separator: same rationale as the jq
@@ -243,8 +258,11 @@ while IFS= read -r line; do
 done < <(printf '%s\n' "${rows[@]}" | sort)
 
 # Header + rows. Column widths are fixed; columns will overflow gracefully if
-# content exceeds them (no truncation beyond the pre-trim above).
-FMT='%-5s  %-8s  %-38s  %-28s  %-5s  %s\n'
+# content exceeds them (no truncation beyond the pre-trim above). The ID
+# column is sized for the new "<slug>-<rand6>" format (slug up to 40 chars
+# + 1 hyphen + 6 hex = 47). Old-format ids render as their 6-hex tail via
+# display_id() and fit in the same column.
+FMT='%-5s  %-47s  %-22s  %-28s  %-5s  %s\n'
 # shellcheck disable=SC2059
 printf "$FMT" "KIND" "ID" "STAGE" "LIVENESS" "AGE" "DESCRIPTION"
 for row in "${sorted_rows[@]}"; do
