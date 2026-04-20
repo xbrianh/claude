@@ -9,11 +9,12 @@ CLAUDE.md             # repo-level doc for Claude, loaded when cwd is this repo 
 home/CLAUDE.md        # global preferences, synced to ~/.claude/CLAUDE.md
 settings.json         # harness settings: hooks, permissions, plugins
 skills/
+  _bg/                # shared background-workflow launcher + SessionStart hook
   ghplan/             # /ghplan: draft a plan, post it as a GitHub issue
-  ghimplement/        # /ghimplement: run the full pipeline (wrapper + colocated ghimplement.sh)
+  ghimplement/        # /ghimplement: run the full pipeline in the background via skills/_bg/launch.sh
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
-  localimplement/     # /localimplement: full local pipeline (wrapper + colocated localimplement.sh)
+  localimplement/     # /localimplement: full local pipeline in the background via skills/_bg/launch.sh
 agents/
   pragmatic-developer.md
 commands/             # slash commands (created on first sync; no files tracked yet)
@@ -47,6 +48,17 @@ The four `gh*` skills compose into a GitHub-issue-driven workflow:
 - [`/localimplement`](skills/localimplement/SKILL.md) — local (no-GitHub) counterpart to `/ghimplement`: runs plan → review-plan ×2 → address-plan → implement → review-code ×2 → address-code locally via [`skills/localimplement/localimplement.sh`](skills/localimplement/localimplement.sh), with all artifacts written to `.claude-workflow/<timestamp>/`.
 
 `skills/ghimplement/ghimplement.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
+
+### Background execution
+
+Both `/ghimplement` and `/localimplement` run **in the background**. Their SKILL.md wrappers hand off to [`skills/_bg/launch.sh`](skills/_bg/launch.sh), which:
+
+- Creates an isolated worktree (via `git worktree add --detach` for git projects, `cp -a` otherwise) so concurrent invocations don't collide.
+- Spawns the pipeline detached (subshell + `nohup`), so it survives `Ctrl-C`, shell exit, and Claude Code quitting.
+- Records per-workflow state under `~/.claude/workflows/<id>/` (`state.json`, combined `log`, `finished` / `acknowledged` markers). This directory is intentionally **not** synced — it's runtime state, not config.
+- Returns within ~1s with the workflow id, workdir, log path, and state-file path.
+
+A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes [`skills/_bg/session-summary.sh`](skills/_bg/session-summary.sh), which reports running and newly-finished workflows for the current project so you're notified the next time you open Claude Code in that tree. Acknowledged state dirs older than 14 days are pruned on the next hook firing.
 
 ## Getting started
 

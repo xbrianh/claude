@@ -1,51 +1,52 @@
 ---
 name: localimplement
-description: Run the end-to-end plan → review-plan → address-plan → implement → review-code → address-code workflow entirely locally, invoking ~/.claude/skills/localimplement/localimplement.sh. All artifacts (original plan, revised plan, both review rounds) are written to .claude-workflow/<timestamp>/ in the current working directory; each review round uses two different models in parallel.
+description: Run the end-to-end plan → review-plan → address-plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. All artifacts (original plan, revised plan, both review rounds) land inside the isolated workdir's `.claude-workflow/<timestamp>/`; each review round uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
 argument-hint: [-a <model>] [-b <model>] <instructions>
-allowed-tools: Bash(~/.claude/skills/localimplement/localimplement.sh:*)
+allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
 
-You are running the `localimplement` workflow. This is a thin wrapper over the shell script at `~/.claude/skills/localimplement/localimplement.sh`, which orchestrates six `claude -p` stages end-to-end with no GitHub involvement.
+You are running the `localimplement` workflow **in the background**. The skill is a thin wrapper over `~/.claude/skills/_bg/launch.sh`, which:
+
+1. Creates an isolated git worktree of the current project (detached HEAD), or `cp -a` copies the tree for non-git projects.
+2. Spawns the real pipeline (`~/.claude/skills/localimplement/localimplement.sh`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+3. Records per-workflow state under `~/.claude/workflows/<workflow-id>/` (`state.json`, combined `log`, markers).
+4. Returns within ~1s.
+
+A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for this project when the workflow finishes.
+
+## Where artifacts go
+
+The pipeline writes its per-stage artifacts (original plan, revised plan, two rounds of reviews) to `.claude-workflow/<timestamp>/` **inside the isolated workdir** — not inside the user's project directory. Point the user at:
+
+- `~/.claude/workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
+- `~/.claude/workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path.
+- `<workdir>/.claude-workflow/<ts>/` — plan.md, plan-revised.md, review-plan-*.md, review-code-*.md.
+
+The worktree is removed automatically once the pipeline finishes; move any artifacts you want to keep before that (or before the OS GCs `$TMPDIR`).
 
 ## Arguments
 
 $ARGUMENTS
 
-Forward them verbatim to the script. Quote the instructions string so shell word-splitting doesn't break it.
-
-## What the script does
-
-1. **plan** — writes `plan.md` to `.claude-workflow/<timestamp>/` in CWD.
-2. **review plan × 2 (parallel)** — two reviewers read `plan.md` on different models with different lenses:
-   - Reviewer **A** (default `opus`) — *holistic* lens, defined in [`lens-holistic-plan.md`](lens-holistic-plan.md).
-   - Reviewer **B** (default `sonnet`) — *detail* lens, defined in [`lens-detail-plan.md`](lens-detail-plan.md).
-   - Outputs `review-plan-holistic-<model-a>.md` and `review-plan-detail-<model-b>.md`.
-3. **address plan reviews** — reads both plan reviews and writes the revised plan to `plan-revised.md`. The original `plan.md` is preserved so the diff between the two is inspectable.
-4. **implement** — reads `plan-revised.md` (the revised plan, not the original) and edits code per its tasks; commits if in a git repo.
-5. **review code × 2 (parallel)** — same two-model, two-lens pair as stage 2, but reviewing the implementation diff:
-   - Reviewer **A** — *holistic* lens, defined in [`lens-holistic-code.md`](lens-holistic-code.md).
-   - Reviewer **B** — *detail* lens, defined in [`lens-detail-code.md`](lens-detail-code.md).
-   - Outputs `review-code-holistic-<model-a>.md` and `review-code-detail-<model-b>.md`.
-6. **address code reviews** — reads both code reviews, fixes findings, commits.
-
-Models are configurable with `-a <model>` (holistic reviewer) and `-b <model>` (detail reviewer); the same pair is used for both review rounds. Aliases like `opus` / `sonnet` / `haiku`, or full model IDs.
-
-Nothing is ever pushed to a remote. An empty plan, empty review, empty revised plan, or no-op implementation each abort the run.
+Forward them verbatim to the launcher. Quote the instructions string so shell word-splitting doesn't break it.
 
 ## What to do
 
-Run the script:
+Run the launcher:
 
 ```
-~/.claude/skills/localimplement/localimplement.sh $ARGUMENTS
+~/.claude/skills/_bg/launch.sh localimplement $ARGUMENTS
 ```
 
-Stream its output directly so the user can see per-step progress (`[1/6] planning`, `[2/6] reviewing plan`, etc.). When it finishes, the script prints the session directory path — echo that back to the user as your answer.
+Report the workflow id, workdir, and log path that it prints. Make clear to the user:
 
-If the script exits non-zero, report which stage failed (based on the last `==> [N/6]` line printed before the error) and include the stderr output so the user can diagnose.
+- The pipeline is running in the background — their session is free immediately.
+- They do **not** need to keep this Claude Code session open.
+- They will see a notification in a future session (any project-scoped session) once the pipeline finishes.
 
 ## Do not
 
-- Do not re-implement the workflow inline. The script is the source of truth.
-- Do not pass extra flags the script doesn't accept.
-- Do not run the individual stages yourself — the script invokes them via nested `claude -p` calls.
+- Do not tail the log or block waiting for the pipeline to finish.
+- Do not pass extra flags the launcher doesn't accept.
+- Do not invoke the pipeline script (`localimplement.sh`) directly — always go through the launcher.
+- Do not run the individual stages inline.
