@@ -18,7 +18,7 @@ EC="$2"
 # but --argjson will hard-fail on non-JSON input).
 [[ "$EC" =~ ^-?[0-9]+$ ]] || EC=1
 
-STATE_DIR="$HOME/.claude/workflows/$WF_ID"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/$WF_ID"
 STATE_FILE="$STATE_DIR/state.json"
 [[ -f "$STATE_FILE" ]] || die "no state file at $STATE_FILE"
 

@@ -3,7 +3,13 @@
     "allow": [
       "Bash(gh *)",
       "Bash(grep *)",
-      "Bash(find *)"
+      "Bash(find *)",
+      "Write(~/.local/state/claude-workflows/**)",
+      "Edit(~/.local/state/claude-workflows/**)",
+      "Bash(mkdir -p ~/.local/state/claude-workflows/**)",
+      "Bash(tee ~/.local/state/claude-workflows/**)",
+      "Bash(cat > ~/.local/state/claude-workflows/**)",
+      "Bash(cat >> ~/.local/state/claude-workflows/**)"
     ],
     "defaultMode": "auto"
   },

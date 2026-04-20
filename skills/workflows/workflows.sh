@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # /workflows — on-demand status of background workflow pipelines.
-# Reads every ~/.claude/workflows/<id>/state.json, applies the shared liveness
-# classifier, and prints one scannable line per workflow.
+# Reads every ${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<id>/state.json,
+# applies the shared liveness classifier, and prints one scannable line per workflow.
 #
 # Exit 0 always: an unexpected error logs to stderr and falls through. Same
 # "never break a session" principle as the session-summary hook.
 set -u
 
-STATE_ROOT="$HOME/.claude/workflows"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
 
 command -v jq >/dev/null 2>&1 || { echo "jq not found" >&2; exit 0; }
 
