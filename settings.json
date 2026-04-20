@@ -4,12 +4,12 @@
       "Bash(gh *)",
       "Bash(grep *)",
       "Bash(find *)",
-      "Write($HOME/.local/state/claude-workflows/**)",
-      "Edit($HOME/.local/state/claude-workflows/**)",
-      "Bash(mkdir -p $HOME/.local/state/claude-workflows/**)",
-      "Bash(tee $HOME/.local/state/claude-workflows/**)",
-      "Bash(cat > $HOME/.local/state/claude-workflows/**)",
-      "Bash(cat >> $HOME/.local/state/claude-workflows/**)"
+      "Write(~/.local/state/claude-workflows/**)",
+      "Edit(~/.local/state/claude-workflows/**)",
+      "Bash(mkdir -p ~/.local/state/claude-workflows/**)",
+      "Bash(tee ~/.local/state/claude-workflows/**)",
+      "Bash(cat > ~/.local/state/claude-workflows/**)",
+      "Bash(cat >> ~/.local/state/claude-workflows/**)"
     ],
     "defaultMode": "auto"
   },

@@ -188,4 +188,18 @@ while IFS= read -r ack; do
     esac
 done < <(find "$STATE_ROOT" -maxdepth 2 -name acknowledged -mtime +14 -print 2>/dev/null || true)
 
+# Prune old direct-CLI session dirs (>14 days by dir mtime). Direct
+# invocations of `localimplement.sh` write artifacts under
+# `$STATE_ROOT/direct/<ts>-<rand>/` but never drop a `state.json` or
+# `acknowledged` marker, so the acknowledged-based sweep above would leave
+# them to accumulate forever. Match by dir mtime instead; the artifacts
+# subtree under each direct session is self-contained.
+if [[ -d "$STATE_ROOT/direct" ]]; then
+    while IFS= read -r d; do
+        case "$d" in
+            "$STATE_ROOT"/direct/*) rm -rf "$d" 2>/dev/null || true ;;
+        esac
+    done < <(find "$STATE_ROOT/direct" -mindepth 1 -maxdepth 1 -type d -mtime +14 -print 2>/dev/null || true)
+fi
+
 exit 0

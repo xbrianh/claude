@@ -102,8 +102,12 @@ command -v jq >/dev/null     || die "jq not found"
 
 # Session directory. Artifacts always live under the XDG state root so they
 # stay out of the product branch and survive worktree removal. Under the _bg
-# launcher WF_ID names the workflow dir; a direct CLI invocation synthesizes a
-# "<ts>-direct-<rand>" id for symmetry.
+# launcher WF_ID names the workflow dir directly under $STATE_ROOT, and the
+# launcher/session-summary hook manage its lifecycle (state.json, finished,
+# acknowledged markers, 14-day prune). Direct CLI invocations have no such
+# lifecycle, so they're nested under `$STATE_ROOT/direct/<ts>-<rand>/` — a
+# dedicated subdir keeps them visually separated from real workflow state
+# and lets `session-summary.sh` prune them on a simpler age-based heuristic.
 #
 # WF_ID is interpolated into a filesystem path, so validate it against a
 # conservative charset to prevent path traversal (e.g. "../") or embedded
@@ -113,13 +117,12 @@ STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
 TS=$(date +%Y%m%d-%H%M%S)
 if [[ -n "${WF_ID:-}" ]]; then
   [[ "$WF_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid WF_ID: $WF_ID"
-  SESSION_ID="$WF_ID"
+  SESSION_DIR="$STATE_ROOT/$WF_ID/artifacts"
 else
   RAND=$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 6 || true)
   [[ -n "$RAND" ]] || RAND="xxxxxx"
-  SESSION_ID="$TS-direct-$RAND"
+  SESSION_DIR="$STATE_ROOT/direct/$TS-$RAND/artifacts"
 fi
-SESSION_DIR="$STATE_ROOT/$SESSION_ID/artifacts"
 mkdir -p "$SESSION_DIR"
 PLAN_FILE="$SESSION_DIR/plan.md"
 REVIEW_CODE_A="$SESSION_DIR/review-code-holistic-$MODEL_A.md"
