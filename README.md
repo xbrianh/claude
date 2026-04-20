@@ -13,6 +13,7 @@ skills/
   ghimplement/        # /ghimplement: run the full pipeline (wrapper + colocated ghimplement.sh)
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
+  localimplement/     # /localimplement: full local pipeline (wrapper + colocated localimplement.sh)
 agents/
   pragmatic-developer.md
 commands/             # slash commands (created on first sync; no files tracked yet)
@@ -43,6 +44,7 @@ The four `gh*` skills compose into a GitHub-issue-driven workflow:
 - [`/ghimplement`](skills/ghimplement/SKILL.md) — run the full pipeline end-to-end via [`skills/ghimplement/ghimplement.sh`](skills/ghimplement/ghimplement.sh).
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
+- [`/localimplement`](skills/localimplement/SKILL.md) — local (no-GitHub) counterpart to `/ghimplement`: runs plan → review-plan ×2 → address-plan → implement → review-code ×2 → address-code locally via [`skills/localimplement/localimplement.sh`](skills/localimplement/localimplement.sh), with all artifacts written to `.claude-workflow/<timestamp>/`.
 
 `skills/ghimplement/ghimplement.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
