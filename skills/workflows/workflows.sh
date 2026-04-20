@@ -74,11 +74,15 @@ display_id() {
     # Old-format id: "<YYYYMMDD-HHMMSS>-<pid>-<rand6>". For those, the trailing
     # rand6 is the only compact, unambiguous handle, so keep the historical
     # compact rendering to avoid a wide column full of timestamp noise.
-    # Tighten the PID segment to 3–6 digits so a new-format slug composed of
-    # pure digits in the same shape (theoretically possible) doesn't get
-    # misclassified as old-format.
+    # PID segment is any positive number of digits: Linux/macOS PIDs can be
+    # 1 digit (early boot) or 7+ digits on systems with pid_max > 999999.
+    # Trailing segment accepts either [a-f0-9]{6} or the literal "xxxxxx"
+    # fallback that launch.sh emits when /dev/urandom is unreadable.
+    # The leading YYYYMMDD-HHMMSS anchor is distinctive enough that a
+    # slug-based id of the same shape is effectively impossible in practice
+    # (slugs derive from heading/description text, not pure digits).
     local id="$1"
-    if [[ "$id" =~ ^[0-9]{8}-[0-9]{6}-[0-9]{3,6}-[a-f0-9]{6}$ ]]; then
+    if [[ "$id" =~ ^[0-9]{8}-[0-9]{6}-[0-9]+-([a-f0-9]{6}|xxxxxx)$ ]]; then
         echo "${id##*-}"
     else
         echo "$id"
