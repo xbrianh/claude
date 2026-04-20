@@ -67,24 +67,31 @@ log_stream() {
   ' >&2 || true
 }
 
-MODEL_A="opus"
+MODEL_PLAN="sonnet"
+MODEL_IMPL="sonnet"
+MODEL_ADDR="sonnet"
+MODEL_A="sonnet"
 MODEL_B="sonnet"
-while getopts "a:b:" opt; do
+USAGE="usage: localimplement.sh [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-a <holistic-review-model>] [-b <detail-review-model>] \"<instructions>\""
+while getopts "p:i:x:a:b:" opt; do
   case "$opt" in
+    p) MODEL_PLAN="$OPTARG" ;;
+    i) MODEL_IMPL="$OPTARG" ;;
+    x) MODEL_ADDR="$OPTARG" ;;
     a) MODEL_A="$OPTARG" ;;
     b) MODEL_B="$OPTARG" ;;
-    *) die "usage: localimplement.sh [-a <model>] [-b <model>] \"<instructions>\"" ;;
+    *) die "$USAGE" ;;
   esac
 done
 shift $((OPTIND - 1))
-[[ $# -ge 1 ]] || die "usage: localimplement.sh [-a <model>] [-b <model>] \"<instructions>\""
+[[ $# -ge 1 ]] || die "$USAGE"
 INSTRUCTIONS="$*"
 
 # Validate model aliases conservatively. INSTRUCTIONS is intentionally *not*
 # sanitized: it is the prompt this tool exists to send. Callers should treat
 # INSTRUCTIONS as a prompt to an unrestricted agent (we run with
 # --permission-mode bypassPermissions below), not an opaque arg.
-for m in "$MODEL_A" "$MODEL_B"; do
+for m in "$MODEL_PLAN" "$MODEL_IMPL" "$MODEL_ADDR" "$MODEL_A" "$MODEL_B"; do
   [[ "$m" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid model: $m"
 done
 
@@ -186,11 +193,14 @@ run_dual_review() {
   # Inner function names leak to the global namespace in bash — prefix with
   # the outer function name so a grep for `emit_sub_stage` doesn't land here
   # and so redefinitions from anywhere else can't collide.
+  # Use stable labels "holistic"/"detail" as keys (not model names) so the
+  # JSON object stays unambiguous even when MODEL_A==MODEL_B. Include the
+  # model name inside each value so it's still visible in the status output.
   _run_dual_review_emit_sub() {
     set_stage review-code "$(jq -cn \
-        --arg a "$MODEL_A" --arg b "$MODEL_B" \
-        --arg as "$1"      --arg bs "$2" \
-        '{($a): $as, ($b): $bs}')"
+        --arg am "$MODEL_A" --arg bm "$MODEL_B" \
+        --arg as "$1"       --arg bs "$2" \
+        '{"holistic": "\($as) (\($am))", "detail": "\($bs) (\($bm))"}')"
   }
 
   local fail=0 a_status="running" b_status="running"
@@ -221,8 +231,8 @@ run_dual_review() {
 }
 
 set_stage plan
-echo "==> [1/4] planning -> $PLAN_FILE"
-claude -p "${CLAUDE_FLAGS[@]}" \
+echo "==> [1/4] planning (model: $MODEL_PLAN) -> $PLAN_FILE"
+claude -p --model "$MODEL_PLAN" "${CLAUDE_FLAGS[@]}" \
   "Create a detailed implementation plan for the following task and write it to the file \`$PLAN_FILE\`. Use this structure:
 
 ## Context
@@ -245,7 +255,7 @@ Task: $INSTRUCTIONS" \
 [[ -s "$PLAN_FILE" ]] || die "plan stage did not produce $PLAN_FILE"
 
 set_stage implement
-echo "==> [2/4] implementing (from $PLAN_FILE)"
+echo "==> [2/4] implementing (model: $MODEL_IMPL, from $PLAN_FILE)"
 PRE_HEAD=""
 PRE_IMPL_SENTINEL=""
 if [[ $IN_GIT -eq 1 ]]; then
@@ -261,7 +271,7 @@ IMPL_COMMIT_INSTR="."
 # path under ~/.claude/workflows/ that would end up in git history otherwise.
 [[ $IN_GIT -eq 1 ]] && IMPL_COMMIT_INSTR=", stage the changed files by name and create a single git commit with a clear message that references the implementation plan (refer to it as \`plan.md\` in the commit message, not by absolute path). Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. Do not push."
 
-claude -p "${CLAUDE_FLAGS[@]}" \
+claude -p --model "$MODEL_IMPL" "${CLAUDE_FLAGS[@]}" \
   "Read the implementation plan at \`$PLAN_FILE\` and implement every task in it by editing code in this repo. When the implementation is complete${IMPL_COMMIT_INSTR}" \
   | log_stream "implement" "$SESSION_DIR/stream-implement.jsonl"
 
@@ -298,11 +308,11 @@ echo "    holistic code review ($MODEL_A): $REVIEW_CODE_A"
 echo "    detail code review   ($MODEL_B): $REVIEW_CODE_B"
 
 set_stage address-code
-echo "==> [4/4] addressing code reviews"
+echo "==> [4/4] addressing code reviews (model: $MODEL_ADDR)"
 ADDRESS_COMMIT_INSTR=""
 [[ $IN_GIT -eq 1 ]] && ADDRESS_COMMIT_INSTR="After making all fixes, stage the changed files by name and create a single git commit titled 'Address review feedback' whose body references both review files. Do not push."
 
-claude -p "${CLAUDE_FLAGS[@]}" \
+claude -p --model "$MODEL_ADDR" "${CLAUDE_FLAGS[@]}" \
   "Two independent code reviews of the most recent implementation are at:
 - \`$REVIEW_CODE_A\` — **holistic** reviewer (model: $MODEL_A).
 - \`$REVIEW_CODE_B\` — **detail** reviewer (model: $MODEL_B).
