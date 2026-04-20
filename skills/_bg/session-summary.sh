@@ -24,7 +24,30 @@ elif [[ -f "$HOME/.claude/skills/_bg/liveness.sh" ]]; then
     # shellcheck disable=SC1090
     source "$HOME/.claude/skills/_bg/liveness.sh"
 else
-    liveness_of_state_file() { echo "running"; }
+    # Library not installed yet (can happen during a partial sync between this
+    # repo and ~/.claude/). Inline a minimal classifier so a crashed pipeline
+    # doesn't get reported as "running" forever. The full library adds a stall
+    # heuristic on top of this; we skip it in the fallback.
+    liveness_of_state_file() {
+        local sf="$1" wdir st p ec
+        [[ -f "$sf" ]] || return 0
+        wdir=$(dirname "$sf")
+        if [[ -f "$wdir/finished" ]]; then
+            echo "dead:finished"
+            return 0
+        fi
+        IFS=$'\x1f' read -r st p ec < <(
+            jq -r '[.status, (.pid // "" | tostring),
+                    (.exit_code // "" | tostring)] | join("\u001f")' \
+                "$sf" 2>/dev/null || true
+        )
+        if [[ "$st" == "running" && -n "$p" && "$p" != "null" ]] \
+           && ! kill -0 "$p" 2>/dev/null; then
+            echo "dead:crashed (pid $p gone)"
+            return 0
+        fi
+        echo "${st:-running}"
+    }
 fi
 
 # Read hook input JSON from stdin if present.

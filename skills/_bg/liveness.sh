@@ -34,9 +34,12 @@ liveness_of_state_file() {
     local wdir wf_status wf_pid wf_exit_code
     wdir=$(dirname "$sf")
 
-    IFS=$'\t' read -r wf_status wf_pid wf_exit_code < <(
+    # US (\x1f) separator, matching session-summary.sh and workflows.sh: bash
+    # treats tab as IFS-whitespace and collapses consecutive empty columns, so
+    # a future 4th field could silently lose a value. US is non-whitespace.
+    IFS=$'\x1f' read -r wf_status wf_pid wf_exit_code < <(
         jq -r '[.status, (.pid // "" | tostring),
-                (.exit_code // "" | tostring)] | @tsv' "$sf" 2>/dev/null || true
+                (.exit_code // "" | tostring)] | join("\u001f")' "$sf" 2>/dev/null || true
     )
 
     # Terminal: finish.sh ran → `finished` marker exists.

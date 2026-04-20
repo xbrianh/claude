@@ -38,7 +38,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --all)     MODE="list"; shift ;;
         --here)    HERE_ONLY=1; shift ;;
-        --ack)     MODE="ack"; TARGET="${2:-}"; shift 2 || true ;;
+        --ack)     MODE="ack"; TARGET="${2:-}"; shift; [[ -n "$TARGET" ]] && shift ;;
         --ack-all) MODE="ack-all"; shift ;;
         -h|--help)
             cat <<'EOF'
@@ -46,9 +46,10 @@ usage: workflows.sh [--here] [--ack <id>] [--ack-all]
 
   (default)      List all active workflows on this machine.
   --here         Only workflows whose project_root matches this repo.
-  --ack <id>     Acknowledge (hide) a finished/dead workflow. Accepts
-                 full id or a unique substring.
-  --ack-all      Acknowledge every finished/dead workflow.
+  --ack <id>     Acknowledge (hide) a dead/finished workflow. Accepts a
+                 full id or a unique substring; ambiguous substrings abort.
+  --ack-all      Acknowledge every dead/finished workflow (stalled ones
+                 are still alive and must be ack'd individually).
 EOF
             exit 0 ;;
         *) echo "unknown argument: $1" >&2; shift ;;
@@ -117,27 +118,43 @@ if [[ "$MODE" == "ack" ]]; then
         echo "usage: workflows.sh --ack <id>" >&2
         exit 0
     fi
-    matched=0
+    # Collect substring matches first: if >1 workflow id contains TARGET, refuse
+    # to ack any of them so a common fragment (e.g. a date) can't silently
+    # dismiss a whole batch.
+    matches=()
     for sf in "$STATE_ROOT"/*/state.json; do
         d=$(dirname "$sf")
         id=$(basename "$d")
         [[ "$id" == *"$TARGET"* ]] || continue
-        # Only acknowledge workflows that are actually finished or dead —
-        # refusing to acknowledge a live running workflow avoids hiding
-        # something the user still cares about.
-        live=$(liveness_of_state_file "$sf")
-        case "$live" in
-            dead:*|stalled:*)
-                touch "$d/acknowledged" 2>/dev/null || true
-                echo "acknowledged $id ($live)"
-                matched=$((matched + 1))
-                ;;
-            *)
-                echo "skipping $id: $live (use --ack-all to force-acknowledge nothing alive)"
-                ;;
-        esac
+        matches+=("$sf")
     done
-    (( matched == 0 )) && echo "no finished/dead workflow matched: $TARGET"
+    if (( ${#matches[@]} == 0 )); then
+        echo "no workflow matched: $TARGET"
+        exit 0
+    fi
+    if (( ${#matches[@]} > 1 )); then
+        echo "ambiguous id '$TARGET' matched ${#matches[@]} workflows — use a longer prefix:"
+        for sf in "${matches[@]}"; do
+            echo "  $(basename "$(dirname "$sf")")"
+        done
+        exit 0
+    fi
+    sf="${matches[0]}"
+    d=$(dirname "$sf")
+    id=$(basename "$d")
+    # Only acknowledge workflows that are actually dead/finished. A stalled
+    # workflow is still running (just quiet), so hiding it could bury a
+    # slow-but-alive pipeline the user still cares about.
+    live=$(liveness_of_state_file "$sf")
+    case "$live" in
+        dead:*)
+            touch "$d/acknowledged" 2>/dev/null || true
+            echo "acknowledged $id ($live)"
+            ;;
+        *)
+            echo "skipping $id ($live is still running; only dead/finished workflows can be acknowledged)"
+            ;;
+    esac
     exit 0
 fi
 
@@ -146,7 +163,9 @@ if [[ "$MODE" == "ack-all" ]]; then
     for sf in "$STATE_ROOT"/*/state.json; do
         d=$(dirname "$sf")
         live=$(liveness_of_state_file "$sf")
-        if [[ "$live" == dead:* || "$live" == stalled:* ]]; then
+        # Dead-only: stalled workflows still have a live pid and may still
+        # produce output. Users can ack them individually once they crash.
+        if [[ "$live" == dead:* ]]; then
             touch "$d/acknowledged" 2>/dev/null || true
             echo "acknowledged $(basename "$d") ($live)"
             matched=$((matched + 1))
@@ -195,7 +214,11 @@ for sf in "$STATE_ROOT"/*/state.json; do
     live_trim="${live:0:28}"
     desc_trim="${desc:0:60}"
     age=$(humanize_age "$started_at")
-    kind_short="${kind:0:5}"
+    case "$kind" in
+        localimplement) kind_short=local ;;
+        ghimplement)    kind_short=gh    ;;
+        *)              kind_short="$kind" ;;
+    esac
     sid=$(short_id "$id")
 
     # started_at sorts lexicographically because the format is ISO-8601-Z.

@@ -133,7 +133,10 @@ run_dual_review() {
   ( run_review "$MODEL_B" "$out_b" "$focus_b" "$context" "$where_field" | progress_tee "$MODEL_B" >/dev/null; exit "${PIPESTATUS[0]}" ) &
   local pid_b=$!
 
-  emit_sub_stage() {
+  # Inner function names leak to the global namespace in bash — prefix with
+  # the outer function name so a grep for `emit_sub_stage` doesn't land here
+  # and so redefinitions from anywhere else can't collide.
+  _run_dual_review_emit_sub() {
     set_stage review-code "$(jq -cn \
         --arg a "$MODEL_A" --arg b "$MODEL_B" \
         --arg as "$1"      --arg bs "$2" \
@@ -141,20 +144,23 @@ run_dual_review() {
   }
 
   local fail=0 a_status="running" b_status="running"
-  emit_sub_stage "$a_status" "$b_status"
+  _run_dual_review_emit_sub "$a_status" "$b_status"
 
   # Poll: whenever a reviewer process exits, harvest its exit code and emit a
   # sub-stage update so the status command can show mid-flight progress.
+  # Correctness depends on bash auto-reaping backgrounded children in
+  # non-interactive script mode, so `kill -0 $pid` on an exited child returns
+  # ESRCH (we treat that as "exited") rather than succeeding against a zombie.
   while [[ "$a_status" == "running" || "$b_status" == "running" ]]; do
     if [[ "$a_status" == "running" ]] && ! kill -0 "$pid_a" 2>/dev/null; then
       wait "$pid_a" || { echo "review $MODEL_A failed" >&2; fail=1; }
       a_status="done"
-      emit_sub_stage "$a_status" "$b_status"
+      _run_dual_review_emit_sub "$a_status" "$b_status"
     fi
     if [[ "$b_status" == "running" ]] && ! kill -0 "$pid_b" 2>/dev/null; then
       wait "$pid_b" || { echo "review $MODEL_B failed" >&2; fail=1; }
       b_status="done"
-      emit_sub_stage "$a_status" "$b_status"
+      _run_dual_review_emit_sub "$a_status" "$b_status"
     fi
     [[ "$a_status" == "running" || "$b_status" == "running" ]] && sleep 2
   done
