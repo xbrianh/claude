@@ -161,10 +161,9 @@ mkdir -p "$STATE_DIR" || die "could not create state dir: $STATE_DIR"
 
 # Isolated workdir setup. For localimplement in a git repo we create a named
 # branch (bg/localimplement/<WF_ID>) so the commits the pipeline makes stay
-# reachable after finish.sh runs — the worktree itself is also preserved on
-# disk so the user can inspect .claude-workflow/<ts>/ artifacts. For
-# ghimplement we use --detach because the pipeline's stage 2b creates and
-# pushes its own issue-N-<slug> branch; a named bg/* ref would be a no-op.
+# reachable after finish.sh runs. For ghimplement we use --detach because the
+# pipeline's stage 2b creates and pushes its own issue-N-<slug> branch; a
+# named bg/* ref would be a no-op.
 BRANCH=""
 if [[ $IS_GIT -eq 1 ]]; then
     WORKDIR=$(mktemp -d -t "aibg-$KIND.XXXXXX") || die "mktemp failed"

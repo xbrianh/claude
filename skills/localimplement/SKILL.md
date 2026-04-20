@@ -1,6 +1,6 @@
 ---
 name: localimplement
-description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. All artifacts (plan, code reviews) land inside the isolated workdir's `.claude-workflow/<timestamp>/`; the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
+description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Plan and code reviews land in `~/.claude/workflows/<workflow-id>/artifacts/` alongside the run log (kept off the product branch); the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
 argument-hint: [-a <model>] [-b <model>] <instructions>
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
@@ -16,15 +16,17 @@ A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for 
 
 ## Where artifacts go
 
-The pipeline commits both code changes and `.claude-workflow/<timestamp>/` artifacts to the `bg/localimplement/<workflow-id>` branch in the user's main repo. Point the user at:
+Plan and code-review artifacts live outside the product branch — they are scaffolding, not product. Point the user at:
 
+- `~/.claude/workflows/<workflow-id>/artifacts/plan.md` — the implementation plan.
+- `~/.claude/workflows/<workflow-id>/artifacts/review-code-holistic-<model>.md` and `review-code-detail-<model>.md` — the two parallel code reviews.
 - `~/.claude/workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
 - `~/.claude/workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path, branch name.
-- `bg/localimplement/<workflow-id>` — durable branch with the code changes plus `.claude-workflow/<ts>/` (plan.md, review-code-*.md). From the main working tree: `git checkout bg/localimplement/<workflow-id>` to inspect, merge, or discard.
+- `bg/localimplement/<workflow-id>` — durable branch with **only** the code changes (no scaffolding). From the main working tree: `git checkout bg/localimplement/<workflow-id>` to inspect, merge, or discard. A squash-merge pulls in product code cleanly.
 
-Commits on the branch, in order: planning artifacts → implementation → "Address review feedback" (absent if reviewers found nothing) → code-review artifacts.
+Commits on the branch, in order: implementation → "Address review feedback" (absent if reviewers found nothing).
 
-On success the isolated worktree is removed — `state.json`'s `workdir` field will point to a nonexistent path, which is expected (the branch is the durable artifact). On failure the worktree is preserved for debugging at the path still recorded in `state.json`.
+On success the isolated worktree is removed — `state.json`'s `workdir` field will point to a nonexistent path, which is expected (the branch is the durable code record; the artifacts directory is the durable review record). On failure the worktree is preserved for debugging at the path still recorded in `state.json`.
 
 ## Arguments
 
