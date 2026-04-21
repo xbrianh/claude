@@ -9,7 +9,22 @@
       "Bash(mkdir -p ~/.local/state/claude-workflows/**)",
       "Bash(tee ~/.local/state/claude-workflows/**)",
       "Bash(cat > ~/.local/state/claude-workflows/**)",
-      "Bash(cat >> ~/.local/state/claude-workflows/**)"
+      "Bash(cat >> ~/.local/state/claude-workflows/**)",
+      "Write(/tmp/**)",
+      "Edit(/tmp/**)",
+      "Bash(tee /tmp/**)",
+      "Bash(cat > /tmp/**)",
+      "Bash(cat >> /tmp/**)",
+      "Write(/private/tmp/**)",
+      "Edit(/private/tmp/**)",
+      "Bash(tee /private/tmp/**)",
+      "Bash(cat > /private/tmp/**)",
+      "Bash(cat >> /private/tmp/**)",
+      "Write(/var/folders/**)",
+      "Edit(/var/folders/**)",
+      "Bash(tee /var/folders/**)",
+      "Bash(cat > /var/folders/**)",
+      "Bash(cat >> /var/folders/**)"
     ],
     "defaultMode": "auto"
   },
