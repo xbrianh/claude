@@ -11,6 +11,7 @@ import argparse
 import datetime
 import json
 import os
+import pathlib
 import re
 import signal
 import subprocess
@@ -244,6 +245,270 @@ def print_table(rows):
 
 
 # ---------------------------------------------------------------------------
+# Stop / rescue helpers
+# ---------------------------------------------------------------------------
+
+PIPELINE_STAGES = {
+    "localimplement": ["plan", "implement", "review-code", "address-code"],
+    "ghimplement": ["plan", "implement", "commit-pr", "request-copilot", "ghreview", "wait-copilot", "ghaddress"],
+}
+
+PIPELINE_SCRIPTS = {
+    "localimplement": "~/.claude/skills/localimplement/localimplement.sh",
+    "ghimplement": "~/.claude/skills/ghimplement/ghimplement.sh",
+}
+
+
+def resolve_workflow(target: str):
+    """Resolve id prefix to a single (wf_id, sf, wdir) or print error and return None."""
+    matches = []
+    for wf_id, sf, wdir in iter_state_files():
+        if target in wf_id:
+            matches.append((wf_id, sf, wdir))
+    if not matches:
+        print(f"no workflow matched: {target}")
+        return None
+    if len(matches) > 1:
+        print(f"ambiguous id '{target}' matched {len(matches)} workflows — use a longer prefix:")
+        for wf_id, _, _ in matches:
+            print(f"  {wf_id}")
+        return None
+    return matches[0]
+
+
+def do_stop(target: str) -> bool:
+    match = resolve_workflow(target)
+    if match is None:
+        return False
+
+    wf_id, sf, wdir = match
+    state = load_state(sf)
+    if not state:
+        print(f"error: could not read state for {wf_id}")
+        return False
+
+    live = liveness_of_state_file(sf, state)
+
+    if live == "dead:finished":
+        print(f"workflow {wf_id} already finished successfully — nothing to stop")
+        return False
+    if live == "dead:stopped":
+        print(f"workflow {wf_id} was already stopped")
+        return False
+    if live.startswith("dead:"):
+        print(f"workflow {wf_id} is already dead ({live})")
+        print("Use 'rescue' to diagnose and continue from the failed stage.")
+        return False
+
+    stage = state.get("stage") or "-"
+    pid = state.get("pid")
+
+    if pid is None:
+        print(f"error: no PID in state for {wf_id}")
+        return False
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        print(f"error: invalid PID {pid!r} in state for {wf_id}")
+        return False
+
+    # Derive process group and send SIGTERM to the whole group.
+    pgid = None
+    try:
+        ps_result = subprocess.run(
+            ["ps", "-o", "pgid=", "-p", str(pid)],
+            capture_output=True, text=True,
+        )
+        pgid_str = ps_result.stdout.strip()
+        if pgid_str:
+            pgid = int(pgid_str)
+    except Exception:
+        pass
+
+    if pgid:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            print(f"warning: could not signal process group {pgid}: {e}")
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            print(f"warning: could not signal pid {pid}: {e}")
+
+    # Poll for finish.sh to write the finished marker.
+    finished_path = os.path.join(wdir, "finished")
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        if os.path.isfile(finished_path):
+            break
+        time.sleep(0.5)
+
+    # If still absent, write it and patch state.json manually.
+    if not os.path.isfile(finished_path):
+        try:
+            pathlib.Path(finished_path).touch()
+        except OSError:
+            pass
+        now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        state["status"] = "stopped"
+        state["exit_code"] = 130
+        state["ended_at"] = now_iso
+        try:
+            with open(sf, "w", encoding="utf-8") as fh:
+                json.dump(state, fh, indent=2)
+        except OSError as e:
+            print(f"warning: could not patch state.json: {e}")
+
+    print(f"stopped workflow {wf_id} (stage: {stage})")
+    return True
+
+
+def build_rescue_prompt(state, wdir, log_tail, artifact_paths):
+    kind = state.get("kind", "localimplement")
+    stage = state.get("stage") or "unknown"
+    instructions = state.get("instructions") or "(not recorded)"
+    description = state.get("description") or ""
+    workdir = state.get("workdir") or wdir
+
+    stages = PIPELINE_STAGES.get(kind, [])
+    pipeline_script = PIPELINE_SCRIPTS.get(kind, f"~/.claude/skills/{kind}/{kind}.sh")
+
+    if stage in stages:
+        remaining = stages[stages.index(stage) + 1:]
+    else:
+        remaining = stages
+
+    artifacts_section = ""
+    if artifact_paths:
+        artifacts_section = (
+            "Existing artifacts already produced (read these for context before acting):\n"
+            + "\n".join(f"  - {p}" for p in artifact_paths)
+            + "\n\n"
+        )
+
+    timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    rescue_note_path = os.path.join(wdir, "artifacts", f"rescue-{timestamp}.md")
+    log_tail_safe = log_tail.replace("```", "` ` `")
+
+    return f"""You are rescuing a failed background workflow pipeline.
+
+## Original task
+
+Kind: {kind}
+Description: {description}
+Failed at stage: {stage}
+
+Instructions:
+{instructions}
+
+## Pipeline reference
+
+Pipeline script: {pipeline_script}
+Stage order for {kind}: {' → '.join(stages)}
+Remaining stages to complete (after failed stage): {' → '.join(remaining) or '(none — failed stage was the last one)'}
+
+{artifacts_section}## Failure log (last ~200 lines)
+
+```
+{log_tail_safe}
+```
+
+## What to do
+
+1. Diagnose the failure from the log above.
+2. Fix the underlying issue in this worktree (working directory: {workdir}).
+3. Re-run the failed stage ({stage}) and then complete the remaining stages: {', '.join(remaining) or '(none)'}.
+   For each stage, perform what the pipeline script would have done.
+   Commit your changes when the implement stage is complete.
+4. Write a brief rescue note to `{rescue_note_path}` describing what failed and what you fixed.
+
+Work directly in the current directory. Do not re-invoke the pipeline script.
+"""
+
+
+def do_rescue(target: str) -> bool:
+    match = resolve_workflow(target)
+    if match is None:
+        return False
+
+    wf_id, sf, wdir = match
+    state = load_state(sf)
+    if not state:
+        print(f"error: could not read state for {wf_id}")
+        return False
+
+    live = liveness_of_state_file(sf, state)
+
+    if live == "running":
+        print(f"workflow {wf_id} is still running — use 'stop' first, then rescue")
+        return False
+    if live == "dead:finished":
+        print(f"workflow {wf_id} finished successfully — nothing to rescue")
+        return False
+    if live.startswith("stalled:"):
+        print(f"workflow {wf_id} is stalled but its process is still alive — stopping it first...")
+        if not do_stop(target):
+            print("error: could not stop the stalled workflow — aborting rescue")
+            return False
+
+    workdir = state.get("workdir")
+    if not workdir:
+        print(f"error: no workdir recorded in state for {wf_id} — cannot rescue")
+        return False
+
+    stage = state.get("stage") or "unknown"
+
+    log_path = os.path.join(wdir, "log")
+    log_tail = ""
+    if os.path.isfile(log_path):
+        try:
+            with open(log_path, encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+                log_tail = "".join(lines[-200:])
+        except OSError:
+            log_tail = "(could not read log)"
+
+    artifacts_dir = os.path.join(wdir, "artifacts")
+    artifact_paths = []
+    if os.path.isdir(artifacts_dir):
+        for fname in sorted(os.listdir(artifacts_dir)):
+            fpath = os.path.join(artifacts_dir, fname)
+            if os.path.isfile(fpath):
+                artifact_paths.append(fpath)
+
+    prompt = build_rescue_prompt(state, wdir, log_tail, artifact_paths)
+
+    print(f"Rescuing workflow {wf_id} (stage: {stage}, liveness: {live})")
+    print(f"Working directory: {workdir}")
+    print("Running rescue agent inline — Ctrl-C to abort.")
+    print()
+
+    try:
+        result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
+        if result.returncode == 0:
+            print()
+            print(f"Rescue completed for {wf_id}.")
+            print("Run /localland if you are satisfied with the result.")
+            return True
+        else:
+            print()
+            print(f"Rescue agent exited with code {result.returncode}.")
+            print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
+            return False
+    except FileNotFoundError:
+        print("error: 'claude' CLI not found in PATH")
+        return False
+    except KeyboardInterrupt:
+        print("\nRescue aborted by user.")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Ack helpers
 # ---------------------------------------------------------------------------
 
@@ -467,6 +732,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog="workflows.py",
         description="On-demand status of background workflow pipelines.",
+        epilog=(
+            "Subcommands (positional, before flags):\n"
+            "  stop <id>     Send SIGTERM to a running workflow and wait for it to exit.\n"
+            "  rescue <id>   Diagnose and resume a dead or stalled workflow inline.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=True,
     )
     parser.add_argument(
@@ -539,7 +810,41 @@ def render_view(args, here_root):
         do_list(args, here_root=here_root)
 
 
+def _dispatch_subcommand():
+    """
+    Pre-process sys.argv for stop/rescue subcommands before argparse runs.
+    Returns (handled: bool, ok: bool). handled=False means not a subcommand.
+    """
+    raw = sys.argv[1:]
+    non_flags = [a for a in raw if not a.startswith("-")]
+    if not non_flags or non_flags[0] not in ("stop", "rescue"):
+        return False, False
+
+    subcommand = non_flags[0]
+    # Find the index of the subcommand in raw argv and take the next non-flag.
+    sc_idx = next(i for i, a in enumerate(raw) if a == subcommand)
+    trailing = [a for a in raw[sc_idx + 1:] if not a.startswith("-")]
+    if not trailing:
+        print(f"usage: workflows {subcommand} <id-prefix>")
+        sys.exit(1)
+
+    target = trailing[0]
+    if not os.path.isdir(STATE_ROOT):
+        print("No workflows have been launched on this machine.")
+        sys.exit(0)
+
+    if subcommand == "stop":
+        ok = do_stop(target)
+    else:
+        ok = do_rescue(target)
+    return True, ok
+
+
 def main():
+    handled, ok = _dispatch_subcommand()
+    if handled:
+        sys.exit(0 if ok else 1)
+
     args = parse_args()
 
     # --watch and positional drill-in are mutually exclusive.
