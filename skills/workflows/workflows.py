@@ -562,6 +562,14 @@ def do_ack_all():
         print("nothing to acknowledge.")
 
 
+def expected_branch(state: dict, wf_id: str):
+    """Return the durable branch name for a workflow, or None if there isn't one."""
+    kind = state.get("kind", "")
+    if kind == "localimplement":
+        return f"bg/localimplement/{wf_id}"
+    return None
+
+
 def do_rm(target: str) -> bool:
     match = resolve_workflow(target)
     if match is None:
@@ -583,8 +591,57 @@ def do_rm(target: str) -> bool:
         print(f"workflow {wf_id} is still live ({live}) — use 'stop' first, then rm")
         return False
 
-    shutil.rmtree(wdir)
-    print(f"removed workflow {wf_id} ({wdir})")
+    workdir = state.get("workdir") or ""
+
+    # Safety check: refuse if cwd is inside the worktree.
+    if workdir and os.path.exists(workdir):
+        cwd_real = os.path.realpath(os.getcwd())
+        worktree_real = os.path.realpath(workdir)
+        if cwd_real == worktree_real or cwd_real.startswith(worktree_real + os.sep):
+            print("you are inside this workflow's worktree — cd elsewhere before running rm")
+            return False
+
+    project_root = state.get("project_root") or ""
+    cwd_for_git = project_root if project_root and os.path.isdir(project_root) else None
+
+    # Remove the worktree.
+    if workdir and os.path.exists(workdir):
+        result = subprocess.run(
+            ["git", "worktree", "remove", "--force", workdir],
+            capture_output=True, text=True,
+            cwd=cwd_for_git,
+        )
+        if result.returncode == 0:
+            print(f"removed worktree {workdir}")
+        else:
+            # Fallback: plain directory removal (unregistered or already detached).
+            try:
+                shutil.rmtree(workdir)
+                print(f"removed worktree {workdir}")
+            except OSError as e:
+                print(f"warning: could not remove worktree {workdir}: {e}")
+
+    # Delete the durable branch.
+    branch = expected_branch(state, wf_id)
+    if branch:
+        result = subprocess.run(
+            ["git", "branch", "-D", branch],
+            capture_output=True, text=True,
+            cwd=cwd_for_git,
+        )
+        if result.returncode == 0:
+            print(f"deleted branch {branch}")
+        elif "not found" not in result.stderr:
+            print(f"warning: could not delete branch {branch}: {result.stderr.strip()}")
+
+    # Remove the state directory.
+    try:
+        shutil.rmtree(wdir)
+        print(f"removed state directory {wdir}")
+    except OSError as e:
+        print(f"warning: could not remove state directory {wdir}: {e}")
+
+    print(f"rm: workflow {wf_id} cleaned up")
     return True
 
 
@@ -783,7 +840,7 @@ def parse_args(argv=None):
             "Subcommands (positional, before flags):\n"
             "  stop <id>     Send SIGTERM to a running workflow and wait for it to exit.\n"
             "  rescue <id>   Diagnose and resume a dead or stalled workflow inline.\n"
-            "  rm <id>       Delete a dead/finished workflow's state directory.\n"
+            "  rm <id>       Delete a dead/finished workflow's state directory, worktree, and branch.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=True,
