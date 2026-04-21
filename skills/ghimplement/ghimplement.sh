@@ -128,13 +128,24 @@ ISSUE_URL=$(extract_gh_url "$PLAN_OUT" \
 ISSUE_NUM=$(basename "$ISSUE_URL")
 echo "    issue: $ISSUE_URL"
 
+PRAGMATIC_DEV_FILE="$SCRIPT_DIR/../agents/pragmatic-developer.md"
+[[ -f "$PRAGMATIC_DEV_FILE" ]] || die "missing agent file: $PRAGMATIC_DEV_FILE"
+# CORE_PRINCIPLES must not contain shell metacharacters (backticks, $(...), etc.)
+# — safe as long as pragmatic-developer.md contains only prose and markdown.
+CORE_PRINCIPLES=$(awk '/^## Core Principles/{found=1; next} found && /^## /{found=0} found{print}' "$PRAGMATIC_DEV_FILE")
+[[ -n "$CORE_PRINCIPLES" ]] || die "could not find '## Core Principles' section in pragmatic-developer.md"
+
 # Record state before 2a so we can verify the model actually did work.
 PRE_HEAD=$(git rev-parse HEAD)
 
 set_stage implement
 echo "==> [2a/6] implementing plan"
 IMPL_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" \
-  "Implement the plan in GitHub issue $ISSUE_URL. Read the issue body for the full plan, then make the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. The plan lives in the GitHub issue and reviews go to PR comments; the only changes in this working tree should be product code." \
+  "When writing code, follow these principles:
+
+${CORE_PRINCIPLES}
+
+Implement the plan in GitHub issue $ISSUE_URL. Read the issue body for the full plan, then make the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. The plan lives in the GitHub issue and reviews go to PR comments; the only changes in this working tree should be product code." \
   | progress_tee)
 IMPL_SESSION=$(extract_session_id "$IMPL_OUT")
 

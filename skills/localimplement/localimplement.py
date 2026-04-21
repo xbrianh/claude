@@ -560,6 +560,23 @@ def main(argv: List[str]) -> int:
     focus_b = lens_files["detail"].read_text(encoding="utf-8")
     focus_c = lens_files["scope"].read_text(encoding="utf-8")
 
+    pragmatic_dev_file = (SCRIPT_DIR / "../../agents/pragmatic-developer.md").resolve()
+    if not pragmatic_dev_file.exists():
+        die(f"missing agent file: {pragmatic_dev_file}")
+    agent_text = pragmatic_dev_file.read_text(encoding="utf-8")
+    in_section = False
+    section_lines: list[str] = []
+    for line in agent_text.splitlines(keepends=True):
+        if line.startswith("## Core Principles"):
+            in_section = True
+        elif in_section and line.startswith("## "):
+            break
+        elif in_section:
+            section_lines.append(line)
+    if not section_lines:
+        die("could not find '## Core Principles' section in pragmatic-developer.md")
+    core_principles = "".join(section_lines).rstrip()
+
     # ----- plan -----
     set_stage("plan")
     print(f"==> [1/4] planning (model: {args.plan}) -> {plan_file}", flush=True)
@@ -610,6 +627,7 @@ Task: {instructions}"""
             "notes-to-self. Do not push."
         )
     impl_prompt = (
+        f"When writing code, follow these principles:\n\n{core_principles}\n\n"
         f"Read the implementation plan at `{plan_file}` and implement every task "
         f"in it by editing code in this repo. When the implementation is "
         f"complete{impl_commit_instr}"
