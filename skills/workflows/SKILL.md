@@ -1,7 +1,7 @@
 ---
 name: workflows
 description: On-demand status of background pipelines launched by /localimplement and /ghimplement. Reads every ~/.local/state/claude-workflows/<id>/state.json on the machine and prints one line per active workflow with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed pipelines, or acknowledge (hide) finished ones. Not a project filter by default — set --here to restrict to the current repo.
-argument-hint: [--here] [--ack <id>] [--ack-all]
+argument-hint: [--here] [--ack <id>] [--ack-all] [--running] [--dead] [--stalled] [--kind local|gh] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
 allowed-tools: Bash(~/.claude/skills/workflows/workflows.sh:*)
 ---
 
@@ -30,6 +30,14 @@ The script produces a small table. Each row is one workflow:
 - `--here`: restrict to workflows whose project_root matches the current working directory's git toplevel.
 - `--ack <id>`: mark a finished/dead workflow as acknowledged (hides it from subsequent lists). Accepts full id or a substring.
 - `--ack-all`: acknowledge every dead/finished workflow.
+- `--running`: show only workflows whose liveness is `running`.
+- `--dead`: show only workflows whose liveness starts with `dead:`.
+- `--stalled`: show only workflows whose liveness starts with `stalled:`.
+- `--kind local|gh`: filter to a specific workflow kind (`local` from `/localimplement`, `gh` from `/ghimplement`). Composable with all other list flags.
+- `--since <duration>`: show only workflows started within the given duration of now. Duration format: integer followed by `s`, `m`, `h`, or `d` (e.g. `30m`, `2h`, `1d`). Composable with all other list flags.
+- `--recent [N]`: show recently-finished (`dead:*`) workflows started within N hours (default 24), including acknowledged ones. Mutually exclusive with `--running`/`--dead`/`--stalled`. Composes with `--here` and `--kind`.
+- `--watch [sec]`: refresh the view every `sec` seconds (default 2). Press Ctrl-C to stop cleanly. Mutually exclusive with the `<id-prefix>` positional argument. Composable with all listing flags and `--recent`.
+- `<id-prefix>`: substring to drill into a single workflow — prints every field from `state.json` plus computed liveness, age, and local start time. Mutually exclusive with `--watch`.
 
 ## Do not
 

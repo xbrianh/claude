@@ -1,274 +1,604 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 # /workflows — on-demand status of background workflow pipelines.
 # Reads every ${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<id>/state.json,
-# applies the shared liveness classifier, and prints one scannable line per workflow.
+# applies the shared liveness classifier inline, and prints one scannable line per
+# workflow.
 #
 # Exit 0 always: an unexpected error logs to stderr and falls through. Same
 # "never break a session" principle as the session-summary hook.
-set -u
 
-STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
+import argparse
+import datetime
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
 
-command -v jq >/dev/null 2>&1 || { echo "jq not found" >&2; exit 0; }
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Try script-relative first (running out of the repo worktree), then the
-# installed ~/.claude path. Keep going if neither exists — we'll degrade
-# to a minimal "can't classify" rendering.
-LIVENESS_LIB=""
-for p in \
-    "$SCRIPT_DIR/../_bg/liveness.sh" \
-    "$HOME/.claude/skills/_bg/liveness.sh"; do
-    if [[ -f "$p" ]]; then
-        LIVENESS_LIB="$p"
-        break
-    fi
-done
-if [[ -n "$LIVENESS_LIB" ]]; then
-    # shellcheck disable=SC1090
-    source "$LIVENESS_LIB"
-else
-    liveness_of_state_file() { echo "unknown"; }
-fi
+BG_STALL_SECS = int(os.environ.get("BG_STALL_SECS") or 2700)
 
-MODE="list"
-TARGET=""
-HERE_ONLY=0
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --all)     MODE="list"; shift ;;
-        --here)    HERE_ONLY=1; shift ;;
-        --ack)     MODE="ack"; TARGET="${2:-}"; shift; [[ -n "$TARGET" ]] && shift ;;
-        --ack-all) MODE="ack-all"; shift ;;
-        -h|--help)
-            cat <<'EOF'
-usage: workflows.sh [--here] [--ack <id>] [--ack-all]
+STATE_ROOT = os.path.join(
+    os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")),
+    "claude-workflows",
+)
 
-  (default)      List all active workflows on this machine.
-  --here         Only workflows whose project_root matches this repo.
-  --ack <id>     Acknowledge (hide) a dead/finished workflow. Accepts a
-                 full id or a unique substring; ambiguous substrings abort.
-  --ack-all      Acknowledge every dead/finished workflow (stalled ones
-                 are still alive and must be ack'd individually).
-EOF
-            exit 0 ;;
-        *) echo "unknown argument: $1" >&2; shift ;;
-    esac
-done
+FMT = "%-5s  %-47s  %-22s  %-28s  %-5s  %s"
 
-if [[ ! -d "$STATE_ROOT" ]]; then
-    echo "No workflows have been launched on this machine."
-    exit 0
-fi
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-# Resolve "here" once if needed.
-HERE_ROOT=""
-if [[ $HERE_ONLY -eq 1 ]]; then
-    HERE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-fi
+def iso_to_epoch(iso: str):
+    """Parse ISO-8601 string to a UTC epoch float. Returns None on failure."""
+    if not iso:
+        return None
+    try:
+        # Python < 3.11 does not accept 'Z' suffix directly.
+        dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return None
 
-display_id() {
-    # New-format workflow id: "<slug>-<rand6>". The slug is human-readable, so
-    # show the full id — it's what correlates with git branches and state
-    # directories, and it's what `--ack <id>` matches against.
-    # Old-format id: "<YYYYMMDD-HHMMSS>-<pid>-<rand6>". For those, the trailing
-    # rand6 is the only compact, unambiguous handle, so keep the historical
-    # compact rendering to avoid a wide column full of timestamp noise.
-    # PID segment is any positive number of digits: Linux/macOS PIDs can be
-    # 1 digit (early boot) or 7+ digits on systems with pid_max > 999999.
-    # Trailing segment accepts either [a-f0-9]{6} or the literal "xxxxxx"
-    # fallback that launch.sh emits when /dev/urandom is unreadable.
-    # The leading YYYYMMDD-HHMMSS anchor is distinctive enough that a
-    # slug-based id of the same shape is effectively impossible in practice
-    # (slugs derive from heading/description text, not pure digits).
-    local id="$1"
-    if [[ "$id" =~ ^[0-9]{8}-[0-9]{6}-[0-9]+-([a-f0-9]{6}|xxxxxx)$ ]]; then
-        echo "${id##*-}"
-    else
-        echo "$id"
-    fi
-}
 
-# Portable ISO-8601 → epoch. Tries GNU `date -d` first, then BSD `date -j -f`.
-iso_to_epoch() {
-    local iso="$1" e
-    [[ -n "$iso" ]] || { echo ""; return; }
-    e=$(date -u -d "$iso" +%s 2>/dev/null) || \
-        e=$(date -uj -f "%Y-%m-%dT%H:%M:%SZ" "$iso" +%s 2>/dev/null) || e=""
-    echo "$e"
-}
+def humanize_age(started_at: str) -> str:
+    """Return a human-readable age string like 5s, 12m, 3h, 2d."""
+    epoch = iso_to_epoch(started_at)
+    if epoch is None:
+        return "-"
+    diff = int(time.time() - epoch)
+    if diff < 60:
+        return f"{diff}s"
+    if diff < 3600:
+        return f"{diff // 60}m"
+    if diff < 86400:
+        return f"{diff // 3600}h"
+    return f"{diff // 86400}d"
 
-humanize_age() {
-    local started_at="$1" then now diff
-    then=$(iso_to_epoch "$started_at")
-    [[ -n "$then" ]] || { echo "-"; return; }
-    now=$(date -u +%s)
-    diff=$(( now - then ))
-    if   (( diff < 60    )); then echo "${diff}s"
-    elif (( diff < 3600  )); then echo "$((diff/60))m"
-    elif (( diff < 86400 )); then echo "$((diff/3600))h"
-    else                          echo "$((diff/86400))d"
-    fi
-}
 
-render_sub_stage() {
-    local sub="$1"
-    [[ -n "$sub" && "$sub" != "null" ]] || { echo ""; return; }
-    # Prefer JSON object rendering; if not valid JSON, echo the string as-is.
-    local rendered
-    rendered=$(jq -er 'to_entries | map("\(.key)=\(.value)") | join(",")' \
-               <<<"$sub" 2>/dev/null) && { echo "$rendered"; return; }
-    echo "$sub"
-}
+def display_id(wf_id: str) -> str:
+    """Compact old-format IDs to their trailing rand6 hex; pass new-format through."""
+    if re.match(r"^[0-9]{8}-[0-9]{6}-[0-9]+-([a-f0-9]{6}|xxxxxx)$", wf_id):
+        return wf_id.rsplit("-", 1)[-1]
+    return wf_id
 
-shopt -s nullglob
 
-# --ack / --ack-all branches.
-if [[ "$MODE" == "ack" ]]; then
-    if [[ -z "$TARGET" ]]; then
-        echo "usage: workflows.sh --ack <id>" >&2
-        exit 0
-    fi
-    # Collect substring matches first: if >1 workflow id contains TARGET, refuse
-    # to ack any of them so a common fragment (e.g. a date) can't silently
-    # dismiss a whole batch.
-    matches=()
-    for sf in "$STATE_ROOT"/*/state.json; do
-        d=$(dirname "$sf")
-        id=$(basename "$d")
-        [[ "$id" == *"$TARGET"* ]] || continue
-        matches+=("$sf")
-    done
-    if (( ${#matches[@]} == 0 )); then
-        echo "no workflow matched: $TARGET"
-        exit 0
-    fi
-    if (( ${#matches[@]} > 1 )); then
-        echo "ambiguous id '$TARGET' matched ${#matches[@]} workflows — use a longer prefix:"
-        for sf in "${matches[@]}"; do
-            echo "  $(basename "$(dirname "$sf")")"
-        done
-        exit 0
-    fi
-    sf="${matches[0]}"
-    d=$(dirname "$sf")
-    id=$(basename "$d")
-    # Only acknowledge workflows that are actually dead/finished. A stalled
-    # workflow is still running (just quiet), so hiding it could bury a
-    # slow-but-alive pipeline the user still cares about.
-    live=$(liveness_of_state_file "$sf")
-    case "$live" in
-        dead:*)
-            touch "$d/acknowledged" 2>/dev/null || true
-            echo "acknowledged $id ($live)"
-            ;;
-        *)
-            echo "skipping $id ($live is still running; only dead/finished workflows can be acknowledged)"
-            ;;
-    esac
-    exit 0
-fi
+def render_sub_stage(sub) -> str:
+    """Format sub_stage: dict → key=val,... ; string passthrough; empty → ''."""
+    if sub is None or sub == "":
+        return ""
+    if isinstance(sub, dict):
+        if not sub:
+            return ""
+        return ",".join(f"{k}={json.dumps(v)}" for k, v in sub.items())
+    return str(sub)
 
-if [[ "$MODE" == "ack-all" ]]; then
-    matched=0
-    for sf in "$STATE_ROOT"/*/state.json; do
-        d=$(dirname "$sf")
-        live=$(liveness_of_state_file "$sf")
-        # Dead-only: stalled workflows still have a live pid and may still
-        # produce output. Users can ack them individually once they crash.
-        if [[ "$live" == dead:* ]]; then
-            touch "$d/acknowledged" 2>/dev/null || true
-            echo "acknowledged $(basename "$d") ($live)"
-            matched=$((matched + 1))
-        fi
-    done
-    (( matched == 0 )) && echo "nothing to acknowledge."
-    exit 0
-fi
 
-# Default MODE=list. Collect rows for sorting by started_at.
-rows=()
-for sf in "$STATE_ROOT"/*/state.json; do
-    d=$(dirname "$sf")
-    [[ -f "$sf" ]] || continue
-    # Acknowledged entries are hidden from the list view.
-    [[ -f "$d/acknowledged" ]] && continue
+def liveness_of_state_file(sf: str, state=None) -> str:
+    """
+    Classify a workflow's liveness from its state.json path.
+    Returns one of: running, dead:<reason>, stalled:<reason>.
+    Replicates liveness.sh inline — no shell-out.
+    Pass an already-loaded state dict to avoid a second JSON parse.
+    """
+    if not os.path.isfile(sf):
+        return ""
+    wdir = os.path.dirname(sf)
+    if state is None:
+        try:
+            with open(sf, encoding="utf-8") as fh:
+                state = json.load(fh)
+        except Exception:
+            return ""
 
-    # One jq fork, fields joined by ASCII Unit Separator (\x1f). We can't use
-    # @tsv + IFS=$'\t' here: bash classifies tab as IFS-whitespace, so a
-    # sequence like "a\t\tb" collapses into just two fields, which silently
-    # loses empty-string columns (e.g. a workflow with no sub_stage). US is
-    # non-whitespace, so consecutive separators preserve empty fields.
-    IFS=$'\x1f' read -r id kind pr stage sub desc started_at < <(
-        jq -r '[.id,
-                .kind,
-                (.project_root // ""),
-                (.stage // ""),
-                (if (.sub_stage|type)=="object" then (.sub_stage|tojson)
-                 else (.sub_stage // "" | tostring) end),
-                (.description // .instructions // ""),
-                (.started_at // "")] | join("\u001f")' "$sf" 2>/dev/null || true
+    wf_status = state.get("status")
+    wf_pid = state.get("pid")
+    wf_exit_code = state.get("exit_code")
+
+    # Terminal: finish.sh ran → `finished` marker exists.
+    if os.path.isfile(os.path.join(wdir, "finished")):
+        if wf_exit_code is not None and wf_exit_code != 0 and wf_exit_code != "null":
+            return f"dead:exit {wf_exit_code}"
+        return "dead:finished"
+
+    if wf_status == "running":
+        # PID gone but no finish marker → crashed silently.
+        if wf_pid is not None and wf_pid != "null":
+            try:
+                os.kill(int(wf_pid), 0)
+            except (OSError, ValueError):
+                return f"dead:crashed (pid {wf_pid} gone)"
+
+        # Stall heuristic: log file hasn't moved in BG_STALL_SECS.
+        log_path = os.path.join(wdir, "log")
+        if os.path.isfile(log_path):
+            try:
+                mtime = os.path.getmtime(log_path)
+                age = int(time.time() - mtime)
+                if age > BG_STALL_SECS:
+                    return f"stalled:no log update {age // 60}m"
+            except OSError:
+                pass
+
+        return "running"
+
+    # Non-running status without a finished marker.
+    if wf_exit_code is not None and wf_exit_code != 0 and wf_exit_code != "null":
+        return f"dead:exit {wf_exit_code}"
+    return f"dead:{wf_status or 'unknown'}"
+
+
+# ---------------------------------------------------------------------------
+# State directory helpers
+# ---------------------------------------------------------------------------
+
+def iter_state_files():
+    """Yield (wf_id, state_file_path, wdir) for every workflow in STATE_ROOT."""
+    if not os.path.isdir(STATE_ROOT):
+        return
+    try:
+        entries = sorted(os.listdir(STATE_ROOT))
+    except OSError:
+        return
+    for name in entries:
+        wdir = os.path.join(STATE_ROOT, name)
+        sf = os.path.join(wdir, "state.json")
+        if os.path.isfile(sf):
+            yield name, sf, wdir
+
+
+def load_state(sf: str):
+    """Load state.json, returning a dict or None on failure."""
+    try:
+        with open(sf, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def kind_short(kind: str) -> str:
+    if kind == "localimplement":
+        return "local"
+    if kind == "ghimplement":
+        return "gh"
+    return kind or ""
+
+
+def git_toplevel() -> str:
+    """Return the git toplevel of cwd, or cwd itself if not in a repo."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return os.getcwd()
+
+
+# ---------------------------------------------------------------------------
+# Duration parser for --since
+# ---------------------------------------------------------------------------
+
+def parse_duration(s: str) -> int:
+    """Parse a duration string like 30s, 5m, 2h, 1d into seconds."""
+    m = re.fullmatch(r"(\d+)([smhd])", s.strip())
+    if not m:
+        raise ValueError(f"unrecognised duration: {s!r} (expected e.g. 30s, 5m, 2h, 1d)")
+    value, unit = int(m.group(1)), m.group(2)
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return value * multipliers[unit]
+
+
+# ---------------------------------------------------------------------------
+# Row building
+# ---------------------------------------------------------------------------
+
+def build_row(wf_id, sf, wdir, state, live):
+    """Return a dict of display fields for a workflow row."""
+    raw_kind = state.get("kind", "")
+    k = kind_short(raw_kind)
+    pr = state.get("project_root", "")
+    stage = state.get("stage") or "-"
+    sub = state.get("sub_stage")
+    desc = state.get("description") or state.get("instructions") or ""
+    started_at = state.get("started_at") or ""
+
+    sub_disp = render_sub_stage(sub)
+    stage_disp = stage
+    if sub_disp:
+        stage_disp = f"{stage} ({sub_disp})"
+
+    stage_trim = stage_disp[:22]
+    live_trim = live[:28]
+    desc_trim = desc[:60]
+    age = humanize_age(started_at)
+    sid = display_id(wf_id)
+
+    return {
+        "started_at": started_at,
+        "kind": k,
+        "sid": sid,
+        "stage": stage_trim,
+        "live": live_trim,
+        "live_full": live,
+        "age": age,
+        "desc": desc_trim,
+        "project_root": pr,
+        "wf_id": wf_id,
+        "wdir": wdir,
+        "state": state,
+    }
+
+
+def print_table(rows):
+    """Print header + rows using the fixed format string."""
+    print(FMT % ("KIND", "ID", "STAGE", "LIVENESS", "AGE", "DESCRIPTION"))
+    for r in rows:
+        print(FMT % (r["kind"], r["sid"], r["stage"], r["live"], r["age"], r["desc"]))
+
+
+# ---------------------------------------------------------------------------
+# Ack helpers
+# ---------------------------------------------------------------------------
+
+def do_ack(target: str):
+    """Acknowledge a single workflow by substring match."""
+    matches = []
+    for wf_id, sf, wdir in iter_state_files():
+        if target in wf_id:
+            matches.append((wf_id, sf, wdir))
+
+    if not matches:
+        print(f"no workflow matched: {target}")
+        return
+    if len(matches) > 1:
+        print(f"ambiguous id '{target}' matched {len(matches)} workflows — use a longer prefix:")
+        for wf_id, _, _ in matches:
+            print(f"  {wf_id}")
+        return
+
+    wf_id, sf, wdir = matches[0]
+    live = liveness_of_state_file(sf)
+    if live.startswith("dead:"):
+        try:
+            with open(os.path.join(wdir, "acknowledged"), "a"):
+                pass
+        except OSError:
+            pass
+        print(f"acknowledged {wf_id} ({live})")
+    else:
+        print(
+            f"skipping {wf_id} ({live} is still running; "
+            "only dead/finished workflows can be acknowledged)"
+        )
+
+
+def do_ack_all():
+    """Acknowledge every dead workflow."""
+    matched = 0
+    for wf_id, sf, wdir in iter_state_files():
+        live = liveness_of_state_file(sf)
+        if live.startswith("dead:"):
+            try:
+                with open(os.path.join(wdir, "acknowledged"), "a"):
+                    pass
+            except OSError:
+                pass
+            print(f"acknowledged {wf_id} ({live})")
+            matched += 1
+    if matched == 0:
+        print("nothing to acknowledge.")
+
+
+# ---------------------------------------------------------------------------
+# List / drill-in view
+# ---------------------------------------------------------------------------
+
+def collect_rows(here_root=None, kind_filter=None, since_secs=None,
+                 liveness_filter=None, include_acknowledged=False):
+    """
+    Collect and return a list of row dicts, sorted by started_at ascending.
+
+    here_root         — if set, restrict to workflows with this project_root.
+    kind_filter       — if set ('local' or 'gh'), restrict to that kind.
+    since_secs        — if set, restrict to workflows started within this many seconds.
+    liveness_filter   — if set, a set of prefixes ('running', 'dead', 'stalled').
+    include_acknowledged — if True, include acknowledged workflows (for drill-in / --recent).
+    """
+    now = time.time()
+    rows = []
+    for wf_id, sf, wdir in iter_state_files():
+        if not include_acknowledged and os.path.isfile(os.path.join(wdir, "acknowledged")):
+            continue
+
+        state = load_state(sf)
+        if not state:
+            continue
+        wf_id_from_state = state.get("id") or wf_id
+        if not wf_id_from_state:
+            continue
+
+        live = liveness_of_state_file(sf, state)
+
+        # --here filter
+        if here_root is not None:
+            if state.get("project_root", "") != here_root:
+                continue
+
+        # --kind filter
+        if kind_filter is not None:
+            if kind_short(state.get("kind", "")) != kind_filter:
+                continue
+
+        # --since filter
+        if since_secs is not None:
+            started_at = state.get("started_at") or ""
+            epoch = iso_to_epoch(started_at)
+            if epoch is None or (now - epoch) > since_secs:
+                continue
+
+        # liveness filter
+        if liveness_filter:
+            matched_live = any(live.startswith(prefix) for prefix in liveness_filter)
+            if not matched_live:
+                continue
+
+        row = build_row(wf_id_from_state, sf, wdir, state, live)
+        rows.append(row)
+
+    rows.sort(key=lambda r: r["started_at"])
+    return rows
+
+
+def do_list(args, here_root=None):
+    """Default list view."""
+    liveness_filter = None
+    if args.running or args.dead or args.stalled:
+        liveness_filter = set()
+        if args.running:
+            liveness_filter.add("running")
+        if args.dead:
+            liveness_filter.add("dead:")
+        if args.stalled:
+            liveness_filter.add("stalled:")
+
+    since_secs = None
+    if args.since:
+        try:
+            since_secs = parse_duration(args.since)
+        except ValueError as e:
+            print(f"error: {e}")
+            return
+
+    rows = collect_rows(
+        here_root=here_root,
+        kind_filter=args.kind,
+        since_secs=since_secs,
+        liveness_filter=liveness_filter,
+        include_acknowledged=False,
     )
-    [[ -n "$id" ]] || continue
 
-    if [[ $HERE_ONLY -eq 1 && -n "$HERE_ROOT" && "$pr" != "$HERE_ROOT" ]]; then
-        continue
-    fi
+    if not rows:
+        if here_root is not None:
+            print(f"No active workflows for project: {here_root}")
+        else:
+            print("No active workflows on this machine.")
+        return
 
-    live=$(liveness_of_state_file "$sf")
-    stage_disp="${stage:--}"
-    sub_disp=$(render_sub_stage "$sub")
-    [[ -n "$sub_disp" ]] && stage_disp+=" ($sub_disp)"
+    print_table(rows)
 
-    # Trim noisy long fields. Widths rebalanced to budget ~47 chars for the
-    # now-human-readable ID column without wrapping on a typical ~180-col
-    # terminal. Liveness keeps its historical width because truncating it
-    # hides death reasons (e.g. "dead:crashed (pid NNNNN gone)"); stage is
-    # shaved instead.
-    stage_trim="${stage_disp:0:22}"
-    live_trim="${live:0:28}"
-    desc_trim="${desc:0:60}"
-    age=$(humanize_age "$started_at")
-    case "$kind" in
-        localimplement) kind_short=local ;;
-        ghimplement)    kind_short=gh    ;;
-        *)              kind_short="$kind" ;;
-    esac
-    sid=$(display_id "$id")
 
-    # started_at sorts lexicographically because the format is ISO-8601-Z.
-    # Use US (\x1f) as the in-band separator: same rationale as the jq
-    # pipeline above — empty columns (e.g. missing stage) must survive `read`.
-    rows+=("${started_at}"$'\x1f'"${kind_short}"$'\x1f'"${sid}"$'\x1f'"${stage_trim}"$'\x1f'"${live_trim}"$'\x1f'"${age}"$'\x1f'"${desc_trim}")
-done
+def do_recent(args, here_root=None):
+    """--recent [N]: show dead workflows started within N hours."""
+    n_hours = args.recent
+    since_secs = n_hours * 3600
 
-if (( ${#rows[@]} == 0 )); then
-    if [[ $HERE_ONLY -eq 1 ]]; then
-        echo "No active workflows for project: $HERE_ROOT"
-    else
-        echo "No active workflows on this machine."
-    fi
-    exit 0
-fi
+    rows = collect_rows(
+        here_root=here_root,
+        kind_filter=args.kind,
+        since_secs=since_secs,
+        liveness_filter={"dead:"},
+        include_acknowledged=True,
+    )
 
-# Sort ascending by started_at (oldest first). Read back into an array.
-sorted_rows=()
-while IFS= read -r line; do
-    sorted_rows+=("$line")
-done < <(printf '%s\n' "${rows[@]}" | sort)
+    if not rows:
+        if here_root is not None:
+            print(f"No recent workflows for project: {here_root}")
+        else:
+            print("No recent workflows on this machine.")
+        return
 
-# Header + rows. Column widths are fixed; columns will overflow gracefully if
-# content exceeds them (no truncation beyond the pre-trim above). The ID
-# column is sized for the new "<slug>-<rand6>" format (slug up to 40 chars
-# + 1 hyphen + 6 hex = 47). Old-format ids render as their 6-hex tail via
-# display_id() and fit in the same column.
-FMT='%-5s  %-47s  %-22s  %-28s  %-5s  %s\n'
-# shellcheck disable=SC2059
-printf "$FMT" "KIND" "ID" "STAGE" "LIVENESS" "AGE" "DESCRIPTION"
-for row in "${sorted_rows[@]}"; do
-    IFS=$'\x1f' read -r _ kind sid stage live age desc <<<"$row"
-    # shellcheck disable=SC2059
-    printf "$FMT" "$kind" "$sid" "$stage" "$live" "$age" "$desc"
-done
+    print_table(rows)
 
-exit 0
+
+def do_drill_in(target: str):
+    """Print every field of a uniquely-matched workflow in a labeled block."""
+    matches = []
+    for wf_id, sf, wdir in iter_state_files():
+        if target in wf_id:
+            matches.append((wf_id, sf, wdir))
+
+    if not matches:
+        print(f"no workflow matched: {target}")
+        return
+    if len(matches) > 1:
+        print(f"ambiguous id '{target}' matched {len(matches)} workflows — use a longer prefix:")
+        for wf_id, _, _ in matches:
+            print(f"  {wf_id}")
+        return
+
+    wf_id, sf, wdir = matches[0]
+    state = load_state(sf)
+    if not state:
+        print(f"error: could not read state for {wf_id}")
+        return
+
+    live = liveness_of_state_file(sf)
+    started_at = state.get("started_at") or ""
+    age = humanize_age(started_at)
+
+    # Convert started_at to local time for display.
+    local_start = ""
+    epoch = iso_to_epoch(started_at)
+    if epoch is not None:
+        local_start = datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+    print(f"workflow: {wf_id}")
+    print(f"  liveness : {live}")
+    print(f"  age      : {age}")
+    if local_start:
+        print(f"  started  : {local_start}")
+    print("  state.json fields:")
+    for key, val in state.items():
+        print(f"    {key}: {json.dumps(val)}")
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="workflows.sh",
+        description="On-demand status of background workflow pipelines.",
+        add_help=True,
+    )
+    parser.add_argument(
+        "--here", action="store_true",
+        help="Only workflows whose project_root matches this repo.",
+    )
+    parser.add_argument(
+        "--ack", metavar="TARGET",
+        help="Acknowledge (hide) a dead/finished workflow. Accepts full id or substring.",
+    )
+    parser.add_argument(
+        "--ack-all", action="store_true", dest="ack_all",
+        help="Acknowledge every dead/finished workflow.",
+    )
+    parser.add_argument(
+        "--running", action="store_true",
+        help="Show only running workflows.",
+    )
+    parser.add_argument(
+        "--dead", action="store_true",
+        help="Show only dead workflows.",
+    )
+    parser.add_argument(
+        "--stalled", action="store_true",
+        help="Show only stalled workflows.",
+    )
+    parser.add_argument(
+        "--kind", choices=["local", "gh"], metavar="local|gh",
+        help="Filter to a specific workflow kind.",
+    )
+    parser.add_argument(
+        "--since", metavar="DURATION",
+        help="Show only workflows started within DURATION (e.g. 30s, 5m, 2h, 1d).",
+    )
+    parser.add_argument(
+        "--recent", nargs="?", const=24, type=int, metavar="N",
+        help="Show recently-finished workflows started within N hours (default 24). "
+             "Mutually exclusive with --running/--dead/--stalled.",
+    )
+    parser.add_argument(
+        "--watch", nargs="?", const=2, type=int, metavar="SEC",
+        help="Refresh the view every SEC seconds (default 2). "
+             "Mutually exclusive with positional id argument.",
+    )
+    parser.add_argument(
+        "id_prefix", nargs="?", metavar="id-prefix",
+        help="Substring to drill into a single workflow. Mutually exclusive with --watch.",
+    )
+    parser.add_argument(
+        "--all", action="store_true", help=argparse.SUPPRESS,
+    )
+    return parser.parse_args(argv)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def render_view(args, here_root):
+    """Render whichever view the flags request. Used by both normal and --watch path."""
+    has_liveness_filter = args.running or args.dead or args.stalled
+
+    if args.recent is not None and has_liveness_filter:
+        print("error: --recent cannot be combined with --running/--dead/--stalled", file=sys.stderr)
+        return
+
+    if args.recent is not None:
+        do_recent(args, here_root=here_root)
+    else:
+        do_list(args, here_root=here_root)
+
+
+def main():
+    args = parse_args()
+
+    # --watch and positional drill-in are mutually exclusive.
+    if args.watch is not None and args.id_prefix is not None:
+        print("error: --watch cannot be combined with a positional id argument")
+        sys.exit(0)
+
+    # Early exit if state root doesn't exist.
+    if not os.path.isdir(STATE_ROOT):
+        print("No workflows have been launched on this machine.")
+        sys.exit(0)
+
+    # Ack modes don't need here_root.
+    if args.ack:
+        do_ack(args.ack)
+        sys.exit(0)
+
+    if args.ack_all:
+        do_ack_all()
+        sys.exit(0)
+
+    # Resolve --here once.
+    here_root = None
+    if args.here:
+        here_root = git_toplevel()
+
+    # Drill-in positional argument (no --watch).
+    if args.id_prefix is not None:
+        do_drill_in(args.id_prefix)
+        sys.exit(0)
+
+    # --watch loop.
+    if args.watch is not None:
+        interval = max(1, args.watch)
+        stop = [False]
+
+        def _handle_sigint(signum, frame):
+            stop[0] = True
+
+        signal.signal(signal.SIGINT, _handle_sigint)
+
+        while not stop[0]:
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.flush()
+            render_view(args, here_root)
+            for _ in range(interval * 10):
+                if stop[0]:
+                    break
+                time.sleep(0.1)
+        sys.exit(0)
+
+    # Default: single render.
+    render_view(args, here_root)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print(f"workflows: unexpected error: {exc}", file=sys.stderr)
+        sys.exit(0)
