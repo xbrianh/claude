@@ -33,7 +33,7 @@ Both `/ghgremlin` and `/localgremlin` accept `--design` as a first flag to invok
 
 ## Additional skills
 
-- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (diagnose and resume inline), `rm <id>` (delete state directory, worktree directory, and branch), `close <id>` (mark finished gremlin closed), `land <id>` (squash-land a local gremlin or merge a gh PR and clean up). Use `--here` to filter to the current repo.
+- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (Phase A: inline `claude -p` diagnoses and fixes the failure in the foreground; Phase B: `launch.sh --resume` relaunches the pipeline at the failed stage in the background under the original gremlin id, with a `(rescue)` liveness marker), `rm <id>` (delete state directory, worktree directory, and branch), `close <id>` (mark finished gremlin closed), `land <id>` (squash-land a local gremlin or merge a gh PR and clean up). Use `--here` to filter to the current repo.
 
 ## Not tracked
 

@@ -40,6 +40,7 @@ slugify() {
 }
 
 DESCRIPTION=""
+RESUME_GR_ID=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --description)
@@ -47,11 +48,130 @@ while [[ $# -gt 0 ]]; do
             DESCRIPTION="$2"
             shift 2
             ;;
+        --resume)
+            [[ $# -ge 2 ]] || usage
+            RESUME_GR_ID="$2"
+            shift 2
+            ;;
         --) shift; break ;;
         -*) die "unknown flag: $1" ;;
         *)  break ;;
     esac
 done
+
+# --resume branch: reuse an existing gremlin's state dir, worktree, and branch,
+# and relaunch the pipeline with --resume-from <failed-stage> so it skips
+# already-completed stages. Phase B of /gremlins rescue drives this path.
+if [[ -n "$RESUME_GR_ID" ]]; then
+    [[ $# -eq 0 ]] || die "--resume does not take additional arguments"
+    [[ -z "$DESCRIPTION" ]] || die "--resume is incompatible with --description"
+
+    command -v jq     >/dev/null 2>&1 || die "jq not found"
+    command -v claude >/dev/null 2>&1 || die "claude CLI not found"
+
+    STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins"
+    STATE_DIR="$STATE_ROOT/$RESUME_GR_ID"
+    STATE_FILE="$STATE_DIR/state.json"
+    [[ -d "$STATE_DIR" && -f "$STATE_FILE" ]] || die "no state at $STATE_DIR"
+
+    RESUME_KIND=$(jq   -r '.kind         // ""' "$STATE_FILE")
+    WORKDIR=$(jq       -r '.workdir      // ""' "$STATE_FILE")
+    BRANCH=$(jq        -r '.branch       // ""' "$STATE_FILE")
+    STAGE=$(jq         -r '.stage        // ""' "$STATE_FILE")
+    INSTRUCTIONS=$(jq  -r '.instructions // ""' "$STATE_FILE")
+    STATUS=$(jq        -r '.status       // ""' "$STATE_FILE")
+    OLD_PID=$(jq       -r '.pid          // ""' "$STATE_FILE")
+    EXIT_CODE=$(jq     -r '.exit_code    // ""' "$STATE_FILE")
+
+    case "$RESUME_KIND" in
+        ghgremlin|localgremlin) ;;
+        *) die "invalid kind in state.json: $RESUME_KIND" ;;
+    esac
+    [[ -n "$WORKDIR" && -d "$WORKDIR" ]] || die "worktree missing: $WORKDIR"
+    if [[ "$RESUME_KIND" == "ghgremlin" ]]; then
+        command -v gh >/dev/null 2>&1 || die "gh CLI not found"
+    fi
+
+    # Defense-in-depth: refuse resuming an already-live or already-successful
+    # gremlin. /gremlins rescue enforces the same checks before invoking us.
+    if [[ "$STATUS" == "running" && -n "$OLD_PID" && "$OLD_PID" != "null" ]] \
+       && kill -0 "$OLD_PID" 2>/dev/null; then
+        die "gremlin $RESUME_GR_ID is still running (pid $OLD_PID) — stop it first"
+    fi
+    if [[ -f "$STATE_DIR/finished" && "$EXIT_CODE" == "0" ]]; then
+        die "gremlin $RESUME_GR_ID finished successfully — nothing to resume"
+    fi
+
+    PIPELINE=""
+    for ext in py sh; do
+        candidate="$HOME/.claude/skills/$RESUME_KIND/$RESUME_KIND.$ext"
+        if [[ -x "$candidate" ]]; then PIPELINE="$candidate"; break; fi
+    done
+    [[ -n "$PIPELINE" ]] || die "no executable gremlin at $HOME/.claude/skills/$RESUME_KIND/$RESUME_KIND.{py,sh}"
+
+    # If the gremlin crashed before set-stage was called, .stage is literally
+    # "starting" (the initial state.json value). Rewind to the first stage.
+    if [[ -z "$STAGE" || "$STAGE" == "starting" ]]; then
+        STAGE="plan"
+    fi
+
+    # Clear terminal markers so the resumed gremlin gets announced fresh on
+    # the next session-summary firing, and so liveness doesn't classify us
+    # as dead:finished while we're running again.
+    rm -f "$STATE_DIR/finished" "$STATE_DIR/summarized" 2>/dev/null || true
+
+    NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    STATE_TMP="$STATE_FILE.tmp"
+    jq --arg    status             "running" \
+       --arg    stage              "$STAGE" \
+       --arg    rescued_at         "$NOW_ISO" \
+       --arg    resumed_from_stage "$STAGE" \
+       '.status = $status
+        | .stage = $stage
+        | del(.exit_code)
+        | del(.ended_at)
+        | .rescue_count = ((.rescue_count // 0) + 1)
+        | .rescued_at = $rescued_at
+        | .resumed_from_stage = $resumed_from_stage
+        | .pid = null' \
+       "$STATE_FILE" > "$STATE_TMP" || die "failed to patch state.json"
+    mv "$STATE_TMP" "$STATE_FILE"
+
+    # Append a resume header to the existing log so failure context is
+    # preserved above the new run's output.
+    {
+        printf '\n--- resume at %s (from stage: %s) ---\n' "$NOW_ISO" "$STAGE"
+    } >> "$STATE_DIR/log" 2>/dev/null || true
+
+    export PIPELINE
+    export GR_ID="$RESUME_GR_ID"
+
+    (
+        cd "$WORKDIR"
+        nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+            -- --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
+        echo $! >"$STATE_DIR/pid"
+    )
+
+    PID=$(cat "$STATE_DIR/pid" 2>/dev/null || true)
+    if [[ -n "$PID" ]]; then
+        jq --argjson pid "$PID" '.pid = $pid' "$STATE_FILE" > "$STATE_TMP" \
+            && mv "$STATE_TMP" "$STATE_FILE"
+    fi
+
+    cat <<EOF
+resumed gremlin: $RESUME_GR_ID
+from stage:      $STAGE
+workdir:         $WORKDIR
+log:             $STATE_DIR/log
+state file:      $STATE_FILE
+pid:             ${PID:-unknown}
+
+The $RESUME_KIND gremlin is running in the background. You'll be notified in a
+future Claude session for this project when it finishes.
+EOF
+    exit 0
+fi
 
 [[ $# -ge 1 ]] || usage
 KIND="$1"
