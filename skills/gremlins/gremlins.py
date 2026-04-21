@@ -493,6 +493,26 @@ def do_rescue(target: str) -> bool:
     try:
         result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
         if result.returncode == 0:
+            # Marker first, then state.json — mirrors finish.sh. The marker is
+            # the authoritative signal for `dead:finished`; if the state write
+            # fails after the marker exists, liveness still classifies correctly.
+            try:
+                pathlib.Path(os.path.join(wdir, "finished")).touch()
+            except OSError as e:
+                print(f"warning: could not touch finished marker: {e}")
+            now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            state["status"] = "done"
+            state["exit_code"] = 0
+            state["ended_at"] = now_iso
+            try:
+                with open(sf, "w", encoding="utf-8") as fh:
+                    json.dump(state, fh, indent=2)
+            except OSError as e:
+                print(f"warning: could not patch state.json: {e}")
+            # Unlike finish.sh, we do not `git worktree remove` here — the
+            # rescued worktree is preserved so the operator can inspect before
+            # running `/gremlins land`, which has its own cleanup path.
+
             print()
             print(f"Rescue completed for {gr_id}.")
             print(f"Run /gremlins land {gr_id} if you are satisfied with the result.")
