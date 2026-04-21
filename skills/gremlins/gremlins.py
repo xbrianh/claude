@@ -216,8 +216,21 @@ def build_row(gr_id, sf, wdir, state, live):
     if sub_disp:
         stage_disp = f"{stage} ({sub_disp})"
 
+    rescue_count = state.get("rescue_count") or 0
+    try:
+        rescue_count = int(rescue_count)
+    except (ValueError, TypeError):
+        rescue_count = 0
+
     stage_trim = stage_disp[:22]
+    # Rescue marker is appended AFTER the 28-char trim so it stays visible even
+    # when the raw liveness reason is long; the row may overflow the column in
+    # those cases but the (rescue) indicator is more important than alignment.
     live_trim = live[:28]
+    if rescue_count == 1:
+        live_trim = f"{live_trim} (rescue)"
+    elif rescue_count > 1:
+        live_trim = f"{live_trim} (rescue x{rescue_count})"
     desc_trim = desc[:60]
     age = humanize_age(started_at)
     sid = display_id(gr_id)
@@ -380,11 +393,6 @@ def build_rescue_prompt(state, wdir, log_tail, artifact_paths):
     stages = GREMLIN_STAGES.get(kind, [])
     gremlin_script = GREMLIN_SCRIPTS.get(kind, f"~/.claude/skills/{kind}/{kind}.sh")
 
-    if stage in stages:
-        remaining = stages[stages.index(stage) + 1:]
-    else:
-        remaining = stages
-
     artifacts_section = ""
     if artifact_paths:
         artifacts_section = (
@@ -397,7 +405,7 @@ def build_rescue_prompt(state, wdir, log_tail, artifact_paths):
     rescue_note_path = os.path.join(wdir, "artifacts", f"rescue-{timestamp}.md")
     log_tail_safe = log_tail.replace("```", "` ` `")
 
-    return f"""You are rescuing a failed background gremlin.
+    return f"""You are diagnosing a failed background gremlin so it can resume.
 
 ## Original task
 
@@ -412,7 +420,6 @@ Instructions:
 
 Gremlin script: {gremlin_script}
 Stage order for {kind}: {' → '.join(stages)}
-Remaining stages to complete (after failed stage): {' → '.join(remaining) or '(none — failed stage was the last one)'}
 
 {artifacts_section}## Failure log (last ~200 lines)
 
@@ -423,11 +430,9 @@ Remaining stages to complete (after failed stage): {' → '.join(remaining) or '
 ## What to do
 
 1. Diagnose the failure from the log above.
-2. Fix the underlying issue in this worktree (working directory: {workdir}).
-3. Re-run the failed stage ({stage}) and then complete the remaining stages: {', '.join(remaining) or '(none)'}.
-   For each stage, perform what the pipeline script would have done.
-   Commit your changes when the implement stage is complete.
-4. Write a brief rescue note to `{rescue_note_path}` describing what failed and what you fixed.
+2. Fix the underlying issue in this worktree (working directory: {workdir}) so that rerunning the failed stage ({stage}) will succeed. This may mean editing code, cleaning up partial state, or staging missing artifacts.
+3. Write a brief rescue note to `{rescue_note_path}` describing what failed and what you fixed.
+4. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically. If you conclude the failure is unsalvageable, say so clearly in your final message and in the rescue note, and leave the worktree untouched; the operator watches Phase A output and will Ctrl-C / decline resume if they agree.
 
 Work directly in the current directory. Do not re-invoke the gremlin script.
 """
@@ -487,47 +492,54 @@ def do_rescue(target: str) -> bool:
 
     print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
     print(f"Working directory: {workdir}")
-    print("Running rescue agent inline — Ctrl-C to abort.")
+    print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
     print()
 
     try:
         result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
-        if result.returncode == 0:
-            # Marker first, then state.json — mirrors finish.sh. The marker is
-            # the authoritative signal for `dead:finished`; if the state write
-            # fails after the marker exists, liveness still classifies correctly.
-            try:
-                pathlib.Path(os.path.join(wdir, "finished")).touch()
-            except OSError as e:
-                print(f"warning: could not touch finished marker: {e}")
-            now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            state["status"] = "done"
-            state["exit_code"] = 0
-            state["ended_at"] = now_iso
-            try:
-                with open(sf, "w", encoding="utf-8") as fh:
-                    json.dump(state, fh, indent=2)
-            except OSError as e:
-                print(f"warning: could not patch state.json: {e}")
-            # Unlike finish.sh, we do not `git worktree remove` here — the
-            # rescued worktree is preserved so the operator can inspect before
-            # running `/gremlins land`, which has its own cleanup path.
-
-            print()
-            print(f"Rescue completed for {gr_id}.")
-            print(f"Run /gremlins land {gr_id} if you are satisfied with the result.")
-            return True
-        else:
-            print()
-            print(f"Rescue agent exited with code {result.returncode}.")
-            print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
-            return False
     except FileNotFoundError:
         print("error: 'claude' CLI not found in PATH")
         return False
     except KeyboardInterrupt:
-        print("\nRescue aborted by user.")
+        print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
         return False
+
+    if result.returncode != 0:
+        print()
+        print(f"Rescue agent exited with code {result.returncode}.")
+        print("Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
+        print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
+        return False
+
+    # Phase B: hand off to launch.sh --resume so the remaining stages run in the
+    # background under the same GR_ID. launch.sh patches state.json, clears the
+    # finished/summarized markers, and relaunches the pipeline with
+    # --resume-from <stage>.
+    launcher = os.path.expanduser("~/.claude/skills/_bg/launch.sh")
+    # os.access(..., X_OK) rather than os.path.isfile: an un-chmod'd launcher
+    # (e.g. after a manual edit) would pass the existence check and then fail
+    # with a PermissionError inside subprocess.run, which isn't caught by the
+    # FileNotFoundError handler below.
+    if not os.access(launcher, os.X_OK):
+        print(f"error: launcher not executable at {launcher} — cannot resume in background")
+        return False
+
+    print()
+    print(f"Phase B: resuming gremlin {gr_id} in the background...")
+    try:
+        resume_result = subprocess.run(
+            [launcher, "--resume", gr_id],
+            cwd=workdir,
+        )
+    except FileNotFoundError:
+        print(f"error: could not exec launcher at {launcher}")
+        return False
+
+    if resume_result.returncode != 0:
+        print(f"error: background resume failed (launcher exit {resume_result.returncode})")
+        return False
+
+    return True
 
 
 def do_close(target: str) -> bool:
