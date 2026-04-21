@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared helper: classify a background workflow's liveness from its state.json.
-# Sourced by session-summary.sh (hook) and workflows.sh (on-demand status).
+# Sourced by session-summary.sh (hook) and workflows.py (on-demand status).
 # Keeping one source of truth means the two never disagree on whether a
 # workflow is running, dead, or stalled.
 #
@@ -34,7 +34,7 @@ liveness_of_state_file() {
     local wdir wf_status wf_pid wf_exit_code
     wdir=$(dirname "$sf")
 
-    # US (\x1f) separator, matching session-summary.sh and workflows.sh: bash
+    # US (\x1f) separator, matching session-summary.sh and workflows.py: bash
     # treats tab as IFS-whitespace and collapses consecutive empty columns, so
     # a future 4th field could silently lose a value. US is non-whitespace.
     IFS=$'\x1f' read -r wf_status wf_pid wf_exit_code < <(

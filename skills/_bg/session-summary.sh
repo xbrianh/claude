@@ -13,7 +13,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
 [[ -d "$STATE_ROOT" ]] || exit 0
 
-# Source the shared liveness classifier. Both this hook and `workflows.sh`
+# Source the shared liveness classifier. Both this hook and `workflows.py`
 # should agree on "is this pipeline still alive". Degrade gracefully if the
 # library isn't installed yet — hooks must never break a session.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

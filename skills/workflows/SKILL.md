@@ -2,7 +2,7 @@
 name: workflows
 description: On-demand status of background pipelines launched by /localimplement and /ghimplement. Reads every ~/.local/state/claude-workflows/<id>/state.json on the machine and prints one line per active workflow with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed pipelines, or acknowledge (hide) finished ones. Not a project filter by default — set --here to restrict to the current repo.
 argument-hint: [--here] [--ack <id>] [--ack-all] [--running] [--dead] [--stalled] [--kind local|gh] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
-allowed-tools: Bash(~/.claude/skills/workflows/workflows.sh:*)
+allowed-tools: Bash(~/.claude/skills/workflows/workflows.py:*)
 ---
 
 You are running the `workflows` status command. It reads the persistent state under `~/.local/state/claude-workflows/` (or `$XDG_STATE_HOME/claude-workflows/` if `XDG_STATE_HOME` is set) and summarizes every active (not-yet-acknowledged) background workflow across every project on this machine.
@@ -12,7 +12,7 @@ You are running the `workflows` status command. It reads the persistent state un
 Run the script and print its output verbatim to the user — do not paraphrase or summarize:
 
 ```
-~/.claude/skills/workflows/workflows.sh $ARGUMENTS
+~/.claude/skills/workflows/workflows.py $ARGUMENTS
 ```
 
 The script produces a small table. Each row is one workflow:

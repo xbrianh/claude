@@ -465,7 +465,7 @@ def do_drill_in(target: str):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        prog="workflows.sh",
+        prog="workflows.py",
         description="On-demand status of background workflow pipelines.",
         add_help=True,
     )
