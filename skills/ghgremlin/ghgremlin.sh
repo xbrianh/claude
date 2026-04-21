@@ -179,6 +179,14 @@ echo "    PR: $PR_URL"
 SCOPE_ISSUE_BODY="$ISSUE_BODY"
 SCOPE_PR_DIFF=$(gh pr diff "$PR_URL")
 
+# Persist PR URL into state.json so /gremlins land can find it.
+if [[ -n "${GR_ID:-}" ]]; then
+  _sf="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins/$GR_ID/state.json"
+  _tmp="${_sf}.tmp.$$"
+  jq --arg url "$PR_URL" '.pr_url = $url' "$_sf" > "$_tmp" && mv "$_tmp" "$_sf" \
+    || echo "warning: could not persist pr_url to state.json for $GR_ID" >&2
+fi
+
 set_stage request-copilot
 echo "==> [3/6] requesting Copilot review"
 gh pr edit "$PR_NUM" --repo "$REPO" --add-reviewer copilot-pull-request-reviewer >/dev/null \

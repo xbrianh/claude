@@ -16,8 +16,7 @@ skills/
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
   localgremlin/       # /localgremlin: full local gremlin via skills/_bg/launch.sh; sibling lens-*.md files hold reviewer prompts
-  localland/          # /localland: squash-merge a finished /localgremlin branch onto the current branch; --gh creates a PR instead
-  gremlins/           # /gremlins: on-demand status of background gremlins; supports stop/rescue/rm subcommands
+  gremlins/           # /gremlins: on-demand status of background gremlins; supports stop/rescue/rm/close/land subcommands
 agents/
   pragmatic-developer.md
 commands/             # slash commands (created on first sync; no files tracked yet)
@@ -52,8 +51,7 @@ The skills cluster into a GitHub-issue-driven gremlin and a local gremlin (`/loc
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
 - [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Accepts `--design` to invoke `/design` first.
-- [`/localland`](skills/localland/SKILL.md) — squash-merge a finished `/localgremlin` gremlin branch onto the current branch as a single well-messaged commit, then delete the gremlin branch and state directory. `--gh` pushes the result as a new PR against `main` instead.
-- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>`, `rescue <id>`, `rm <id>`, `close <id>`. Flags include `--here`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
+- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>`, `rescue <id>`, `rm <id>`, `close <id>`, `land <id>` (squash-land a local gremlin or merge a gh PR). Flags include `--here`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
 
 `skills/ghgremlin/ghgremlin.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 

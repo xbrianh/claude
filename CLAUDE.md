@@ -29,8 +29,7 @@ Both `/ghgremlin` and `/localgremlin` accept `--design` as a first flag to invok
 
 ## Additional skills
 
-- [`/localland`](skills/localland/SKILL.md) — squash-merge a finished `/localgremlin` branch onto the current branch as a single well-messaged commit, then delete the gremlin branch and state directory. `--gh` pushes the result as a new PR against `main` instead of committing locally.
-- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (diagnose and resume inline), `rm <id>` (delete state directory, worktree directory, and branch). Use `--here` to filter to the current repo.
+- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (diagnose and resume inline), `rm <id>` (delete state directory, worktree directory, and branch), `land <id>` (squash-land a local gremlin or merge a gh PR and clean up). Use `--here` to filter to the current repo.
 
 ## Not tracked
 

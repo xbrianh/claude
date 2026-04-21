@@ -495,7 +495,7 @@ def do_rescue(target: str) -> bool:
         if result.returncode == 0:
             print()
             print(f"Rescue completed for {gr_id}.")
-            print("Run /localland if you are satisfied with the result.")
+            print(f"Run /gremlins land {gr_id} if you are satisfied with the result.")
             return True
         else:
             print()
@@ -550,6 +550,101 @@ def expected_branch(state: dict, gr_id: str):
     return None
 
 
+def _fast_forward_main(cwd):
+    """Attempt to fast-forward local main to origin/main after a gh PR merge."""
+    r = subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, cwd=cwd)
+    if r.returncode != 0:
+        print(f"warning: git fetch origin failed: {r.stderr.strip()}")
+        return
+    r = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    current = r.stdout.strip()
+    if current == "main":
+        r = subprocess.run(
+            ["git", "merge", "--ff-only", "origin/main"],
+            capture_output=True, text=True, cwd=cwd,
+        )
+        if r.returncode != 0:
+            print("warning: local main has diverged from origin/main — fast-forward not possible; update manually")
+        else:
+            print("Fast-forwarded local main.")
+    else:
+        r = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", "main", "origin/main"],
+            capture_output=True, cwd=cwd,
+        )
+        if r.returncode == 0:
+            r = subprocess.run(
+                ["git", "branch", "-f", "main", "origin/main"],
+                capture_output=True, text=True, cwd=cwd,
+            )
+            if r.returncode == 0:
+                print("Fast-forwarded local main.")
+            else:
+                print(f"warning: could not fast-forward main: {r.stderr.strip()}")
+        else:
+            print("warning: local main has diverged from origin/main — update manually")
+
+
+def _cleanup_gremlin(gr_id: str, sf: str, wdir: str, state: dict, cwd, *,
+                     delete_branch: bool = True, check_cwd: bool = False) -> bool:
+    """Touch closed marker, remove worktree, optionally delete branch, remove state dir.
+
+    Returns False only when check_cwd=True and we're inside the worktree; all
+    other steps are best-effort (warnings printed on failure).
+    """
+    workdir = state.get("workdir") or ""
+
+    if check_cwd and workdir and os.path.exists(workdir):
+        cwd_real = os.path.realpath(os.getcwd())
+        worktree_real = os.path.realpath(workdir)
+        if cwd_real == worktree_real or cwd_real.startswith(worktree_real + os.sep):
+            print("you are inside this gremlin's worktree — cd elsewhere before running this command")
+            return False
+
+    # Mark closed before cleanup so a partial failure doesn't allow a re-run.
+    try:
+        pathlib.Path(os.path.join(wdir, "closed")).touch()
+    except OSError:
+        pass
+
+    if workdir and os.path.exists(workdir):
+        r = subprocess.run(
+            ["git", "worktree", "remove", "--force", workdir],
+            capture_output=True, cwd=cwd,
+        )
+        if r.returncode == 0:
+            print(f"removed worktree {workdir}")
+        else:
+            try:
+                shutil.rmtree(workdir)
+                print(f"removed worktree {workdir}")
+            except OSError as e:
+                print(f"warning: could not remove worktree {workdir}: {e}")
+
+    if delete_branch:
+        branch = state.get("branch") or expected_branch(state, gr_id)
+        if branch:
+            r = subprocess.run(
+                ["git", "branch", "-D", branch],
+                capture_output=True, text=True, cwd=cwd,
+            )
+            if r.returncode == 0:
+                print(f"deleted branch {branch}")
+            elif "not found" not in r.stderr:
+                print(f"warning: could not delete branch {branch}: {r.stderr.strip()}")
+
+    try:
+        shutil.rmtree(wdir)
+        print(f"removed state directory {wdir}")
+    except OSError as e:
+        print(f"warning: could not remove state directory {wdir}: {e}")
+
+    return True
+
+
 def do_rm(target: str) -> bool:
     match = resolve_gremlin(target)
     if match is None:
@@ -571,58 +666,280 @@ def do_rm(target: str) -> bool:
         print(f"gremlin {gr_id} is still live ({live}) — use 'stop' first, then rm")
         return False
 
-    workdir = state.get("workdir") or ""
+    project_root = state.get("project_root") or ""
+    cwd_for_git = project_root if project_root and os.path.isdir(project_root) else None
 
-    # Safety check: refuse if cwd is inside the worktree.
+    if not _cleanup_gremlin(gr_id, sf, wdir, state, cwd_for_git,
+                             delete_branch=True, check_cwd=True):
+        return False
+
+    print(f"rm: gremlin {gr_id} cleaned up")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Land helpers
+# ---------------------------------------------------------------------------
+
+def _compose_commit_message(plan_path: str):
+    """Return (subject, body) distilled from plan.md's ## Context and ## Tasks."""
+    try:
+        with open(plan_path, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return "Land gremlin branch", ""
+
+    m = re.search(r'^##\s+Context\s*\n(.*?)(?=^##\s|\Z)', content, re.MULTILINE | re.DOTALL)
+    if not m:
+        return "Land gremlin branch", ""
+
+    para = next(
+        (p.strip() for p in re.split(r'\n\n+', m.group(1).strip()) if p.strip()),
+        "",
+    )
+    if not para:
+        return "Land gremlin branch", ""
+
+    subject = " ".join(para.split())
+    subject = re.sub(
+        r'^(?:implement\s+|add\s+support\s+for\s+|this\s+change\s+|this\s+pr\s+)',
+        "", subject, flags=re.IGNORECASE,
+    )
+    if subject:
+        subject = subject[0].upper() + subject[1:]
+
+    if len(subject) > 72:
+        cut = subject[:72]
+        boundary = cut.rfind(" ")
+        subject = cut[:boundary] if boundary > 0 else cut
+
+    tm = re.search(r'^##\s+Tasks\s*\n(.*?)(?=^##\s|\Z)', content, re.MULTILINE | re.DOTALL)
+    body = ""
+    if tm:
+        done = re.findall(r'^\s*-\s+\[x\]\s+(.+)', tm.group(1), re.MULTILINE | re.IGNORECASE)
+        if done:
+            body = "\n".join(f"- {t.strip()}" for t in done[:8])
+
+    return subject, body
+
+
+def _land_local(gr_id: str, sf: str, wdir: str, state: dict) -> bool:
+    """Squash-land a local gremlin branch onto the current branch."""
+    setup_kind = state.get("setup_kind", "")
+    if setup_kind != "worktree-branch":
+        print(f"gremlin {gr_id} has setup_kind={setup_kind!r} — only worktree-branch gremlins support local landing")
+        return False
+
+    branch = state.get("branch", "")
+    if not branch:
+        print(f"error: no branch field in state for {gr_id}")
+        return False
+
+    project_root = state.get("project_root") or ""
+    cwd = project_root if project_root and os.path.isdir(project_root) else None
+
+    # Safety: refuse if cwd is inside the gremlin's worktree.
+    workdir = state.get("workdir") or ""
     if workdir and os.path.exists(workdir):
         cwd_real = os.path.realpath(os.getcwd())
         worktree_real = os.path.realpath(workdir)
         if cwd_real == worktree_real or cwd_real.startswith(worktree_real + os.sep):
-            print("you are inside this gremlin's worktree — cd elsewhere before running rm")
+            print("you are inside this gremlin's worktree — cd elsewhere before landing")
             return False
 
-    project_root = state.get("project_root") or ""
-    cwd_for_git = project_root if project_root and os.path.isdir(project_root) else None
+    r = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        capture_output=True, cwd=cwd,
+    )
+    if r.returncode != 0:
+        print(f"error: gremlin branch {branch!r} does not exist — may already have been cleaned up")
+        return False
 
-    # Remove the worktree.
-    if workdir and os.path.exists(workdir):
-        result = subprocess.run(
-            ["git", "worktree", "remove", "--force", workdir],
-            capture_output=True, text=True,
-            cwd=cwd_for_git,
-        )
-        if result.returncode == 0:
-            print(f"removed worktree {workdir}")
-        else:
-            # Fallback: plain directory removal (unregistered or already detached).
-            try:
-                shutil.rmtree(workdir)
-                print(f"removed worktree {workdir}")
-            except OSError as e:
-                print(f"warning: could not remove worktree {workdir}: {e}")
+    r = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if r.returncode != 0:
+        print("error: could not determine current branch")
+        return False
+    current = r.stdout.strip()
+    if current == branch:
+        print(f"error: currently on gremlin branch {branch!r} — switch to your target branch first")
+        return False
 
-    # Delete the durable branch.
-    branch = expected_branch(state, gr_id)
-    if branch:
-        result = subprocess.run(
-            ["git", "branch", "-D", branch],
-            capture_output=True, text=True,
-            cwd=cwd_for_git,
-        )
-        if result.returncode == 0:
-            print(f"deleted branch {branch}")
-        elif "not found" not in result.stderr:
-            print(f"warning: could not delete branch {branch}: {result.stderr.strip()}")
+    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=cwd)
+    if r.stdout.strip():
+        print("error: working tree is not clean — commit or stash changes before landing")
+        return False
 
-    # Remove the state directory.
-    try:
-        shutil.rmtree(wdir)
-        print(f"removed state directory {wdir}")
-    except OSError as e:
-        print(f"warning: could not remove state directory {wdir}: {e}")
+    r = subprocess.run(["git", "merge-base", "HEAD", branch], capture_output=True, text=True, cwd=cwd)
+    if r.returncode != 0:
+        print(f"error: could not compute merge-base between HEAD and {branch!r}")
+        return False
+    merge_base = r.stdout.strip()
 
-    print(f"rm: gremlin {gr_id} cleaned up")
+    r = subprocess.run(
+        ["git", "rev-list", "--count", f"{merge_base}..{branch}"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if int(r.stdout.strip() or "0") < 1:
+        print(f"error: gremlin branch {branch!r} has no commits above merge-base")
+        return False
+
+    plan_path = os.path.join(wdir, "artifacts", "plan.md")
+    if not os.path.isfile(plan_path):
+        print(f"error: plan.md not found at {plan_path}")
+        return False
+
+    print(f"Squash-merging {branch} onto {current}...")
+    r = subprocess.run(["git", "merge", "--squash", branch], cwd=cwd)
+    if r.returncode != 0:
+        reset_ok = subprocess.run(
+            ["git", "reset", "--hard", "HEAD"], capture_output=True, cwd=cwd,
+        ).returncode == 0
+        subprocess.run(["git", "clean", "-fd"], capture_output=True, cwd=cwd)
+        suffix = "working tree restored" if reset_ok else "manual cleanup may be needed"
+        print(f"error: git merge --squash failed — {suffix}")
+        return False
+
+    subject, body = _compose_commit_message(plan_path)
+    commit_msg = f"{subject}\n\n{body}" if body else subject
+
+    r = subprocess.run(["git", "commit", "-m", commit_msg], cwd=cwd)
+    if r.returncode != 0:
+        print("error: git commit failed")
+        return False
+
+    print(f"Landed {branch} onto {current}.")
+    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=True)
     return True
+
+
+def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -> bool:
+    """Merge a gh gremlin's PR and clean up."""
+    pr_url = state.get("pr_url", "")
+    if not pr_url:
+        print(f"error: no pr_url in state for {gr_id}")
+        print("This gremlin may have been launched before pr_url tracking was added to ghgremlin.sh.")
+        return False
+
+    project_root = state.get("project_root") or ""
+    cwd = project_root if project_root and os.path.isdir(project_root) else None
+
+    print(f"Checking PR: {pr_url}")
+    r = subprocess.run(
+        ["gh", "pr", "view", pr_url, "--json",
+         "state,mergeable,reviewDecision,statusCheckRollup"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print(f"error: could not fetch PR info: {r.stderr.strip()}")
+        return False
+
+    try:
+        pr_info = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print("error: could not parse PR info response")
+        return False
+
+    pr_state = pr_info.get("state", "")
+    mergeable = pr_info.get("mergeable", "")
+    review_decision = pr_info.get("reviewDecision") or ""
+    checks = pr_info.get("statusCheckRollup") or []
+
+    if pr_state == "MERGED":
+        print("PR already merged.")
+        _fast_forward_main(cwd)
+        _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False)
+        return True
+
+    if pr_state == "CLOSED":
+        if force:
+            print("PR is closed (not merged) — force flag set, cleaning up without merge.")
+            _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False)
+            return True
+        print(f"PR is closed (not merged): {pr_url}")
+        print("Use --force to skip merge and clean up only.")
+        return False
+
+    # PR is OPEN — check for blockers before merging
+    if review_decision == "CHANGES_REQUESTED":
+        print("error: PR has changes requested — address review comments before landing")
+        print(f"  {pr_url}")
+        return False
+
+    failed = [c for c in checks if c.get("conclusion") in
+              ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED")]
+    if failed:
+        names = ", ".join(c.get("name", "?") for c in failed[:3])
+        print(f"error: PR has failed CI checks: {names}")
+        print(f"  {pr_url}")
+        return False
+
+    if mergeable == "UNKNOWN":
+        print("GitHub is computing mergeability — waiting 5s and retrying...")
+        time.sleep(5)
+        r = subprocess.run(
+            ["gh", "pr", "view", pr_url, "--json", "mergeable"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            try:
+                mergeable = json.loads(r.stdout).get("mergeable", "UNKNOWN")
+            except json.JSONDecodeError:
+                pass
+
+    if mergeable == "CONFLICTING":
+        print("error: PR has merge conflicts — resolve them before landing")
+        print(f"  {pr_url}")
+        return False
+
+    print(f"Merging: {pr_url}")
+    r = subprocess.run(
+        ["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        if "already merged" in r.stdout.lower() or "already merged" in r.stderr.lower():
+            print("PR was already merged.")
+        else:
+            print(f"error: gh pr merge failed: {r.stderr.strip() or r.stdout.strip()}")
+            return False
+    else:
+        print("PR merged.")
+
+    _fast_forward_main(cwd)
+    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False)
+    return True
+
+
+def do_land(target: str, force: bool = False) -> bool:
+    match = resolve_gremlin(target)
+    if match is None:
+        return False
+
+    gr_id, sf, wdir = match
+    state = load_state(sf)
+    if not state:
+        print(f"error: could not read state for {gr_id}")
+        return False
+
+    live = liveness_of_state_file(sf, state)
+    if live == "running" or live.startswith("stalled:"):
+        print(f"gremlin {gr_id} is still live ({live}) — use 'stop' first, then land")
+        return False
+
+    kind = state.get("kind", "")
+    if kind == "localgremlin":
+        if live != "dead:finished":
+            print(f"gremlin {gr_id} is not finished (liveness: {live})")
+            return False
+        return _land_local(gr_id, sf, wdir, state)
+    elif kind == "ghgremlin":
+        return _land_gh(gr_id, sf, wdir, state, force=force)
+    else:
+        print(f"error: unknown gremlin kind {kind!r} — cannot land")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -827,6 +1144,8 @@ def parse_args(argv=None):
             "  rescue <id>   Diagnose and resume a dead or stalled gremlin inline.\n"
             "  rm <id>       Delete a dead/finished gremlin's state directory, worktree, and branch.\n"
             "  close <id>    Mark a dead/finished gremlin as closed (hides it from the default view).\n"
+            "  land <id>     Land a finished gremlin: squash-merge locally (local) or merge the PR (gh).\n"
+            "                Pass --force to skip merge and clean up a closed gh PR.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=True,
@@ -898,7 +1217,7 @@ def _dispatch_subcommand():
     """
     raw = sys.argv[1:]
     non_flags = [a for a in raw if not a.startswith("-")]
-    if not non_flags or non_flags[0] not in ("stop", "rescue", "rm", "close"):
+    if not non_flags or non_flags[0] not in ("stop", "rescue", "rm", "close", "land"):
         return False, False
 
     subcommand = non_flags[0]
@@ -920,6 +1239,9 @@ def _dispatch_subcommand():
         ok = do_rm(target)
     elif subcommand == "close":
         ok = do_close(target)
+    elif subcommand == "land":
+        force = "--force" in raw
+        ok = do_land(target, force=force)
     else:
         ok = do_rescue(target)
     return True, ok
