@@ -743,6 +743,128 @@ def _compose_commit_message(plan_path: str):
     return subject, body
 
 
+def _gather_commit_inputs(wdir: str, state: dict, branch: str, merge_base: str, cwd) -> dict:
+    """Collect all available context for commit message synthesis."""
+    inputs = {"description": state.get("description", "")}
+
+    _CONTENT_CAP = 4000  # chars; enough context without blowing up the prompt
+
+    plan_path = os.path.join(wdir, "artifacts", "plan.md")
+    try:
+        with open(plan_path, encoding="utf-8") as fh:
+            inputs["plan"] = fh.read(_CONTENT_CAP)
+    except OSError:
+        inputs["plan"] = ""
+
+    spec_path = os.path.join(wdir, "artifacts", "spec.md")
+    try:
+        with open(spec_path, encoding="utf-8") as fh:
+            inputs["spec"] = fh.read(_CONTENT_CAP)
+    except OSError:
+        inputs["spec"] = ""
+
+    # best-effort; empty string on failure is fine — model will use other inputs
+    r = subprocess.run(
+        ["git", "log", "--oneline", f"{merge_base}..{branch}"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    log_lines = r.stdout.strip().splitlines()[:100]
+    inputs["git_log"] = "\n".join(log_lines)
+
+    r = subprocess.run(
+        ["git", "diff", "--stat", f"{merge_base}..{branch}"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    stat_lines = r.stdout.strip().splitlines()[:100]
+    inputs["git_stat"] = "\n".join(stat_lines)
+
+    return inputs
+
+
+def _parse_commit_output(text: str) -> tuple:
+    """Split model output into (subject, body) on the first blank line."""
+    lines = text.strip().splitlines()
+    subject = ""
+    body_lines = []
+    past_blank = False
+    for line in lines:
+        if not subject:
+            subject = line.strip()
+        elif not past_blank and line.strip() == "":
+            past_blank = True
+        elif past_blank or line.strip():
+            past_blank = True
+            body_lines.append(line)
+
+    if len(subject) > 72:
+        cut = subject[:72]
+        boundary = cut.rfind(" ")
+        subject = cut[:boundary] if boundary > 0 else cut
+
+    body = "\n".join(body_lines).strip()
+    return subject, body
+
+
+def _synthesize_commit_message_ai(inputs: dict) -> tuple:
+    """Call `claude -p` to produce a commit message from gathered inputs."""
+    parts = []
+
+    if inputs.get("description"):
+        parts.append(f"Gremlin description: {inputs['description']}")
+
+    if inputs.get("git_log"):
+        parts.append(f"Branch commits (git log --oneline):\n{inputs['git_log']}")
+
+    if inputs.get("git_stat"):
+        parts.append(f"Changed files (git diff --stat):\n{inputs['git_stat']}")
+
+    if inputs.get("spec"):
+        parts.append(f"Spec:\n{inputs['spec']}")
+
+    if inputs.get("plan"):
+        parts.append(f"Implementation plan:\n{inputs['plan']}")
+
+    context_block = "\n\n".join(parts)
+
+    prompt = f"""Write a git commit message for the following change.
+
+{context_block}
+
+Requirements:
+- First line: subject in imperative mood, ≤72 characters, describing WHAT was done (not why)
+- Blank line
+- 2–3 sentence summary of what the change does
+
+Output only the commit message text, nothing else."""
+
+    result = subprocess.run(
+        ["claude", "-p", "--output-format", "text"],
+        input=prompt, capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"claude -p exited {result.returncode}: {result.stderr.strip()}")
+
+    subject, body = _parse_commit_output(result.stdout)
+    if not subject:
+        raise RuntimeError("claude -p returned empty subject")
+    return subject, body
+
+
+def _build_commit_message(wdir: str, state: dict, branch: str, merge_base: str, cwd) -> tuple:
+    """Return (subject, body) using AI synthesis with fallback to regex extraction."""
+    inputs = _gather_commit_inputs(wdir, state, branch, merge_base, cwd)
+
+    print("Composing commit message...", flush=True)
+    try:
+        subject, body = _synthesize_commit_message_ai(inputs)
+        print(f"Commit message: {subject}", flush=True)
+        return subject, body
+    except Exception as exc:
+        print(f"warning: AI commit message synthesis failed ({exc}); falling back to plan.md extraction", flush=True)
+        plan_path = os.path.join(wdir, "artifacts", "plan.md")
+        return _compose_commit_message(plan_path)
+
+
 def _land_local(gr_id: str, sf: str, wdir: str, state: dict) -> bool:
     """Squash-land a local gremlin branch onto the current branch."""
     setup_kind = state.get("setup_kind", "")
@@ -822,7 +944,7 @@ def _land_local(gr_id: str, sf: str, wdir: str, state: dict) -> bool:
         print(f"error: git merge --squash failed — {suffix}")
         return False
 
-    subject, body = _compose_commit_message(plan_path)
+    subject, body = _build_commit_message(wdir, state, branch, merge_base, cwd)
     commit_msg = f"{subject}\n\n{body}" if body else subject
 
     r = subprocess.run(["git", "commit", "-m", commit_msg], cwd=cwd)
