@@ -131,7 +131,7 @@ echo "    issue: $ISSUE_URL"
 ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json body --jq .body)
 [[ -n "$ISSUE_BODY" ]] || die "issue $ISSUE_NUM has an empty body"
 
-PRAGMATIC_DEV_FILE="$SCRIPT_DIR/../agents/pragmatic-developer.md"
+PRAGMATIC_DEV_FILE="$SCRIPT_DIR/../../agents/pragmatic-developer.md"
 [[ -f "$PRAGMATIC_DEV_FILE" ]] || die "missing agent file: $PRAGMATIC_DEV_FILE"
 # CORE_PRINCIPLES must not contain shell metacharacters (backticks, $(...), etc.)
 # — safe as long as pragmatic-developer.md contains only prose and markdown.
