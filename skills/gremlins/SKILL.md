@@ -26,9 +26,9 @@ The script produces a small table. Each row is one gremlin:
 
 ## Flags
 
-- (default, no flag): list all active gremlins on this machine.
+- (default, no flag): list every unclosed gremlin on this machine — running, stalled, and dead-but-not-closed — with running ones first.
 - `--here`: restrict to gremlins whose project_root matches the current working directory's git toplevel.
-- `--running`: show only gremlins whose liveness is `running`.
+- `--running`: show only gremlins whose liveness is `running` (the pre-change default view, for when you only want live processes).
 - `--dead`: show only gremlins whose liveness starts with `dead:`.
 - `--stalled`: show only gremlins whose liveness starts with `stalled:`.
 - `--kind local|gh`: filter to a specific gremlin kind (`local` from `/localgremlin`, `gh` from `/ghgremlin`). Composable with all other list flags.

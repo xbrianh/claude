@@ -77,7 +77,7 @@ fi
 NL=$'\n'
 RUNNING_BLOCK=""
 FINISHED_BLOCK=""
-NEWLY_CLOSED_DIRS=()
+NEWLY_SUMMARIZED_DIRS=()
 FINISHED_COUNT=0
 
 shopt -s nullglob
@@ -99,15 +99,16 @@ for sf in "$STATE_ROOT"/*/state.json; do
     [[ "$pr" == "$PROJECT_ROOT" ]] || continue
 
     finished_marker="$wdir/finished"
+    summarized_marker="$wdir/summarized"
     closed_marker="$wdir/closed"
     log="$wdir/log"
 
     desc_suffix=""
     [[ -n "$description" ]] && desc_suffix=" — _${description}_"
 
-    if [[ -f "$finished_marker" && ! -f "$closed_marker" ]]; then
+    if [[ -f "$finished_marker" && ! -f "$summarized_marker" && ! -f "$closed_marker" ]]; then
         FINISHED_BLOCK+="- \`$id\` ($kind): **$status**${exit_code:+ (exit $exit_code)}${desc_suffix} — log: $log${NL}"
-        NEWLY_CLOSED_DIRS+=("$wdir")
+        NEWLY_SUMMARIZED_DIRS+=("$wdir")
         FINISHED_COUNT=$((FINISHED_COUNT + 1))
         continue
     fi
@@ -174,8 +175,8 @@ if [[ -n "$SUMMARY" ]]; then
         --arg ctx   "$FULL" \
         '{hookSpecificOutput: {hookEventName: $event, additionalContext: $ctx}}'
 
-    for d in "${NEWLY_CLOSED_DIRS[@]}"; do
-        touch "$d/closed" 2>/dev/null || true
+    for d in "${NEWLY_SUMMARIZED_DIRS[@]}"; do
+        touch "$d/summarized" 2>/dev/null || true
     done
 fi
 
