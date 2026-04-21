@@ -493,6 +493,20 @@ def do_rescue(target: str) -> bool:
     try:
         result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
         if result.returncode == 0:
+            now_iso = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            state["status"] = "finished"
+            state["exit_code"] = 0
+            state["ended_at"] = now_iso
+            try:
+                with open(sf, "w", encoding="utf-8") as fh:
+                    json.dump(state, fh, indent=2)
+            except OSError as e:
+                print(f"warning: could not patch state.json: {e}")
+            try:
+                pathlib.Path(os.path.join(wdir, "finished")).touch()
+            except OSError as e:
+                print(f"warning: could not touch finished marker: {e}")
+
             print()
             print(f"Rescue completed for {gr_id}.")
             print(f"Run /gremlins land {gr_id} if you are satisfied with the result.")
