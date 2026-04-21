@@ -598,22 +598,46 @@ def main(argv: List[str]) -> int:
             if not plan_file.exists() or plan_file.stat().st_size == 0:
                 die(f"--resume-from {args.resume_from} requires existing {plan_file}")
         # Precondition: review-code/address-code need evidence of the impl
-        # stage. Mirrors the post-implement invariant below: uncommitted
-        # changes or a commit reachable from HEAD. We don't have pre_head on
-        # resume, so we accept any non-empty HEAD history as "impl happened".
-        if start_idx >= VALID_RESUME_STAGES.index("review-code") and is_git:
-            porcelain = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True, text=True, check=False,
-            )
-            has_dirty = bool(porcelain.stdout.strip())
-            r = subprocess.run(
-                ["git", "rev-list", "--count", "HEAD"],
-                capture_output=True, text=True, check=False,
-            )
-            has_commits = (r.returncode == 0 and int(r.stdout.strip() or "0") > 0)
-            if not has_dirty and not has_commits:
-                die(f"--resume-from {args.resume_from} requires implementation changes in the worktree")
+        # stage. Mirrors the post-implement invariant below:
+        #   - git mode: uncommitted changes OR any commit reachable from HEAD
+        #     (we don't have pre_head on resume, so we accept any non-empty
+        #     HEAD history as "impl happened").
+        #   - non-git mode: the worktree has any non-metadata file. We don't
+        #     have the pre-impl sentinel's mtime across a resume, so a stricter
+        #     "modified since pre-impl" check isn't available — an empty
+        #     worktree is the only unambiguous "nothing was implemented" signal.
+        if start_idx >= VALID_RESUME_STAGES.index("review-code"):
+            if is_git:
+                porcelain = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    capture_output=True, text=True, check=False,
+                )
+                has_dirty = bool(porcelain.stdout.strip())
+                r = subprocess.run(
+                    ["git", "rev-list", "--count", "HEAD"],
+                    capture_output=True, text=True, check=False,
+                )
+                has_commits = (r.returncode == 0 and int(r.stdout.strip() or "0") > 0)
+                if not has_dirty and not has_commits:
+                    die(f"--resume-from {args.resume_from} requires implementation changes in the worktree")
+            else:
+                has_files = False
+                for dirpath, dirnames, filenames in os.walk("."):
+                    dirnames[:] = [d for d in dirnames if d != ".git"]
+                    # Skip the session dir (plan/review artifacts live there and
+                    # aren't product evidence by themselves).
+                    try:
+                        sd_res = session_dir.resolve()
+                        if pathlib.Path(dirpath).resolve() == sd_res:
+                            dirnames[:] = []
+                            continue
+                    except Exception:
+                        pass
+                    if filenames:
+                        has_files = True
+                        break
+                if not has_files:
+                    die(f"--resume-from {args.resume_from} requires implementation changes in the worktree")
         # Precondition: address-code needs all three review files. Filenames
         # embed the reviewer-model name, so this also implicitly requires the
         # resume to use the same -a/-b/-c models as the original run. If the

@@ -432,7 +432,7 @@ Stage order for {kind}: {' → '.join(stages)}
 1. Diagnose the failure from the log above.
 2. Fix the underlying issue in this worktree (working directory: {workdir}) so that rerunning the failed stage ({stage}) will succeed. This may mean editing code, cleaning up partial state, or staging missing artifacts.
 3. Write a brief rescue note to `{rescue_note_path}` describing what failed and what you fixed.
-4. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically. Exit 0 when the fix is in place; exit non-zero (or abort) if the failure is unsalvageable so the operator can decide next steps.
+4. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically. If you conclude the failure is unsalvageable, say so clearly in your final message and in the rescue note, and leave the worktree untouched; the operator watches Phase A output and will Ctrl-C / decline resume if they agree.
 
 Work directly in the current directory. Do not re-invoke the gremlin script.
 """
@@ -516,8 +516,12 @@ def do_rescue(target: str) -> bool:
     # finished/summarized markers, and relaunches the pipeline with
     # --resume-from <stage>.
     launcher = os.path.expanduser("~/.claude/skills/_bg/launch.sh")
-    if not os.path.isfile(launcher):
-        print(f"error: launcher not found at {launcher} — cannot resume in background")
+    # os.access(..., X_OK) rather than os.path.isfile: an un-chmod'd launcher
+    # (e.g. after a manual edit) would pass the existence check and then fail
+    # with a PermissionError inside subprocess.run, which isn't caught by the
+    # FileNotFoundError handler below.
+    if not os.access(launcher, os.X_OK):
+        print(f"error: launcher not executable at {launcher} — cannot resume in background")
         return False
 
     print()

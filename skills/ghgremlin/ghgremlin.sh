@@ -166,6 +166,12 @@ extract_gh_url() {
     echo "--- raw claude output ($label) ---" >&2
     echo "$out" >&2
     echo "--- end raw output ---" >&2
+    # If the plan/commit-pr stage streamed its output to a durable artifact
+    # (ghgremlin.sh's plan stage does this to support rescue), point operators
+    # at it so they can hand-recover the URL for state.json before re-running.
+    if [[ -n "${PLAN_OUT_FILE:-}" && -f "$PLAN_OUT_FILE" ]]; then
+      echo "hint: raw stream-json was saved to $PLAN_OUT_FILE — recover the $label URL from there and patch state.json before rescue to avoid a duplicate create." >&2
+    fi
     die "failed to extract $label URL"
   fi
   echo "$url"
@@ -186,7 +192,22 @@ extract_session_id() {
 if run_stage plan; then
   set_stage plan
   echo "==> [1/6] running /ghplan"
-  PLAN_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" "/ghplan ${REF:+$REF }${INSTRUCTIONS}" | progress_tee)
+  # Stream the plan output to a persistent artifact as well as capturing it in
+  # memory. If /ghplan succeeds in creating the issue but we fail before
+  # persisting .issue_url (claude -p non-zero exit after tool success,
+  # extract_gh_url miss, patch_state unable to write), the raw stream-json is
+  # durably available for an operator to hand-recover the URL before rescue —
+  # avoiding a duplicate `gh issue create` on resume.
+  PLAN_OUT_FILE=""
+  if [[ -n "$STATE_FILE" ]]; then
+    PLAN_OUT_FILE="$(dirname "$STATE_FILE")/artifacts/ghplan-out.jsonl"
+    mkdir -p "$(dirname "$PLAN_OUT_FILE")" 2>/dev/null || true
+  fi
+  if [[ -n "$PLAN_OUT_FILE" ]]; then
+    PLAN_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" "/ghplan ${REF:+$REF }${INSTRUCTIONS}" | progress_tee | tee "$PLAN_OUT_FILE")
+  else
+    PLAN_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" "/ghplan ${REF:+$REF }${INSTRUCTIONS}" | progress_tee)
+  fi
   ISSUE_URL=$(extract_gh_url "$PLAN_OUT" \
     'https://github\.com/[^ )]+/issues/[0-9]+' \
     'gh issue create' \
@@ -287,7 +308,7 @@ if run_stage ghreview; then
 
   [[ -s "$SCRIPT_DIR/../localgremlin/lens-scope-code.md" ]] || die "missing or empty lens file: lens-scope-code.md"
   SCOPE_LENS=$(cat "$SCRIPT_DIR/../localgremlin/lens-scope-code.md")
-  SCOPE_REVIEW_TMP=$(mktemp /tmp/scope-review-XXXXXX.md)
+  SCOPE_REVIEW_TMP=$(mktemp /tmp/scope-review-XXXXXX)
   ( claude -p "${CLAUDE_FLAGS[@]}" \
     "You are a scope reviewer for a pull request. Your task is to assess whether the diff is the right size and shape for the plan.
 

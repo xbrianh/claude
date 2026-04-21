@@ -78,10 +78,30 @@ if [[ -n "$RESUME_GR_ID" ]]; then
     WORKDIR=$(jq       -r '.workdir      // ""' "$STATE_FILE")
     BRANCH=$(jq        -r '.branch       // ""' "$STATE_FILE")
     STAGE=$(jq         -r '.stage        // ""' "$STATE_FILE")
-    INSTRUCTIONS=$(jq  -r '.instructions // ""' "$STATE_FILE")
     STATUS=$(jq        -r '.status       // ""' "$STATE_FILE")
     OLD_PID=$(jq       -r '.pid          // ""' "$STATE_FILE")
     EXIT_CODE=$(jq     -r '.exit_code    // ""' "$STATE_FILE")
+
+    # Full instructions are persisted to a sidecar file (not state.json) because
+    # state.json's .instructions is a display-truncated summary (INSTR_SUMMARY
+    # below, 200 chars). A rescue of a gremlin that crashed mid-plan must re-feed
+    # the full prompt to the plan agent; falling back to the truncated summary
+    # would silently re-plan against a 200-char prefix. The sidecar was added
+    # alongside the initial state.json write, so resumes of gremlins launched
+    # before this change will fall back to .instructions as a last resort.
+    INSTRUCTIONS_FILE="$STATE_DIR/instructions.txt"
+    if [[ -f "$INSTRUCTIONS_FILE" ]]; then
+        INSTRUCTIONS=$(cat "$INSTRUCTIONS_FILE")
+    else
+        INSTRUCTIONS=$(jq -r '.instructions // ""' "$STATE_FILE")
+    fi
+
+    # Recover the original pipeline argv (minus the trailing <instructions>)
+    # so custom model flags (-a/-b/-c for localgremlin, -r for ghgremlin) are
+    # preserved across resume. Falls back to an empty array if the field is
+    # missing (older gremlins) — models will revert to defaults, but the
+    # pipeline still runs.
+    PIPELINE_ARGS_JSON=$(jq -c '.pipeline_args // []' "$STATE_FILE")
 
     case "$RESUME_KIND" in
         ghgremlin|localgremlin) ;;
@@ -122,6 +142,11 @@ if [[ -n "$RESUME_GR_ID" ]]; then
 
     NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     STATE_TMP="$STATE_FILE.tmp"
+    # Clear sub_stage and stage_updated_at so /gremlins doesn't display the
+    # pre-crash values during the window between this patch and the resumed
+    # pipeline's first set-stage call. The resumed pipeline will repopulate
+    # stage_updated_at via set-stage.sh; sub_stage will reappear only when
+    # the stage actually re-enters a sub-staged phase (e.g. review-code).
     jq --arg    status             "running" \
        --arg    stage              "$STAGE" \
        --arg    rescued_at         "$NOW_ISO" \
@@ -130,6 +155,8 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         | .stage = $stage
         | del(.exit_code)
         | del(.ended_at)
+        | del(.sub_stage)
+        | del(.stage_updated_at)
         | .rescue_count = ((.rescue_count // 0) + 1)
         | .rescued_at = $rescued_at
         | .resumed_from_stage = $resumed_from_stage
@@ -146,10 +173,22 @@ if [[ -n "$RESUME_GR_ID" ]]; then
     export PIPELINE
     export GR_ID="$RESUME_GR_ID"
 
+    # Rehydrate the original pipeline-level flags (e.g. localgremlin's -a/-b/-c
+    # model selectors, ghgremlin's -r ref) from the persisted JSON array so
+    # the resume uses the same configuration as the original run. Mapfile is
+    # the safe way to expand a jq-produced array without splitting on spaces
+    # that may occur inside individual args.
+    PIPELINE_ARGS=()
+    if [[ "$PIPELINE_ARGS_JSON" != "[]" && "$PIPELINE_ARGS_JSON" != "null" ]]; then
+        while IFS= read -r _arg; do
+            PIPELINE_ARGS+=("$_arg")
+        done < <(jq -r '.[]' <<<"$PIPELINE_ARGS_JSON")
+    fi
+
     (
         cd "$WORKDIR"
         nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
-            -- --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
+            -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
         echo $! >"$STATE_DIR/pid"
     )
 
@@ -327,23 +366,43 @@ fi
 
 NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# Persist the full, untruncated instructions to a sidecar file so --resume can
+# rehydrate the original prompt even when it exceeds the 200-char display
+# summary stored in state.json.
+printf '%s' "$INSTR_RAW" > "$STATE_DIR/instructions.txt" \
+    || die "failed to write instructions.txt"
+
+# Collect pipeline-level flags (everything before the first positional arg,
+# already located at $_i by the argv walk above). These are the flags the
+# gremlin pipeline itself consumes — e.g. localgremlin's -a/-b/-c model
+# selectors or ghgremlin's -r <ref> — and we persist them so a --resume run
+# re-applies the same configuration instead of silently reverting to defaults.
+# We explicitly exclude the final positional argument (the instructions blob)
+# so it isn't stored twice.
+PIPELINE_ARGS_JSON="[]"
+if (( _i > 0 )); then
+    PIPELINE_ARGS_JSON=$(printf '%s\n' "${_args[@]:0:$_i}" | jq -R . | jq -s -c .)
+fi
+
 STATE_FILE="$STATE_DIR/state.json"
 STATE_TMP="$STATE_FILE.tmp"
 jq -n \
-    --arg id            "$GR_ID" \
-    --arg kind          "$KIND" \
-    --arg project_root  "$PROJECT_ROOT" \
-    --arg workdir       "$WORKDIR" \
-    --arg setup_kind    "$SETUP_KIND" \
-    --arg branch        "$BRANCH" \
-    --arg status        "running" \
-    --arg started_at    "$NOW_ISO" \
-    --arg instructions  "$INSTR_SUMMARY" \
-    --arg description   "$DESCRIPTION" \
+    --arg     id            "$GR_ID" \
+    --arg     kind          "$KIND" \
+    --arg     project_root  "$PROJECT_ROOT" \
+    --arg     workdir       "$WORKDIR" \
+    --arg     setup_kind    "$SETUP_KIND" \
+    --arg     branch        "$BRANCH" \
+    --arg     status        "running" \
+    --arg     started_at    "$NOW_ISO" \
+    --arg     instructions  "$INSTR_SUMMARY" \
+    --arg     description   "$DESCRIPTION" \
+    --argjson pipeline_args "$PIPELINE_ARGS_JSON" \
     '{id: $id, kind: $kind, project_root: $project_root, workdir: $workdir,
       setup_kind: $setup_kind, branch: $branch, status: $status,
       started_at: $started_at, instructions: $instructions,
-      description: $description, stage: "starting", pid: null}' \
+      description: $description, pipeline_args: $pipeline_args,
+      stage: "starting", pid: null}' \
     > "$STATE_TMP" || die "failed to write initial state"
 mv "$STATE_TMP" "$STATE_FILE"
 
