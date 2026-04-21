@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # localland.sh — git operations for the /localland skill.
-# Three subcommands, called in sequence by Claude:
-#   --check  <id>  Validate preconditions; print branch= and plan= on stdout.
-#   --squash <id>  Stage the workflow's commits via git merge --squash.
-#   --cleanup <id> Delete the workflow branch and state directory.
+# Subcommands called in sequence by Claude:
+#   --check              <id>            Validate preconditions; print branch= and plan= on stdout.
+#   --squash             <id>            Stage the workflow's commits via git merge --squash.
+#   --cleanup            <id>            Delete the workflow branch and state directory.
+#   --gh-preflight       <id> <pr-branch> Pre-flight checks for --gh mode (remote, auth, branch collision).
+#   --gh-squash          <id> <pr-branch> Create PR branch off main and squash-merge the workflow branch onto it.
 set -euo pipefail
 
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
@@ -27,7 +29,7 @@ fi
 
 die() { echo "error: $*" >&2; exit 1; }
 
-[[ $# -ge 2 ]] || die "usage: localland.sh --check|--squash|--cleanup <workflow-id>"
+[[ $# -ge 2 ]] || die "usage: localland.sh --check|--squash|--cleanup|--gh-preflight|--gh-squash <workflow-id> [pr-branch]"
 MODE="$1"
 WF_ID="$2"
 
@@ -133,7 +135,67 @@ case "$MODE" in
     ;;
 
 # ---------------------------------------------------------------------------
+--gh-preflight)
+    PR_BRANCH="${3:-}"
+    [[ -n "$PR_BRANCH" ]] || die "usage: localland.sh --gh-preflight <id> <pr-branch>"
+
+    # Must have a remote named 'origin' (push and remote branch checks both target origin).
+    git remote get-url origin >/dev/null 2>&1 \
+        || die "--gh requires a remote named 'origin'; none found (remotes: $(git remote | tr '\n' ' '))"
+
+    # gh CLI must be authenticated.
+    gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run 'gh auth login' and retry"
+
+    # PR branch must not already exist locally.
+    if git show-ref --verify --quiet "refs/heads/$PR_BRANCH" 2>/dev/null; then
+        die "branch '$PR_BRANCH' already exists locally; delete it or choose a different name"
+    fi
+
+    # PR branch must not already exist remotely.
+    if git ls-remote --exit-code origin "refs/heads/$PR_BRANCH" >/dev/null 2>&1; then
+        die "branch '$PR_BRANCH' already exists on origin; delete it or choose a different name"
+    fi
+
+    echo "preflight ok: remote present, gh authenticated, '$PR_BRANCH' is free"
+    ;;
+
+# ---------------------------------------------------------------------------
+--gh-squash)
+    PR_BRANCH="${3:-}"
+    [[ -n "$PR_BRANCH" ]] || die "usage: localland.sh --gh-squash <id> <pr-branch>"
+
+    [[ -f "$STATE_FILE" ]] || die "no state.json found for workflow '$WF_ID'"
+    command -v jq >/dev/null 2>&1 || die "jq is required but not found on PATH"
+
+    setup_kind=$(jq -r '.setup_kind // "unknown"' "$STATE_FILE")
+    [[ "$setup_kind" == "worktree-branch" ]] \
+        || die "workflow '$WF_ID' is not a git workflow (setup_kind=$setup_kind); nothing to squash"
+
+    branch=$(jq -r '.branch // ""' "$STATE_FILE")
+    [[ -n "$branch" ]] || die "state.json for '$WF_ID' has no branch field"
+
+    original_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) \
+        || die "could not determine current branch"
+
+    # Create PR branch off main.
+    if ! git checkout -b "$PR_BRANCH" main 2>&1; then
+        die "could not create branch '$PR_BRANCH' off main; ensure 'main' exists and the working tree is clean"
+    fi
+
+    # Squash-merge the workflow branch onto the PR branch.
+    echo "Squash-merging $branch onto $PR_BRANCH..."
+    if ! git merge --squash "$branch" 2>&1; then
+        git checkout "$original_branch" 2>/dev/null || true
+        git branch -D "$PR_BRANCH" 2>/dev/null || true
+        die "git merge --squash failed (conflicts); restored to '$original_branch' and deleted '$PR_BRANCH'"
+    fi
+
+    echo "--- staged diff summary ---"
+    git diff --cached --stat
+    ;;
+
+# ---------------------------------------------------------------------------
 *)
-    die "unknown subcommand '$MODE'; expected --check, --squash, or --cleanup"
+    die "unknown subcommand '$MODE'; expected --check, --squash, --cleanup, --gh-preflight, or --gh-squash"
     ;;
 esac
