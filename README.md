@@ -16,6 +16,8 @@ skills/
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
   localimplement/     # /localimplement: full local pipeline via skills/_bg/launch.sh; sibling lens-*.md files hold reviewer prompts
+  localland/          # /localland: squash-merge a finished /localimplement branch onto the current branch; --gh creates a PR instead
+  workflows/          # /workflows: on-demand status of background pipelines; supports stop/rescue/rm subcommands
 agents/
   pragmatic-developer.md
 commands/             # slash commands (created on first sync; no files tracked yet)
@@ -44,23 +46,28 @@ Before any non-dry-run `push`, the script snapshots `~/.claude/` into `/tmp/clau
 
 The skills cluster into a GitHub-issue-driven pipeline and a local pipeline (`/localimplement`), with `/design` as an optional first step for either and `/ghreview` / `/ghaddress` usable on their own:
 
-- [`/design`](skills/design/SKILL.md) — runs a WHAT-focused spec conversation; writes the spec to `/tmp/design-<slug>.md` by default; can hand off to `/ghimplement` or `/localimplement`.
+- [`/design`](skills/design/SKILL.md) — runs a WHAT-focused spec conversation; writes the spec to `/tmp/design-<slug>.md` by default; can hand off to `/ghimplement` or `/localimplement`. Pass `--target localimplement` (or `ghimplement`) to pre-select the handoff target — this is what the `--design` flag on `/localimplement` and `/ghimplement` sets automatically.
 - [`/ghplan`](skills/ghplan/SKILL.md) — draft a plan and post it as a new GitHub issue.
 - [`/ghimplement`](skills/ghimplement/SKILL.md) — run the full pipeline end-to-end via [`skills/ghimplement/ghimplement.sh`](skills/ghimplement/ghimplement.sh).
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
-- [`/localimplement`](skills/localimplement/SKILL.md) — local (no-GitHub) counterpart to `/ghimplement`: runs plan → implement → review-code ×2 → address-code locally via [`skills/localimplement/localimplement.sh`](skills/localimplement/localimplement.sh), with all artifacts written to `~/.local/state/claude-workflows/<id>/artifacts/` (off the product branch).
+- [`/localimplement`](skills/localimplement/SKILL.md) — local (no-GitHub) counterpart to `/ghimplement`: runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localimplement/localimplement.py`](skills/localimplement/localimplement.py), with all artifacts written to `~/.local/state/claude-workflows/<id>/artifacts/` (off the product branch). Accepts `--design` to invoke `/design` first.
+- [`/localland`](skills/localland/SKILL.md) — squash-merge a finished `/localimplement` workflow branch onto the current branch as a single well-messaged commit, then delete the workflow branch and state directory. `--gh` pushes the result as a new PR against `main` instead.
+- [`/workflows`](skills/workflows/SKILL.md) — on-demand status of background pipelines. Subcommands: `stop <id>` (SIGTERM a running pipeline), `rescue <id>` (diagnose and resume a dead/stalled workflow inline), `rm <id>` (delete the state directory, log, worktree directory, and branch). Flags include `--here`, `--ack`, `--ack-all`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
 
 `skills/ghimplement/ghimplement.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
 ### Background execution
 
-Both `/ghimplement` and `/localimplement` run **in the background**. Their SKILL.md wrappers hand off to [`skills/_bg/launch.sh`](skills/_bg/launch.sh), which:
+Both `/ghimplement` and `/localimplement` run **in the background**. Both accept `--design` as a first flag to invoke `/design` before the pipeline. Their SKILL.md wrappers hand off to [`skills/_bg/launch.sh`](skills/_bg/launch.sh), which:
 
 - Creates an isolated worktree (via `git worktree add --detach` for git projects, `cp -a` otherwise) so concurrent invocations don't collide.
+- Discovers the pipeline script by trying `<kind>.py` before `<kind>.sh` — so [`localimplement.py`](skills/localimplement/localimplement.py) takes precedence over any `.sh` fallback.
 - Spawns the pipeline detached (subshell + `nohup`), so it survives `Ctrl-C`, shell exit, and Claude Code quitting.
 - Records per-workflow state under `~/.local/state/claude-workflows/<id>/` — or `$XDG_STATE_HOME/claude-workflows/<id>/` if `XDG_STATE_HOME` is set — (`state.json`, combined `log`, `finished` / `acknowledged` markers), deliberately rooted outside `~/.claude/` so Claude Code's sensitive-file guardrail doesn't block subagent writes. [`skills/_bg/finish.sh`](skills/_bg/finish.sh) writes the terminal `status` / `exit_code` and drops the `finished` marker that `session-summary.sh` keys off.
 - Returns within ~1s with the workflow id, workdir, log path, and state-file path.
+
+`/localimplement` artifacts under `~/.local/state/claude-workflows/<id>/artifacts/`: `plan.md`, `review-code-holistic-<model>.md`, `review-code-detail-<model>.md`, `review-code-scope-<model>.md`. If launched with `--design`, a `spec.md` is also written there.
 
 A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes [`skills/_bg/session-summary.sh`](skills/_bg/session-summary.sh), which reports running and newly-finished workflows for the current project so you're notified the next time you open Claude Code in that tree. Acknowledged state dirs older than 14 days are pruned on the next hook firing.
 
