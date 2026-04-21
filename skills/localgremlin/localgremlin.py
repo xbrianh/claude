@@ -273,13 +273,11 @@ def run_review(
     """Generic reviewer runner. CONTEXT describes what is being reviewed;
     FOCUS is the lens prose; WHERE_FIELD is the field label used to cite
     findings (e.g. `**File:** path:line` for code reviews)."""
-    prompt = f"""{context}
+    prompt = f"""Read surrounding code as needed — don't review in isolation.
 
-{focus}
+{context}
 
-Read surrounding code as needed — don't review in isolation.
-
-Write your review to `{out_file}` as markdown, structured as:
+Structure your review as markdown:
 
 # Review ({model})
 
@@ -296,7 +294,11 @@ For each actionable finding:
 
 If there are no issues worth raising, write a Findings section that says so explicitly.
 
-Do NOT make any code changes — only write the review file."""
+Do NOT make any code changes — only write the review file.
+
+{focus}
+
+Write your review to `{out_file}`."""
     run_claude(model, prompt, label, raw_path)
 
 
@@ -577,6 +579,7 @@ def main(argv: List[str]) -> int:
         die("could not find '## Core Principles' section in pragmatic-developer.md")
     core_principles = "".join(section_lines).rstrip()
 
+    # Stages run back-to-back; inserting sleeps >~5 min between them drops the Anthropic prompt cache TTL and loses inter-stage cache benefits.
     # ----- plan -----
     set_stage("plan")
     print(f"==> [1/4] planning (model: {args.plan}) -> {plan_file}", flush=True)
@@ -601,6 +604,7 @@ Task: {instructions}"""
     run_claude(args.plan, plan_prompt, "plan", session_dir / "stream-plan.jsonl")
     if not plan_file.exists() or plan_file.stat().st_size == 0:
         die(f"plan stage did not produce {plan_file}")
+    plan_text = plan_file.read_text(encoding="utf-8")
 
     # ----- implement -----
     set_stage("implement")
@@ -628,9 +632,9 @@ Task: {instructions}"""
         )
     impl_prompt = (
         f"When writing code, follow these principles:\n\n{core_principles}\n\n"
-        f"Read the implementation plan at `{plan_file}` and implement every task "
-        f"in it by editing code in this repo. When the implementation is "
-        f"complete{impl_commit_instr}"
+        f"{plan_text}\n\n"
+        f"Implement every task in the plan above by editing code in this repo. "
+        f"When the implementation is complete{impl_commit_instr}"
     )
     run_claude(args.impl, impl_prompt, "implement", session_dir / "stream-implement.jsonl")
 
@@ -667,8 +671,7 @@ Task: {instructions}"""
             "available, otherwise inspect recently modified files)."
         )
     code_review_context = (
-        f"You are reviewing an implementation of the plan at `{plan_file}`. "
-        f"Read the plan first for context.\n\n{code_scope}"
+        f"The plan for this change is:\n\n{plan_text}\n\n{code_scope}"
     )
     run_triple_review(
         context=code_review_context,
@@ -692,12 +695,27 @@ Task: {instructions}"""
             "create a single git commit titled 'Address review feedback' whose "
             "body references all three review files. Do not push."
         )
-    address_prompt = f"""Three independent code reviews of the most recent implementation are at:
-- `{review_code_a}` — **holistic** reviewer (model: {args.holistic}).
-- `{review_code_b}` — **detail** reviewer (model: {args.detail}).
-- `{review_code_c}` — **scope** reviewer (model: {args.scope}).
+    text_a = review_code_a.read_text(encoding="utf-8")
+    text_b = review_code_b.read_text(encoding="utf-8")
+    text_c = review_code_c.read_text(encoding="utf-8")
+    address_prompt = f"""Three independent code reviews of the most recent implementation follow. The reviewers have different lenses by design, so their findings will mostly be complementary rather than overlapping — still deduplicate where they do overlap. For every actionable finding you agree with, make the fix in the code. For findings you disagree with or choose to skip, note them briefly in your final summary with a reason.
 
-Read all three reviews. The reviewers have different lenses by design, so their findings will mostly be complementary rather than overlapping — still deduplicate where they do overlap. For every actionable finding you agree with, make the fix in the code. For findings you disagree with or choose to skip, note them briefly in your final summary with a reason.
+---
+**Holistic reviewer** (model: {args.holistic}):
+
+{text_a}
+
+---
+**Detail reviewer** (model: {args.detail}):
+
+{text_b}
+
+---
+**Scope reviewer** (model: {args.scope}):
+
+{text_c}
+
+---
 
 {address_commit_instr}
 

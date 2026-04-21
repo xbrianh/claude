@@ -50,6 +50,7 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
   || die "not in a gh-recognized repo"
 
 CLAUDE_FLAGS=(--permission-mode bypassPermissions --output-format stream-json --verbose)
+# Stages run sequentially; the wait-copilot sleep 20 loop should not be extended beyond ~5 min intervals or the Anthropic prompt cache TTL expires and cache benefits between the review and address stages are lost.
 
 # Extract a URL from a Bash-tool_result event matching a regex, preferring
 # the most recent match. Scans stream-json tool_use/tool_result pairs for
@@ -127,6 +128,8 @@ ISSUE_URL=$(extract_gh_url "$PLAN_OUT" \
   "issue")
 ISSUE_NUM=$(basename "$ISSUE_URL")
 echo "    issue: $ISSUE_URL"
+ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json body --jq .body)
+[[ -n "$ISSUE_BODY" ]] || die "issue $ISSUE_NUM has an empty body"
 
 PRAGMATIC_DEV_FILE="$SCRIPT_DIR/../agents/pragmatic-developer.md"
 [[ -f "$PRAGMATIC_DEV_FILE" ]] || die "missing agent file: $PRAGMATIC_DEV_FILE"
@@ -145,7 +148,11 @@ IMPL_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" \
 
 ${CORE_PRINCIPLES}
 
-Implement the plan in GitHub issue $ISSUE_URL. Read the issue body for the full plan, then make the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. The plan lives in the GitHub issue and reviews go to PR comments; the only changes in this working tree should be product code." \
+The following is the implementation plan from the GitHub issue:
+
+${ISSUE_BODY}
+
+Implement the plan above by making the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. The plan lives in the GitHub issue and reviews go to PR comments; the only changes in this working tree should be product code." \
   | progress_tee)
 IMPL_SESSION=$(extract_session_id "$IMPL_OUT")
 
@@ -162,13 +169,15 @@ fi
 set_stage commit-pr
 echo "==> [2b/6] committing + opening PR"
 PR_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" --resume "$IMPL_SESSION" \
-  "Now create a new branch named 'issue-${ISSUE_NUM}-<short-slug>' from the default branch, commit the changes with a descriptive message ending in 'Closes #${ISSUE_NUM}', push the branch, and open a PR with 'gh pr create' whose body contains 'Closes #${ISSUE_NUM}'. Print ONLY the PR URL on the final line of your response." | progress_tee)
+  "Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'. Name the branch 'issue-${ISSUE_NUM}-<short-slug>', end the commit message with 'Closes #${ISSUE_NUM}', and include 'Closes #${ISSUE_NUM}' in the PR body. Print ONLY the PR URL on the final line of your response." | progress_tee)
 PR_URL=$(extract_gh_url "$PR_OUT" \
   'https://github\.com/[^ )]+/pull/[0-9]+' \
   'gh pr create' \
   "PR")
 PR_NUM=$(basename "$PR_URL")
 echo "    PR: $PR_URL"
+SCOPE_ISSUE_BODY="$ISSUE_BODY"
+SCOPE_PR_DIFF=$(gh pr diff "$PR_URL")
 
 set_stage request-copilot
 echo "==> [3/6] requesting Copilot review"
@@ -189,11 +198,15 @@ SCOPE_REVIEW_TMP=$(mktemp /tmp/scope-review-XXXXXX.md)
 Lens:
 $SCOPE_LENS
 
-Steps:
-1. Read the issue body for the implementation plan: run \`gh issue view $ISSUE_NUM --repo $REPO\`.
-2. Read the PR diff: run \`gh pr diff $PR_URL\`.
-3. Apply the scope lens above to the diff vs the plan.
-4. Write your findings to $SCOPE_REVIEW_TMP, then post them via: \`gh pr review $PR_URL --comment --body-file $SCOPE_REVIEW_TMP\`.
+Implementation plan (from the GitHub issue):
+
+$SCOPE_ISSUE_BODY
+
+PR diff:
+
+$SCOPE_PR_DIFF
+
+Apply the scope lens above to the diff vs the plan. Write your findings to $SCOPE_REVIEW_TMP, then post them via: \`gh pr review $PR_URL --comment --body-file $SCOPE_REVIEW_TMP\`.
 
 If the diff is scoped correctly, write exactly: 'Scoped correctly — nothing to flag.' to $SCOPE_REVIEW_TMP, then post it." \
   | progress_tee >/dev/null ) &
