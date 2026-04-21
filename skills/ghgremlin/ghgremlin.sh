@@ -5,12 +5,12 @@ die() { echo "error: $*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Stage helper: only meaningful when invoked via the _bg launcher (WF_ID set).
+# Stage helper: only meaningful when invoked via the _bg launcher (GR_ID set).
 SET_STAGE_SH="$HOME/.claude/skills/_bg/set-stage.sh"
 set_stage() {
-  [[ -n "${WF_ID:-}" ]] || return 0
+  [[ -n "${GR_ID:-}" ]] || return 0
   [[ -x "$SET_STAGE_SH" ]] || return 0
-  "$SET_STAGE_SH" "$WF_ID" "$@" >/dev/null 2>&1 || true
+  "$SET_STAGE_SH" "$GR_ID" "$@" >/dev/null 2>&1 || true
 }
 
 # Tee stream-json to stdout while printing a live progress trace of tool_use
@@ -27,11 +27,11 @@ REF=""
 while getopts "r:" opt; do
   case "$opt" in
     r) REF="$OPTARG" ;;
-    *) die "usage: ghimplement.sh [-r <ref>] \"<instructions>\"" ;;
+    *) die "usage: ghgremlin.sh [-r <ref>] \"<instructions>\"" ;;
   esac
 done
 shift $((OPTIND - 1))
-[[ $# -ge 1 ]] || die "usage: ghimplement.sh [-r <ref>] \"<instructions>\""
+[[ $# -ge 1 ]] || die "usage: ghgremlin.sh [-r <ref>] \"<instructions>\""
 INSTRUCTIONS="$*"
 
 # Validate REF against a conservative git-ref charset. INSTRUCTIONS is
@@ -180,8 +180,8 @@ echo "==> [4/6] running reviews in parallel (/ghreview + scope)"
 ( claude -p "${CLAUDE_FLAGS[@]}" "/ghreview $PR_URL" | progress_tee >/dev/null ) &
 pid_ghreview=$!
 
-[[ -s "$SCRIPT_DIR/../localimplement/lens-scope-code.md" ]] || die "missing or empty lens file: lens-scope-code.md"
-SCOPE_LENS=$(cat "$SCRIPT_DIR/../localimplement/lens-scope-code.md")
+[[ -s "$SCRIPT_DIR/../localgremlin/lens-scope-code.md" ]] || die "missing or empty lens file: lens-scope-code.md"
+SCOPE_LENS=$(cat "$SCRIPT_DIR/../localgremlin/lens-scope-code.md")
 SCOPE_REVIEW_TMP=$(mktemp /tmp/scope-review-XXXXXX.md)
 ( claude -p "${CLAUDE_FLAGS[@]}" \
   "You are a scope reviewer for a pull request. Your task is to assess whether the diff is the right size and shape for the plan.

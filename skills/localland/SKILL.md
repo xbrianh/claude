@@ -1,34 +1,34 @@
 ---
 name: localland
-description: Squash-merge a finished /localimplement workflow branch onto the current branch as a single well-messaged commit, then delete the workflow branch and state directory.
-argument-hint: [--gh] <workflow-id>
+description: Squash-merge a finished /localgremlin gremlin branch onto the current branch as a single well-messaged commit, then delete the gremlin branch and state directory.
+argument-hint: [--gh] <gremlin-id>
 allowed-tools: Bash(~/.claude/skills/localland/localland.sh:*), Bash(git *), Bash(gh *)
 ---
 
-You are running the `localland` command. It lands a finished `/localimplement` workflow onto your current branch as one clean, squashed commit, then removes all traces of the workflow. With `--gh`, it pushes the result as a new GitHub PR against `main` instead of committing locally.
+You are running the `localland` command. It lands a finished `/localgremlin` gremlin onto your current branch as one clean, squashed commit, then removes all traces of the gremlin. With `--gh`, it pushes the result as a new GitHub PR against `main` instead of committing locally.
 
 ## What to do
 
 Parse `$ARGUMENTS` to detect the optional `--gh` flag:
-- If `$ARGUMENTS` starts with `--gh `, set `GH_MODE=true` and treat the remainder as `WF_ID`.
-- Otherwise set `GH_MODE=false` and treat `$ARGUMENTS` as `WF_ID`.
+- If `$ARGUMENTS` starts with `--gh `, set `GH_MODE=true` and treat the remainder as `GR_ID`.
+- Otherwise set `GH_MODE=false` and treat `$ARGUMENTS` as `GR_ID`.
 
 Fail fast at every step — if a command exits nonzero, stop and report the error to the user; do not continue.
 
 **Step 1 — validate preconditions**
 
 ```
-~/.claude/skills/localland/localland.sh --check "$WF_ID"
+~/.claude/skills/localland/localland.sh --check "$GR_ID"
 ```
 
 Parse `branch=` and `plan=` from stdout. If the script exits nonzero, report the error and stop.
 
 **Step 1b — `--gh` preflight** *(only when `GH_MODE=true`)*
 
-Derive `pr_branch=pr/$WF_ID`. Then:
+Derive `pr_branch=pr/$GR_ID`. Then:
 
 ```
-~/.claude/skills/localland/localland.sh --gh-preflight "$WF_ID" "$pr_branch"
+~/.claude/skills/localland/localland.sh --gh-preflight "$GR_ID" "$pr_branch"
 ```
 
 If the script exits nonzero, report the error and stop. Do not proceed to squash.
@@ -42,13 +42,13 @@ Read the file at the `plan=` path. You will use its `## Context` section to writ
 *If `GH_MODE=false`:*
 
 ```
-~/.claude/skills/localland/localland.sh --squash "$WF_ID"
+~/.claude/skills/localland/localland.sh --squash "$GR_ID"
 ```
 
 *If `GH_MODE=true`:*
 
 ```
-~/.claude/skills/localland/localland.sh --gh-squash "$WF_ID" "$pr_branch"
+~/.claude/skills/localland/localland.sh --gh-squash "$GR_ID" "$pr_branch"
 ```
 
 After `--gh-squash` succeeds, the working tree is on `$pr_branch` (not the original branch).
@@ -94,7 +94,7 @@ Capture the PR URL from `gh pr create` stdout. If `git push` or `gh pr create` e
 **Step 7 — cleanup** (only after step 6 succeeds)
 
 ```
-~/.claude/skills/localland/localland.sh --cleanup "$WF_ID"
+~/.claude/skills/localland/localland.sh --cleanup "$GR_ID"
 ```
 
 **Step 8 — report**
@@ -104,14 +104,14 @@ Capture the PR URL from `gh pr create` stdout. If `git push` or `gh pr create` e
 Tell the user:
 - Which branch was landed and onto what.
 - The commit hash (from `git rev-parse HEAD`).
-- That the workflow branch and state directory have been removed.
+- That the gremlin branch and state directory have been removed.
 
 *If `GH_MODE=true`:*
 
 Tell the user:
 - The PR URL.
 - That the PR branch `$pr_branch` was pushed and kept.
-- That the workflow branch and state directory have been removed.
+- That the gremlin branch and state directory have been removed.
 - That the working tree is now on `$pr_branch`; they can return to their previous branch with `git checkout <original_branch>`.
 
 ## Do not

@@ -1,7 +1,7 @@
 ---
 name: design
-description: Chat with the user about a feature or goal and produce a spec describing WHAT to build, not HOW. Writes the spec to /tmp by default; can hand off to /ghimplement or /localimplement at the end of the conversation.
-argument-hint: [--target <localimplement|ghimplement>] [-a <model>] [-b <model>] [<optional seed topic>]
+description: Chat with the user about a feature or goal and produce a spec describing WHAT to build, not HOW. Writes the spec to /tmp by default; can hand off to /ghgremlin or /localgremlin at the end of the conversation.
+argument-hint: [--target <localgremlin|ghgremlin>] [-a <model>] [-b <model>] [<optional seed topic>]
 ---
 
 You are having a design conversation with the user. Goal: produce a spec describing **WHAT** feature or behavior they want — **not HOW** to build it.
@@ -10,7 +10,7 @@ You are having a design conversation with the user. Goal: produce a spec describ
 
 Parse `$ARGUMENTS` before treating anything as the seed topic:
 
-- `--target <localimplement|ghimplement>` — if present, record the target and treat the remainder as the seed topic. The target was chosen by the caller (`/localimplement --design` or `/ghimplement --design`), so no need to ask the user which target to use at handoff.
+- `--target <localgremlin|ghgremlin>` — if present, record the target and treat the remainder as the seed topic. The target was chosen by the caller (`/localgremlin --design` or `/ghgremlin --design`), so no need to ask the user which target to use at handoff.
 - `-a <model>` / `-b <model>` — pipeline flags opaque to this skill. If present, record them as **pipeline flags** to be forwarded at handoff. Do not apply them to the design conversation itself.
 
 ## Ground rules
@@ -47,16 +47,16 @@ Loose and readable, not a form. Short enough to absorb in one sitting.
 
 ## Hand-off
 
-When the user signals they're ready to build — "looks good", "let's implement it", "ghimplement it", "localimplement", "hand off", or similar:
+When the user signals they're ready to build — "looks good", "let's implement it", "ghgremlin it", "localgremlin", "hand off", or similar:
 
 - **If `--target` was parsed from `$ARGUMENTS`**, invoke that target directly without asking the user. Pass any recorded pipeline flags (`-a`/`-b`) followed by the spec path:
-  - `Skill(skill="localimplement", args="<pipeline-flags> /tmp/design-<slug>.md")`
-  - `Skill(skill="ghimplement", args="<pipeline-flags> /tmp/design-<slug>.md")`
+  - `Skill(skill="localgremlin", args="<pipeline-flags> /tmp/design-<slug>.md")`
+  - `Skill(skill="ghgremlin", args="<pipeline-flags> /tmp/design-<slug>.md")`
   - Omit `<pipeline-flags>` if none were recorded.
 
 - **If no `--target` was set**, offer the two targets and invoke whichever the user picks:
-  - **`/ghimplement`** — files a GitHub issue + PR, runs Copilot + Claude reviews. Good for shareable, reviewable work.
-  - **`/localimplement`** — runs the full plan → review → implement → review → address pipeline locally, no GitHub. Good for exploratory work in the current repo.
+  - **`/ghgremlin`** — files a GitHub issue + PR, runs Copilot + Claude reviews. Good for shareable, reviewable work.
+  - **`/localgremlin`** — runs the full plan → review → implement → review → address pipeline locally, no GitHub. Good for exploratory work in the current repo.
 
 If the user ends the conversation without handing off, just confirm the spec path and stop. The file is the artifact.
 
@@ -66,4 +66,4 @@ If the user ends the conversation without handing off, just confirm the spec pat
 - Not an architectural design doc. No component diagrams, module boundaries, API shapes.
 - Not a requirements mega-document. If it's over a page, you've gone too far.
 
-Someone else — or a later `/ghplan` / `/localimplement` run — turns the WHAT into a HOW.
+Someone else — or a later `/ghplan` / `/localgremlin` run — turns the WHAT into a HOW.

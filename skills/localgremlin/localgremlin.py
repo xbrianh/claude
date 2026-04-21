@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Background pipeline for the /localimplement skill.
+"""Background gremlin for the /localgremlin skill.
 
-Runs under the _bg launcher (which exports WF_ID and manages state.json under
-${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<WF_ID>/). Direct
-invocations have no WF_ID and nest their artifacts under
+Runs under the _bg launcher (which exports GR_ID and manages state.json under
+${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins/<GR_ID>/). Direct
+invocations have no GR_ID and nest their artifacts under
 $STATE_ROOT/direct/<ts>-<rand>/artifacts/ so they're visually separated from
-real workflows and can be pruned on a simpler age-based heuristic.
+real gremlins and can be pruned on a simpler age-based heuristic.
 
 Artifacts (plan.md, the three review-code-*.md files, and raw stream-json
 traces) live under that session dir — outside the product branch — so they
@@ -13,8 +13,8 @@ survive worktree removal and aren't committed into whatever branch the
 implementation stage produced.
 
 Stages: plan → implement → review-code (triple-lens parallel) → address-code.
-The pipeline shells out to ~/.claude/skills/_bg/set-stage.sh at each boundary
-so `/workflows` and the session-summary hook can see where it is; sub_stage
+The gremlin shells out to ~/.claude/skills/_bg/set-stage.sh at each boundary
+so `/gremlins` and the session-summary hook can see where it is; sub_stage
 for review-code is a {holistic, detail, scope} dict that flips running→done
 as each reviewer thread finishes.
 """
@@ -37,7 +37,7 @@ from typing import List, Optional, Tuple
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 SET_STAGE_SH = pathlib.Path.home() / ".claude" / "skills" / "_bg" / "set-stage.sh"
 MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-WF_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+GR_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 CLAUDE_FLAGS = [
     "--permission-mode", "bypassPermissions",
@@ -112,18 +112,18 @@ def die(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 def set_stage(stage: str, sub_stage=None) -> None:
-    """Shell out to set-stage.sh. No-op without WF_ID or when the helper is
+    """Shell out to set-stage.sh. No-op without GR_ID or when the helper is
     missing/non-executable. Never raises — stage bookkeeping must not break
-    a running pipeline."""
-    wf_id = os.environ.get("WF_ID")
-    if not wf_id:
+    a running gremlin."""
+    gr_id = os.environ.get("GR_ID")
+    if not gr_id:
         return
     try:
         if not SET_STAGE_SH.exists() or not os.access(str(SET_STAGE_SH), os.X_OK):
             return
     except Exception:
         return
-    args = [str(SET_STAGE_SH), wf_id, stage]
+    args = [str(SET_STAGE_SH), gr_id, stage]
     if sub_stage is not None:
         try:
             args.append(json.dumps(sub_stage))
@@ -425,12 +425,12 @@ def resolve_session_dir() -> pathlib.Path:
     state_root = pathlib.Path(
         os.environ.get("XDG_STATE_HOME")
         or os.path.join(os.path.expanduser("~"), ".local", "state")
-    ) / "claude-workflows"
-    wf_id = os.environ.get("WF_ID", "")
-    if wf_id:
-        if not WF_ID_RE.match(wf_id):
-            die(f"invalid WF_ID: {wf_id}")
-        session_dir = state_root / wf_id / "artifacts"
+    ) / "claude-gremlins"
+    gr_id = os.environ.get("GR_ID", "")
+    if gr_id:
+        if not GR_ID_RE.match(gr_id):
+            die(f"invalid GR_ID: {gr_id}")
+        session_dir = state_root / gr_id / "artifacts"
     else:
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         rand = secrets.token_hex(3)  # 6 hex chars
@@ -498,7 +498,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     # Short-only flags to preserve the bash `getopts "p:i:x:a:b:c:"` contract —
     # no `--plan-model` etc. leak in via argparse's default long-form expansion.
     usage = (
-        'usage: localimplement.py [-p <plan-model>] [-i <impl-model>] '
+        'usage: localgremlin.py [-p <plan-model>] [-i <impl-model>] '
         '[-x <address-model>] [-a <holistic-review-model>] '
         '[-b <detail-review-model>] [-c <scope-review-model>] "<instructions>"'
     )
@@ -511,7 +511,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("-c", dest="scope", default="sonnet")
     parser.add_argument("instructions", nargs="*")
     # No try/except around parse_args: argparse already prints its own
-    # `usage: …\nlocalimplement.py: error: <specific>` to stderr before
+    # `usage: …\nlocalgremlin.py: error: <specific>` to stderr before
     # raising SystemExit. Wrapping it would bury the specific error behind
     # a second copy of the usage line.
     args = parser.parse_args(argv)

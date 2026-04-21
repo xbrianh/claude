@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# SessionStart / UserPromptSubmit hook: reports on background workflows for the
-# current project. Running workflows are shown at session start; newly-finished
-# workflows are shown in both hooks (and acknowledged on first show).
+# SessionStart / UserPromptSubmit hook: reports on background gremlins for the
+# current project. Running gremlins are shown at session start; newly-finished
+# gremlins are shown in both hooks (and acknowledged on first show).
 #
 # Degrades silently on any unexpected condition: hooks must never break a
 # session.
@@ -10,11 +10,11 @@ set -u
 # Missing jq → nothing to report. Bail before `set -e` would bite us anywhere.
 command -v jq >/dev/null 2>&1 || exit 0
 
-STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins"
 [[ -d "$STATE_ROOT" ]] || exit 0
 
-# Source the shared liveness classifier. Both this hook and `workflows.py`
-# should agree on "is this pipeline still alive". Degrade gracefully if the
+# Source the shared liveness classifier. Both this hook and `gremlins.py`
+# should agree on "is this gremlin still alive". Degrade gracefully if the
 # library isn't installed yet — hooks must never break a session.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/liveness.sh" ]]; then
@@ -25,7 +25,7 @@ elif [[ -f "$HOME/.claude/skills/_bg/liveness.sh" ]]; then
     source "$HOME/.claude/skills/_bg/liveness.sh"
 else
     # Library not installed yet (can happen during a partial sync between this
-    # repo and ~/.claude/). Inline a minimal classifier so a crashed pipeline
+    # repo and ~/.claude/). Inline a minimal classifier so a crashed gremlin
     # doesn't get reported as "running" forever. The full library adds a stall
     # heuristic on top of this; we skip it in the fallback.
     liveness_of_state_file() {
@@ -147,11 +147,11 @@ fi
 
 SUMMARY=""
 if [[ $SHOW_RUNNING -eq 1 && -n "$RUNNING_BLOCK" ]]; then
-    SUMMARY+="**Background workflows — running:**${NL}${RUNNING_BLOCK}"
+    SUMMARY+="**Background gremlins — running:**${NL}${RUNNING_BLOCK}"
 fi
 if [[ $SHOW_FINISHED -eq 1 && -n "$FINISHED_BLOCK" ]]; then
     [[ -n "$SUMMARY" ]] && SUMMARY+="${NL}"
-    SUMMARY+="**Background workflows — finished since last check:**${NL}${FINISHED_BLOCK}"
+    SUMMARY+="**Background gremlins — finished since last check:**${NL}${FINISHED_BLOCK}"
 fi
 
 if [[ -n "$SUMMARY" ]]; then
@@ -159,7 +159,7 @@ if [[ -n "$SUMMARY" ]]; then
     # directive so the model surfaces it verbatim to the user. Also write the
     # raw summary to stderr: Claude Code routes non-blocking hook stderr into
     # the transcript, giving us a second user-visible channel.
-    DIRECTIVE="IMPORTANT: Before doing anything else in your next response, surface the following background-workflow status to the user verbatim (as a markdown block, no paraphrasing):${NL}${NL}"
+    DIRECTIVE="IMPORTANT: Before doing anything else in your next response, surface the following background-gremlin status to the user verbatim (as a markdown block, no paraphrasing):${NL}${NL}"
     FULL="${DIRECTIVE}${SUMMARY}"
 
     printf '%s' "$SUMMARY" >&2
@@ -189,7 +189,7 @@ while IFS= read -r ack; do
 done < <(find "$STATE_ROOT" -maxdepth 2 -name acknowledged -mtime +14 -print 2>/dev/null || true)
 
 # Prune old direct-CLI session dirs (>14 days by dir mtime). Direct
-# invocations of `localimplement.sh` write artifacts under
+# invocations of `localgremlin.sh` write artifacts under
 # `$STATE_ROOT/direct/<ts>-<rand>/` but never drop a `state.json` or
 # `acknowledged` marker, so the acknowledged-based sweep above would leave
 # them to accumulate forever. Match by dir mtime instead; the artifacts

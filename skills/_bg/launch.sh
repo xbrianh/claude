@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Generic launcher for background skill workflows (ghimplement, localimplement).
-# Sets up an isolated workdir, writes per-workflow state under
-# ${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/, spawns the real
-# pipeline detached from the caller's session, and returns fast.
+# Generic launcher for background skill gremlins (ghgremlin, localgremlin).
+# Sets up an isolated workdir, writes per-gremlin state under
+# ${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins/, spawns the real
+# gremlin detached from the caller's session, and returns fast.
 set -euo pipefail
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -10,7 +10,7 @@ die() { echo "error: $*" >&2; exit 1; }
 usage() {
     cat >&2 <<'EOF'
 usage: launch.sh [--description <phrase>] <kind> [pipeline-args...]
-       kind ∈ {ghimplement, localimplement}
+       kind ∈ {ghgremlin, localgremlin}
 EOF
     exit 1
 }
@@ -58,13 +58,13 @@ KIND="$1"
 shift
 
 case "$KIND" in
-    ghimplement|localimplement) ;;
-    *) die "invalid kind: $KIND (allowed: ghimplement, localimplement)" ;;
+    ghgremlin|localgremlin) ;;
+    *) die "invalid kind: $KIND (allowed: ghgremlin, localgremlin)" ;;
 esac
 
 command -v jq     >/dev/null 2>&1 || die "jq not found"
 command -v claude >/dev/null 2>&1 || die "claude CLI not found"
-if [[ "$KIND" == "ghimplement" ]]; then
+if [[ "$KIND" == "ghgremlin" ]]; then
     command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 fi
 
@@ -73,7 +73,7 @@ for ext in py sh; do
     candidate="$HOME/.claude/skills/$KIND/$KIND.$ext"
     if [[ -x "$candidate" ]]; then PIPELINE="$candidate"; break; fi
 done
-[[ -n "$PIPELINE" ]] || die "no executable pipeline at $HOME/.claude/skills/$KIND/$KIND.{py,sh}"
+[[ -n "$PIPELINE" ]] || die "no executable gremlin at $HOME/.claude/skills/$KIND/$KIND.{py,sh}"
 
 if PROJECT_ROOT=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null); then
     IS_GIT=1
@@ -120,7 +120,7 @@ _first_positional=""
 #   2. If the first positional argument is a readable file, use its first
 #      `# heading` line, or fall back to its basename without extension.
 #   3. The raw instructions with leading flags stripped, first 80 chars.
-#   4. Literal "workflow" last-resort (applied after slugify if result empty).
+#   4. Literal "gremlin" last-resort (applied after slugify if result empty).
 SLUG_SOURCE=""
 if [[ -n "$DESCRIPTION" ]]; then
     SLUG_SOURCE="$DESCRIPTION"
@@ -151,14 +151,14 @@ fi
 
 # If the first positional arg is a readable file (e.g. a spec from /design),
 # copy it into the artifacts dir as spec.md for durable storage. This happens
-# before the pipeline launches so the artifact is preserved even on failure.
+# before the gremlin launches so the artifact is preserved even on failure.
 _spec_copy_pending=""
 if [[ -n "$_first_positional" && -r "$_first_positional" && -f "$_first_positional" ]]; then
     _spec_copy_pending="$_first_positional"
 fi
 
 SLUG=$(slugify "$SLUG_SOURCE")
-[[ -z "$SLUG" ]] && SLUG="workflow"
+[[ -z "$SLUG" ]] && SLUG="gremlin"
 
 # Description fallback: explicit --description wins; otherwise fall back to
 # a truncated slice of the raw instructions so the status views always have
@@ -169,10 +169,10 @@ fi
 
 RANDHEX=$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 6 || true)
 [[ -n "$RANDHEX" ]] || RANDHEX="xxxxxx"
-WF_ID="${SLUG}-${RANDHEX}"
+GR_ID="${SLUG}-${RANDHEX}"
 
-STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
-STATE_DIR="$STATE_ROOT/$WF_ID"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins"
+STATE_DIR="$STATE_ROOT/$GR_ID"
 mkdir -p "$STATE_DIR" || die "could not create state dir: $STATE_DIR"
 
 if [[ -n "$_spec_copy_pending" ]]; then
@@ -180,18 +180,18 @@ if [[ -n "$_spec_copy_pending" ]]; then
     cp "$_spec_copy_pending" "$STATE_DIR/artifacts/spec.md" || die "could not copy spec to artifacts: $_spec_copy_pending"
 fi
 
-# Isolated workdir setup. For localimplement in a git repo we create a named
-# branch (bg/localimplement/<WF_ID>) so the commits the pipeline makes stay
-# reachable after finish.sh runs. For ghimplement we use --detach because the
-# pipeline's stage 2b creates and pushes its own issue-N-<slug> branch; a
+# Isolated workdir setup. For localgremlin in a git repo we create a named
+# branch (bg/localgremlin/<GR_ID>) so the commits the gremlin makes stay
+# reachable after finish.sh runs. For ghgremlin we use --detach because the
+# gremlin's stage 2b creates and pushes its own issue-N-<slug> branch; a
 # named bg/* ref would be a no-op.
 BRANCH=""
 if [[ $IS_GIT -eq 1 ]]; then
     WORKDIR=$(mktemp -d -t "aibg-$KIND.XXXXXX") || die "mktemp failed"
     rmdir "$WORKDIR" || die "rmdir $WORKDIR failed"
-    if [[ "$KIND" == "localimplement" ]]; then
+    if [[ "$KIND" == "localgremlin" ]]; then
         SETUP_KIND="worktree-branch"
-        BRANCH="bg/localimplement/$WF_ID"
+        BRANCH="bg/localgremlin/$GR_ID"
         git -C "$PROJECT_ROOT" worktree add -b "$BRANCH" "$WORKDIR" HEAD >/dev/null \
             || die "git worktree add -b failed"
     else
@@ -210,7 +210,7 @@ NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 STATE_FILE="$STATE_DIR/state.json"
 STATE_TMP="$STATE_FILE.tmp"
 jq -n \
-    --arg id            "$WF_ID" \
+    --arg id            "$GR_ID" \
     --arg kind          "$KIND" \
     --arg project_root  "$PROJECT_ROOT" \
     --arg workdir       "$WORKDIR" \
@@ -228,16 +228,16 @@ jq -n \
 mv "$STATE_TMP" "$STATE_FILE"
 
 # Export vars the child bash references via its single-quoted -c string.
-export PIPELINE WF_ID
+export PIPELINE GR_ID
 
-# Subshell + nohup detaches the pipeline from the caller's session: when the
+# Subshell + nohup detaches the gremlin from the caller's session: when the
 # subshell exits, the backgrounded child is reparented to init (PPID=1), so it
 # survives both parent-shell exit and Claude Code quit. nohup belt-and-
-# suspenders the SIGHUP case. finish.sh is invoked after the pipeline to write
+# suspenders the SIGHUP case. finish.sh is invoked after the gremlin to write
 # the terminal state.
 (
     cd "$WORKDIR"
-    nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$WF_ID" "$EC"' \
+    nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
         -- "$@" </dev/null >"$STATE_DIR/log" 2>&1 &
     echo $! >"$STATE_DIR/pid"
 )
@@ -250,12 +250,12 @@ if [[ -n "$PID" ]]; then
 fi
 
 cat <<EOF
-workflow id: $WF_ID
+gremlin id:  $GR_ID
 workdir:     $WORKDIR
 log:         $STATE_DIR/log
 state file:  $STATE_FILE
 pid:         ${PID:-unknown}
 
-The $KIND pipeline is running in the background. You'll be notified in a future
+The $KIND gremlin is running in the background. You'll be notified in a future
 Claude session for this project when it finishes.
 EOF

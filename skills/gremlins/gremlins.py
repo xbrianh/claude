@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# /workflows — on-demand status of background workflow pipelines.
-# Reads every ${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows/<id>/state.json,
+# /gremlins — on-demand status of background gremlins.
+# Reads every ${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins/<id>/state.json,
 # applies the shared liveness classifier inline, and prints one scannable line per
-# workflow.
+# gremlin.
 #
 # Exit 0 always: an unexpected error logs to stderr and falls through. Same
 # "never break a session" principle as the session-summary hook.
@@ -27,7 +27,7 @@ BG_STALL_SECS = int(os.environ.get("BG_STALL_SECS") or 2700)
 
 STATE_ROOT = os.path.join(
     os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")),
-    "claude-workflows",
+    "claude-gremlins",
 )
 
 FMT = "%-5s  %-47s  %-22s  %-28s  %-5s  %s"
@@ -63,11 +63,11 @@ def humanize_age(started_at: str) -> str:
     return f"{diff // 86400}d"
 
 
-def display_id(wf_id: str) -> str:
+def display_id(gr_id: str) -> str:
     """Compact old-format IDs to their trailing rand6 hex; pass new-format through."""
-    if re.match(r"^[0-9]{8}-[0-9]{6}-[0-9]+-([a-f0-9]{6}|xxxxxx)$", wf_id):
-        return wf_id.rsplit("-", 1)[-1]
-    return wf_id
+    if re.match(r"^[0-9]{8}-[0-9]{6}-[0-9]+-([a-f0-9]{6}|xxxxxx)$", gr_id):
+        return gr_id.rsplit("-", 1)[-1]
+    return gr_id
 
 
 def render_sub_stage(sub) -> str:
@@ -83,7 +83,7 @@ def render_sub_stage(sub) -> str:
 
 def liveness_of_state_file(sf: str, state=None) -> str:
     """
-    Classify a workflow's liveness from its state.json path.
+    Classify a gremlin's liveness from its state.json path.
     Returns one of: running, dead:<reason>, stalled:<reason>.
     Replicates liveness.sh inline — no shell-out.
     Pass an already-loaded state dict to avoid a second JSON parse.
@@ -98,23 +98,23 @@ def liveness_of_state_file(sf: str, state=None) -> str:
         except Exception:
             return ""
 
-    wf_status = state.get("status")
-    wf_pid = state.get("pid")
-    wf_exit_code = state.get("exit_code")
+    gr_status = state.get("status")
+    gr_pid = state.get("pid")
+    gr_exit_code = state.get("exit_code")
 
     # Terminal: finish.sh ran → `finished` marker exists.
     if os.path.isfile(os.path.join(wdir, "finished")):
-        if wf_exit_code is not None and wf_exit_code != 0 and wf_exit_code != "null":
-            return f"dead:exit {wf_exit_code}"
+        if gr_exit_code is not None and gr_exit_code != 0 and gr_exit_code != "null":
+            return f"dead:exit {gr_exit_code}"
         return "dead:finished"
 
-    if wf_status == "running":
+    if gr_status == "running":
         # PID gone but no finish marker → crashed silently.
-        if wf_pid is not None and wf_pid != "null":
+        if gr_pid is not None and gr_pid != "null":
             try:
-                os.kill(int(wf_pid), 0)
+                os.kill(int(gr_pid), 0)
             except (OSError, ValueError):
-                return f"dead:crashed (pid {wf_pid} gone)"
+                return f"dead:crashed (pid {gr_pid} gone)"
 
         # Stall heuristic: log file hasn't moved in BG_STALL_SECS.
         log_path = os.path.join(wdir, "log")
@@ -130,9 +130,9 @@ def liveness_of_state_file(sf: str, state=None) -> str:
         return "running"
 
     # Non-running status without a finished marker.
-    if wf_exit_code is not None and wf_exit_code != 0 and wf_exit_code != "null":
-        return f"dead:exit {wf_exit_code}"
-    return f"dead:{wf_status or 'unknown'}"
+    if gr_exit_code is not None and gr_exit_code != 0 and gr_exit_code != "null":
+        return f"dead:exit {gr_exit_code}"
+    return f"dead:{gr_status or 'unknown'}"
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ def liveness_of_state_file(sf: str, state=None) -> str:
 # ---------------------------------------------------------------------------
 
 def iter_state_files():
-    """Yield (wf_id, state_file_path, wdir) for every workflow in STATE_ROOT."""
+    """Yield (gr_id, state_file_path, wdir) for every gremlin in STATE_ROOT."""
     if not os.path.isdir(STATE_ROOT):
         return
     try:
@@ -164,9 +164,9 @@ def load_state(sf: str):
 
 
 def kind_short(kind: str) -> str:
-    if kind == "localimplement":
+    if kind == "localgremlin":
         return "local"
-    if kind == "ghimplement":
+    if kind == "ghgremlin":
         return "gh"
     return kind or ""
 
@@ -201,8 +201,8 @@ def parse_duration(s: str) -> int:
 # Row building
 # ---------------------------------------------------------------------------
 
-def build_row(wf_id, sf, wdir, state, live):
-    """Return a dict of display fields for a workflow row."""
+def build_row(gr_id, sf, wdir, state, live):
+    """Return a dict of display fields for a gremlin row."""
     raw_kind = state.get("kind", "")
     k = kind_short(raw_kind)
     pr = state.get("project_root", "")
@@ -220,7 +220,7 @@ def build_row(wf_id, sf, wdir, state, live):
     live_trim = live[:28]
     desc_trim = desc[:60]
     age = humanize_age(started_at)
-    sid = display_id(wf_id)
+    sid = display_id(gr_id)
 
     return {
         "started_at": started_at,
@@ -232,7 +232,7 @@ def build_row(wf_id, sf, wdir, state, live):
         "age": age,
         "desc": desc_trim,
         "project_root": pr,
-        "wf_id": wf_id,
+        "gr_id": gr_id,
         "wdir": wdir,
         "state": state,
     }
@@ -249,55 +249,55 @@ def print_table(rows):
 # Stop / rescue helpers
 # ---------------------------------------------------------------------------
 
-PIPELINE_STAGES = {
-    "localimplement": ["plan", "implement", "review-code", "address-code"],
-    "ghimplement": ["plan", "implement", "commit-pr", "request-copilot", "ghreview", "wait-copilot", "ghaddress"],
+GREMLIN_STAGES = {
+    "localgremlin": ["plan", "implement", "review-code", "address-code"],
+    "ghgremlin": ["plan", "implement", "commit-pr", "request-copilot", "ghreview", "wait-copilot", "ghaddress"],
 }
 
-PIPELINE_SCRIPTS = {
-    "localimplement": "~/.claude/skills/localimplement/localimplement.sh",
-    "ghimplement": "~/.claude/skills/ghimplement/ghimplement.sh",
+GREMLIN_SCRIPTS = {
+    "localgremlin": "~/.claude/skills/localgremlin/localgremlin.py",
+    "ghgremlin": "~/.claude/skills/ghgremlin/ghgremlin.sh",
 }
 
 
-def resolve_workflow(target: str):
-    """Resolve id prefix to a single (wf_id, sf, wdir) or print error and return None."""
+def resolve_gremlin(target: str):
+    """Resolve id prefix to a single (gr_id, sf, wdir) or print error and return None."""
     matches = []
-    for wf_id, sf, wdir in iter_state_files():
-        if target in wf_id:
-            matches.append((wf_id, sf, wdir))
+    for gr_id, sf, wdir in iter_state_files():
+        if target in gr_id:
+            matches.append((gr_id, sf, wdir))
     if not matches:
-        print(f"no workflow matched: {target}")
+        print(f"no gremlin matched: {target}")
         return None
     if len(matches) > 1:
-        print(f"ambiguous id '{target}' matched {len(matches)} workflows — use a longer prefix:")
-        for wf_id, _, _ in matches:
-            print(f"  {wf_id}")
+        print(f"ambiguous id '{target}' matched {len(matches)} gremlins — use a longer prefix:")
+        for gr_id, _, _ in matches:
+            print(f"  {gr_id}")
         return None
     return matches[0]
 
 
 def do_stop(target: str) -> bool:
-    match = resolve_workflow(target)
+    match = resolve_gremlin(target)
     if match is None:
         return False
 
-    wf_id, sf, wdir = match
+    gr_id, sf, wdir = match
     state = load_state(sf)
     if not state:
-        print(f"error: could not read state for {wf_id}")
+        print(f"error: could not read state for {gr_id}")
         return False
 
     live = liveness_of_state_file(sf, state)
 
     if live == "dead:finished":
-        print(f"workflow {wf_id} already finished successfully — nothing to stop")
+        print(f"gremlin {gr_id} already finished successfully — nothing to stop")
         return False
     if live == "dead:stopped":
-        print(f"workflow {wf_id} was already stopped")
+        print(f"gremlin {gr_id} was already stopped")
         return False
     if live.startswith("dead:"):
-        print(f"workflow {wf_id} is already dead ({live})")
+        print(f"gremlin {gr_id} is already dead ({live})")
         print("Use 'rescue' to diagnose and continue from the failed stage.")
         return False
 
@@ -305,12 +305,12 @@ def do_stop(target: str) -> bool:
     pid = state.get("pid")
 
     if pid is None:
-        print(f"error: no PID in state for {wf_id}")
+        print(f"error: no PID in state for {gr_id}")
         return False
     try:
         pid = int(pid)
     except (ValueError, TypeError):
-        print(f"error: invalid PID {pid!r} in state for {wf_id}")
+        print(f"error: invalid PID {pid!r} in state for {gr_id}")
         return False
 
     # Derive process group and send SIGTERM to the whole group.
@@ -365,19 +365,19 @@ def do_stop(target: str) -> bool:
         except OSError as e:
             print(f"warning: could not patch state.json: {e}")
 
-    print(f"stopped workflow {wf_id} (stage: {stage})")
+    print(f"stopped gremlin {gr_id} (stage: {stage})")
     return True
 
 
 def build_rescue_prompt(state, wdir, log_tail, artifact_paths):
-    kind = state.get("kind", "localimplement")
+    kind = state.get("kind", "localgremlin")
     stage = state.get("stage") or "unknown"
     instructions = state.get("instructions") or "(not recorded)"
     description = state.get("description") or ""
     workdir = state.get("workdir") or wdir
 
-    stages = PIPELINE_STAGES.get(kind, [])
-    pipeline_script = PIPELINE_SCRIPTS.get(kind, f"~/.claude/skills/{kind}/{kind}.sh")
+    stages = GREMLIN_STAGES.get(kind, [])
+    gremlin_script = GREMLIN_SCRIPTS.get(kind, f"~/.claude/skills/{kind}/{kind}.sh")
 
     if stage in stages:
         remaining = stages[stages.index(stage) + 1:]
@@ -396,7 +396,7 @@ def build_rescue_prompt(state, wdir, log_tail, artifact_paths):
     rescue_note_path = os.path.join(wdir, "artifacts", f"rescue-{timestamp}.md")
     log_tail_safe = log_tail.replace("```", "` ` `")
 
-    return f"""You are rescuing a failed background workflow pipeline.
+    return f"""You are rescuing a failed background gremlin.
 
 ## Original task
 
@@ -407,9 +407,9 @@ Failed at stage: {stage}
 Instructions:
 {instructions}
 
-## Pipeline reference
+## Gremlin reference
 
-Pipeline script: {pipeline_script}
+Gremlin script: {gremlin_script}
 Stage order for {kind}: {' → '.join(stages)}
 Remaining stages to complete (after failed stage): {' → '.join(remaining) or '(none — failed stage was the last one)'}
 
@@ -428,38 +428,38 @@ Remaining stages to complete (after failed stage): {' → '.join(remaining) or '
    Commit your changes when the implement stage is complete.
 4. Write a brief rescue note to `{rescue_note_path}` describing what failed and what you fixed.
 
-Work directly in the current directory. Do not re-invoke the pipeline script.
+Work directly in the current directory. Do not re-invoke the gremlin script.
 """
 
 
 def do_rescue(target: str) -> bool:
-    match = resolve_workflow(target)
+    match = resolve_gremlin(target)
     if match is None:
         return False
 
-    wf_id, sf, wdir = match
+    gr_id, sf, wdir = match
     state = load_state(sf)
     if not state:
-        print(f"error: could not read state for {wf_id}")
+        print(f"error: could not read state for {gr_id}")
         return False
 
     live = liveness_of_state_file(sf, state)
 
     if live == "running":
-        print(f"workflow {wf_id} is still running — use 'stop' first, then rescue")
+        print(f"gremlin {gr_id} is still running — use 'stop' first, then rescue")
         return False
     if live == "dead:finished":
-        print(f"workflow {wf_id} finished successfully — nothing to rescue")
+        print(f"gremlin {gr_id} finished successfully — nothing to rescue")
         return False
     if live.startswith("stalled:"):
-        print(f"workflow {wf_id} is stalled but its process is still alive — stopping it first...")
+        print(f"gremlin {gr_id} is stalled but its process is still alive — stopping it first...")
         if not do_stop(target):
-            print("error: could not stop the stalled workflow — aborting rescue")
+            print("error: could not stop the stalled gremlin — aborting rescue")
             return False
 
     workdir = state.get("workdir")
     if not workdir:
-        print(f"error: no workdir recorded in state for {wf_id} — cannot rescue")
+        print(f"error: no workdir recorded in state for {gr_id} — cannot rescue")
         return False
 
     stage = state.get("stage") or "unknown"
@@ -484,7 +484,7 @@ def do_rescue(target: str) -> bool:
 
     prompt = build_rescue_prompt(state, wdir, log_tail, artifact_paths)
 
-    print(f"Rescuing workflow {wf_id} (stage: {stage}, liveness: {live})")
+    print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
     print(f"Working directory: {workdir}")
     print("Running rescue agent inline — Ctrl-C to abort.")
     print()
@@ -493,7 +493,7 @@ def do_rescue(target: str) -> bool:
         result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
         if result.returncode == 0:
             print()
-            print(f"Rescue completed for {wf_id}.")
+            print(f"Rescue completed for {gr_id}.")
             print("Run /localland if you are satisfied with the result.")
             return True
         else:
@@ -514,22 +514,22 @@ def do_rescue(target: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def do_ack(target: str):
-    """Acknowledge a single workflow by substring match."""
+    """Acknowledge a single gremlin by substring match."""
     matches = []
-    for wf_id, sf, wdir in iter_state_files():
-        if target in wf_id:
-            matches.append((wf_id, sf, wdir))
+    for gr_id, sf, wdir in iter_state_files():
+        if target in gr_id:
+            matches.append((gr_id, sf, wdir))
 
     if not matches:
-        print(f"no workflow matched: {target}")
+        print(f"no gremlin matched: {target}")
         return
     if len(matches) > 1:
-        print(f"ambiguous id '{target}' matched {len(matches)} workflows — use a longer prefix:")
-        for wf_id, _, _ in matches:
-            print(f"  {wf_id}")
+        print(f"ambiguous id '{target}' matched {len(matches)} gremlins — use a longer prefix:")
+        for gr_id, _, _ in matches:
+            print(f"  {gr_id}")
         return
 
-    wf_id, sf, wdir = matches[0]
+    gr_id, sf, wdir = matches[0]
     live = liveness_of_state_file(sf)
     if live.startswith("dead:"):
         try:
@@ -537,18 +537,18 @@ def do_ack(target: str):
                 pass
         except OSError:
             pass
-        print(f"acknowledged {wf_id} ({live})")
+        print(f"acknowledged {gr_id} ({live})")
     else:
         print(
-            f"skipping {wf_id} ({live} is still running; "
-            "only dead/finished workflows can be acknowledged)"
+            f"skipping {gr_id} ({live} is still running; "
+            "only dead/finished gremlins can be acknowledged)"
         )
 
 
 def do_ack_all():
-    """Acknowledge every dead workflow."""
+    """Acknowledge every dead gremlin."""
     matched = 0
-    for wf_id, sf, wdir in iter_state_files():
+    for gr_id, sf, wdir in iter_state_files():
         live = liveness_of_state_file(sf)
         if live.startswith("dead:"):
             try:
@@ -556,39 +556,39 @@ def do_ack_all():
                     pass
             except OSError:
                 pass
-            print(f"acknowledged {wf_id} ({live})")
+            print(f"acknowledged {gr_id} ({live})")
             matched += 1
     if matched == 0:
         print("nothing to acknowledge.")
 
 
-def expected_branch(state: dict, wf_id: str):
-    """Return the durable branch name for a workflow, or None if there isn't one."""
+def expected_branch(state: dict, gr_id: str):
+    """Return the durable branch name for a gremlin, or None if there isn't one."""
     kind = state.get("kind", "")
-    if kind == "localimplement":
-        return f"bg/localimplement/{wf_id}"
+    if kind == "localgremlin":
+        return f"bg/localgremlin/{gr_id}"
     return None
 
 
 def do_rm(target: str) -> bool:
-    match = resolve_workflow(target)
+    match = resolve_gremlin(target)
     if match is None:
         return False
 
-    wf_id, sf, wdir = match
+    gr_id, sf, wdir = match
     state = load_state(sf)
     if not state:
-        print(f"error: could not read state for {wf_id}")
+        print(f"error: could not read state for {gr_id}")
         return False
 
     live = liveness_of_state_file(sf, state)
 
     if not live:
-        print(f"error: could not determine liveness for {wf_id}")
+        print(f"error: could not determine liveness for {gr_id}")
         return False
 
     if live == "running" or live.startswith("stalled:"):
-        print(f"workflow {wf_id} is still live ({live}) — use 'stop' first, then rm")
+        print(f"gremlin {gr_id} is still live ({live}) — use 'stop' first, then rm")
         return False
 
     workdir = state.get("workdir") or ""
@@ -598,7 +598,7 @@ def do_rm(target: str) -> bool:
         cwd_real = os.path.realpath(os.getcwd())
         worktree_real = os.path.realpath(workdir)
         if cwd_real == worktree_real or cwd_real.startswith(worktree_real + os.sep):
-            print("you are inside this workflow's worktree — cd elsewhere before running rm")
+            print("you are inside this gremlin's worktree — cd elsewhere before running rm")
             return False
 
     project_root = state.get("project_root") or ""
@@ -622,7 +622,7 @@ def do_rm(target: str) -> bool:
                 print(f"warning: could not remove worktree {workdir}: {e}")
 
     # Delete the durable branch.
-    branch = expected_branch(state, wf_id)
+    branch = expected_branch(state, gr_id)
     if branch:
         result = subprocess.run(
             ["git", "branch", "-D", branch],
@@ -641,7 +641,7 @@ def do_rm(target: str) -> bool:
     except OSError as e:
         print(f"warning: could not remove state directory {wdir}: {e}")
 
-    print(f"rm: workflow {wf_id} cleaned up")
+    print(f"rm: gremlin {gr_id} cleaned up")
     return True
 
 
@@ -654,23 +654,23 @@ def collect_rows(here_root=None, kind_filter=None, since_secs=None,
     """
     Collect and return a list of row dicts, sorted by started_at ascending.
 
-    here_root         — if set, restrict to workflows with this project_root.
+    here_root         — if set, restrict to gremlins with this project_root.
     kind_filter       — if set ('local' or 'gh'), restrict to that kind.
-    since_secs        — if set, restrict to workflows started within this many seconds.
+    since_secs        — if set, restrict to gremlins started within this many seconds.
     liveness_filter   — if set, a set of prefixes ('running', 'dead', 'stalled').
-    include_acknowledged — if True, include acknowledged workflows (for drill-in / --recent).
+    include_acknowledged — if True, include acknowledged gremlins (for drill-in / --recent).
     """
     now = time.time()
     rows = []
-    for wf_id, sf, wdir in iter_state_files():
+    for gr_id, sf, wdir in iter_state_files():
         if not include_acknowledged and os.path.isfile(os.path.join(wdir, "acknowledged")):
             continue
 
         state = load_state(sf)
         if not state:
             continue
-        wf_id_from_state = state.get("id") or wf_id
-        if not wf_id_from_state:
+        gr_id_from_state = state.get("id") or gr_id
+        if not gr_id_from_state:
             continue
 
         live = liveness_of_state_file(sf, state)
@@ -698,7 +698,7 @@ def collect_rows(here_root=None, kind_filter=None, since_secs=None,
             if not matched_live:
                 continue
 
-        row = build_row(wf_id_from_state, sf, wdir, state, live)
+        row = build_row(gr_id_from_state, sf, wdir, state, live)
         rows.append(row)
 
     rows.sort(key=lambda r: r["started_at"])
@@ -735,16 +735,16 @@ def do_list(args, here_root=None):
 
     if not rows:
         if here_root is not None:
-            print(f"No active workflows for project: {here_root}")
+            print(f"No active gremlins for project: {here_root}")
         else:
-            print("No active workflows on this machine.")
+            print("No active gremlins on this machine.")
         return
 
     print_table(rows)
 
 
 def do_recent(args, here_root=None):
-    """--recent [N]: show dead workflows started within N hours."""
+    """--recent [N]: show dead gremlins started within N hours."""
     n_hours = args.recent
     since_secs = n_hours * 3600
 
@@ -758,34 +758,34 @@ def do_recent(args, here_root=None):
 
     if not rows:
         if here_root is not None:
-            print(f"No recent workflows for project: {here_root}")
+            print(f"No recent gremlins for project: {here_root}")
         else:
-            print("No recent workflows on this machine.")
+            print("No recent gremlins on this machine.")
         return
 
     print_table(rows)
 
 
 def do_drill_in(target: str):
-    """Print every field of a uniquely-matched workflow in a labeled block."""
+    """Print every field of a uniquely-matched gremlin in a labeled block."""
     matches = []
-    for wf_id, sf, wdir in iter_state_files():
-        if target in wf_id:
-            matches.append((wf_id, sf, wdir))
+    for gr_id, sf, wdir in iter_state_files():
+        if target in gr_id:
+            matches.append((gr_id, sf, wdir))
 
     if not matches:
-        print(f"no workflow matched: {target}")
+        print(f"no gremlin matched: {target}")
         return
     if len(matches) > 1:
-        print(f"ambiguous id '{target}' matched {len(matches)} workflows — use a longer prefix:")
-        for wf_id, _, _ in matches:
-            print(f"  {wf_id}")
+        print(f"ambiguous id '{target}' matched {len(matches)} gremlins — use a longer prefix:")
+        for gr_id, _, _ in matches:
+            print(f"  {gr_id}")
         return
 
-    wf_id, sf, wdir = matches[0]
+    gr_id, sf, wdir = matches[0]
     state = load_state(sf)
     if not state:
-        print(f"error: could not read state for {wf_id}")
+        print(f"error: could not read state for {gr_id}")
         return
 
     live = liveness_of_state_file(sf)
@@ -798,7 +798,7 @@ def do_drill_in(target: str):
     if epoch is not None:
         local_start = datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S %Z")
 
-    print(f"workflow: {wf_id}")
+    print(f"gremlin: {gr_id}")
     print(f"  liveness : {live}")
     print(f"  age      : {age}")
     if local_start:
@@ -834,52 +834,52 @@ def do_drill_in(target: str):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        prog="workflows.py",
-        description="On-demand status of background workflow pipelines.",
+        prog="gremlins.py",
+        description="On-demand status of background gremlins.",
         epilog=(
             "Subcommands (positional, before flags):\n"
-            "  stop <id>     Send SIGTERM to a running workflow and wait for it to exit.\n"
-            "  rescue <id>   Diagnose and resume a dead or stalled workflow inline.\n"
-            "  rm <id>       Delete a dead/finished workflow's state directory, worktree, and branch.\n"
+            "  stop <id>     Send SIGTERM to a running gremlin and wait for it to exit.\n"
+            "  rescue <id>   Diagnose and resume a dead or stalled gremlin inline.\n"
+            "  rm <id>       Delete a dead/finished gremlin's state directory, worktree, and branch.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=True,
     )
     parser.add_argument(
         "--here", action="store_true",
-        help="Only workflows whose project_root matches this repo.",
+        help="Only gremlins whose project_root matches this repo.",
     )
     parser.add_argument(
         "--ack", metavar="TARGET",
-        help="Acknowledge (hide) a dead/finished workflow. Accepts full id or substring.",
+        help="Acknowledge (hide) a dead/finished gremlin. Accepts full id or substring.",
     )
     parser.add_argument(
         "--ack-all", action="store_true", dest="ack_all",
-        help="Acknowledge every dead/finished workflow.",
+        help="Acknowledge every dead/finished gremlin.",
     )
     parser.add_argument(
         "--running", action="store_true",
-        help="Show only running workflows.",
+        help="Show only running gremlins.",
     )
     parser.add_argument(
         "--dead", action="store_true",
-        help="Show only dead workflows.",
+        help="Show only dead gremlins.",
     )
     parser.add_argument(
         "--stalled", action="store_true",
-        help="Show only stalled workflows.",
+        help="Show only stalled gremlins.",
     )
     parser.add_argument(
         "--kind", choices=["local", "gh"], metavar="local|gh",
-        help="Filter to a specific workflow kind.",
+        help="Filter to a specific gremlin kind.",
     )
     parser.add_argument(
         "--since", metavar="DURATION",
-        help="Show only workflows started within DURATION (e.g. 30s, 5m, 2h, 1d).",
+        help="Show only gremlins started within DURATION (e.g. 30s, 5m, 2h, 1d).",
     )
     parser.add_argument(
         "--recent", nargs="?", const=24, type=int, metavar="N",
-        help="Show recently-finished workflows started within N hours (default 24). "
+        help="Show recently-finished gremlins started within N hours (default 24). "
              "Mutually exclusive with --running/--dead/--stalled.",
     )
     parser.add_argument(
@@ -889,7 +889,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "id_prefix", nargs="?", metavar="id-prefix",
-        help="Substring to drill into a single workflow. Mutually exclusive with --watch.",
+        help="Substring to drill into a single gremlin. Mutually exclusive with --watch.",
     )
     parser.add_argument(
         "--all", action="store_true", help=argparse.SUPPRESS,
@@ -930,12 +930,12 @@ def _dispatch_subcommand():
     sc_idx = next(i for i, a in enumerate(raw) if a == subcommand)
     trailing = [a for a in raw[sc_idx + 1:] if not a.startswith("-")]
     if not trailing:
-        print(f"usage: workflows {subcommand} <id-prefix>")
+        print(f"usage: gremlins {subcommand} <id-prefix>")
         sys.exit(1)
 
     target = trailing[0]
     if not os.path.isdir(STATE_ROOT):
-        print("No workflows have been launched on this machine.")
+        print("No gremlins have been launched on this machine.")
         sys.exit(0)
 
     if subcommand == "stop":
@@ -961,7 +961,7 @@ def main():
 
     # Early exit if state root doesn't exist.
     if not os.path.isdir(STATE_ROOT):
-        print("No workflows have been launched on this machine.")
+        print("No gremlins have been launched on this machine.")
         sys.exit(0)
 
     # Ack modes don't need here_root.
@@ -1012,5 +1012,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(f"workflows: unexpected error: {exc}", file=sys.stderr)
+        print(f"gremlins: unexpected error: {exc}", file=sys.stderr)
         sys.exit(0)
