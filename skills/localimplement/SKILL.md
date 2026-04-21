@@ -1,7 +1,7 @@
 ---
 name: localimplement
 description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Plan and code reviews land in `~/.local/state/claude-workflows/<workflow-id>/artifacts/` alongside the run log (kept off the product branch); the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the pipeline finishes.
-argument-hint: [--design] [-a <model>] [-b <model>] <instructions>
+argument-hint: [--design] [-a <model>] [-b <model>] [-c <model>] <instructions>
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
 
@@ -20,7 +20,7 @@ Plan and code-review artifacts live outside the product branch — they are scaf
 
 - `~/.local/state/claude-workflows/<workflow-id>/artifacts/spec.md` — the finalized design spec (only if launched with `--design`).
 - `~/.local/state/claude-workflows/<workflow-id>/artifacts/plan.md` — the implementation plan.
-- `~/.local/state/claude-workflows/<workflow-id>/artifacts/review-code-holistic-<model>.md` and `review-code-detail-<model>.md` — the two parallel code reviews.
+- `~/.local/state/claude-workflows/<workflow-id>/artifacts/review-code-holistic-<model>.md`, `review-code-detail-<model>.md`, and `review-code-scope-<model>.md` — the three parallel code reviews.
 - `~/.local/state/claude-workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
 - `~/.local/state/claude-workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path, branch name.
 - `bg/localimplement/<workflow-id>` — durable branch with **only** the code changes (no scaffolding). From the main working tree: `git checkout bg/localimplement/<workflow-id>` to inspect, merge, or discard. A squash-merge pulls in product code cleanly.

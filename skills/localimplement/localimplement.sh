@@ -74,14 +74,16 @@ MODEL_IMPL="sonnet"
 MODEL_ADDR="sonnet"
 MODEL_A="sonnet"
 MODEL_B="sonnet"
-USAGE="usage: localimplement.sh [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-a <holistic-review-model>] [-b <detail-review-model>] \"<instructions>\""
-while getopts "p:i:x:a:b:" opt; do
+MODEL_C="sonnet"
+USAGE="usage: localimplement.sh [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-a <holistic-review-model>] [-b <detail-review-model>] [-c <scope-review-model>] \"<instructions>\""
+while getopts "p:i:x:a:b:c:" opt; do
   case "$opt" in
     p) MODEL_PLAN="$OPTARG" ;;
     i) MODEL_IMPL="$OPTARG" ;;
     x) MODEL_ADDR="$OPTARG" ;;
     a) MODEL_A="$OPTARG" ;;
     b) MODEL_B="$OPTARG" ;;
+    c) MODEL_C="$OPTARG" ;;
     *) die "$USAGE" ;;
   esac
 done
@@ -93,7 +95,7 @@ INSTRUCTIONS="$*"
 # sanitized: it is the prompt this tool exists to send. Callers should treat
 # INSTRUCTIONS as a prompt to an unrestricted agent (we run with
 # --permission-mode bypassPermissions below), not an opaque arg.
-for m in "$MODEL_PLAN" "$MODEL_IMPL" "$MODEL_ADDR" "$MODEL_A" "$MODEL_B"; do
+for m in "$MODEL_PLAN" "$MODEL_IMPL" "$MODEL_ADDR" "$MODEL_A" "$MODEL_B" "$MODEL_C"; do
   [[ "$m" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid model: $m"
 done
 
@@ -127,6 +129,7 @@ mkdir -p "$SESSION_DIR"
 PLAN_FILE="$SESSION_DIR/plan.md"
 REVIEW_CODE_A="$SESSION_DIR/review-code-holistic-$MODEL_A.md"
 REVIEW_CODE_B="$SESSION_DIR/review-code-detail-$MODEL_B.md"
+REVIEW_CODE_C="$SESSION_DIR/review-code-scope-$MODEL_C.md"
 
 echo "==> session: $SESSION_DIR"
 
@@ -140,11 +143,12 @@ git rev-parse --git-dir >/dev/null 2>&1 && IN_GIT=1
 # redundant. The lens prose lives in sibling files so prompt edits don't churn
 # this script.
 
-for lens in lens-holistic-code.md lens-detail-code.md; do
+for lens in lens-holistic-code.md lens-detail-code.md lens-scope-code.md; do
   [[ -s "$SCRIPT_DIR/$lens" ]] || die "missing or empty lens file: $SCRIPT_DIR/$lens"
 done
 FOCUS_CODE_A=$(cat "$SCRIPT_DIR/lens-holistic-code.md")
 FOCUS_CODE_B=$(cat "$SCRIPT_DIR/lens-detail-code.md")
+FOCUS_CODE_C=$(cat "$SCRIPT_DIR/lens-scope-code.md")
 
 # Generic reviewer runner. CONTEXT describes what is being reviewed (an
 # implementation diff against the plan); FOCUS is the lens prompt above;
@@ -179,8 +183,8 @@ If there are no issues worth raising, write a Findings section that says so expl
 Do NOT make any code changes — only write the review file."
 }
 
-# Run two reviewers in parallel with the same context but different lenses,
-# then validate that both produced non-empty output.
+# Run three reviewers in parallel with the same context but different lenses,
+# then validate that all three produced non-empty output.
 #
 # The `( ... ) &` subshell wrapping is deliberate: without it, `$!` captures
 # the PID of `log_stream` (the last stage of the pipeline), and `log_stream`
@@ -191,51 +195,59 @@ Do NOT make any code changes — only write the review file."
 # The trailing `exit "${PIPESTATUS[0]}"` is a defensive belt-and-braces for
 # callers running without `set -e`; under the current options it is only
 # reached on the success path, where PIPESTATUS[0] is 0.
-run_dual_review() {
-  local context="$1" focus_a="$2" focus_b="$3" out_a="$4" out_b="$5" where_field="$6"
+run_triple_review() {
+  local context="$1" focus_a="$2" focus_b="$3" focus_c="$4" out_a="$5" out_b="$6" out_c="$7" where_field="$8"
   ( run_review "$MODEL_A" "$out_a" "$focus_a" "$context" "$where_field" | log_stream "review-code:$MODEL_A" "$SESSION_DIR/stream-review-code-$MODEL_A.jsonl"; exit "${PIPESTATUS[0]}" ) &
   local pid_a=$!
   ( run_review "$MODEL_B" "$out_b" "$focus_b" "$context" "$where_field" | log_stream "review-code:$MODEL_B" "$SESSION_DIR/stream-review-code-$MODEL_B.jsonl"; exit "${PIPESTATUS[0]}" ) &
   local pid_b=$!
+  ( run_review "$MODEL_C" "$out_c" "$focus_c" "$context" "$where_field" | log_stream "review-code:$MODEL_C" "$SESSION_DIR/stream-review-code-$MODEL_C.jsonl"; exit "${PIPESTATUS[0]}" ) &
+  local pid_c=$!
 
   # Inner function names leak to the global namespace in bash — prefix with
   # the outer function name so a grep for `emit_sub_stage` doesn't land here
   # and so redefinitions from anywhere else can't collide.
-  # Use stable labels "holistic"/"detail" as keys (not model names) so the
-  # JSON object stays unambiguous even when MODEL_A==MODEL_B. Include the
-  # model name inside each value so it's still visible in the status output.
-  _run_dual_review_emit_sub() {
+  # Use stable labels "holistic"/"detail"/"scope" as keys (not model names) so
+  # the JSON object stays unambiguous even when models share the same value.
+  # Include the model name inside each value so it's visible in status output.
+  _run_triple_review_emit_sub() {
     set_stage review-code "$(jq -cn \
-        --arg am "$MODEL_A" --arg bm "$MODEL_B" \
-        --arg as "$1"       --arg bs "$2" \
-        '{"holistic": "\($as) (\($am))", "detail": "\($bs) (\($bm))"}')"
+        --arg am "$MODEL_A" --arg bm "$MODEL_B" --arg cm "$MODEL_C" \
+        --arg as "$1"       --arg bs "$2"       --arg cs "$3" \
+        '{"holistic": "\($as) (\($am))", "detail": "\($bs) (\($bm))", "scope": "\($cs) (\($cm))"}')"
   }
 
-  local fail=0 a_status="running" b_status="running"
-  _run_dual_review_emit_sub "$a_status" "$b_status"
+  local fail=0 a_status="running" b_status="running" c_status="running"
+  _run_triple_review_emit_sub "$a_status" "$b_status" "$c_status"
 
   # Poll: whenever a reviewer process exits, harvest its exit code and emit a
   # sub-stage update so the status command can show mid-flight progress.
   # Correctness depends on bash auto-reaping backgrounded children in
   # non-interactive script mode, so `kill -0 $pid` on an exited child returns
   # ESRCH (we treat that as "exited") rather than succeeding against a zombie.
-  while [[ "$a_status" == "running" || "$b_status" == "running" ]]; do
+  while [[ "$a_status" == "running" || "$b_status" == "running" || "$c_status" == "running" ]]; do
     if [[ "$a_status" == "running" ]] && ! kill -0 "$pid_a" 2>/dev/null; then
       wait "$pid_a" || { echo "review $MODEL_A failed" >&2; fail=1; }
       a_status="done"
-      _run_dual_review_emit_sub "$a_status" "$b_status"
+      _run_triple_review_emit_sub "$a_status" "$b_status" "$c_status"
     fi
     if [[ "$b_status" == "running" ]] && ! kill -0 "$pid_b" 2>/dev/null; then
       wait "$pid_b" || { echo "review $MODEL_B failed" >&2; fail=1; }
       b_status="done"
-      _run_dual_review_emit_sub "$a_status" "$b_status"
+      _run_triple_review_emit_sub "$a_status" "$b_status" "$c_status"
     fi
-    [[ "$a_status" == "running" || "$b_status" == "running" ]] && sleep 2
+    if [[ "$c_status" == "running" ]] && ! kill -0 "$pid_c" 2>/dev/null; then
+      wait "$pid_c" || { echo "review $MODEL_C failed" >&2; fail=1; }
+      c_status="done"
+      _run_triple_review_emit_sub "$a_status" "$b_status" "$c_status"
+    fi
+    [[ "$a_status" == "running" || "$b_status" == "running" || "$c_status" == "running" ]] && sleep 2
   done
 
   [[ $fail -eq 0 ]] || die "one or more reviews failed"
   [[ -s "$out_a" ]] || die "review $MODEL_A did not produce $out_a"
   [[ -s "$out_b" ]] || die "review $MODEL_B did not produce $out_b"
+  [[ -s "$out_c" ]] || die "review $MODEL_C did not produce $out_c"
 }
 
 set_stage plan
@@ -300,7 +312,7 @@ else
 fi
 
 set_stage review-code
-echo "==> [3/4] reviewing code in parallel (models: $MODEL_A, $MODEL_B)"
+echo "==> [3/4] reviewing code in parallel (models: $MODEL_A, $MODEL_B, $MODEL_C)"
 
 CODE_SCOPE=""
 if [[ $IN_GIT -eq 1 ]]; then
@@ -311,21 +323,23 @@ fi
 CODE_REVIEW_CONTEXT="You are reviewing an implementation of the plan at \`$PLAN_FILE\`. Read the plan first for context.
 
 $CODE_SCOPE"
-run_dual_review "$CODE_REVIEW_CONTEXT" "$FOCUS_CODE_A" "$FOCUS_CODE_B" "$REVIEW_CODE_A" "$REVIEW_CODE_B" "**File:** \`path/to/file.ext:<line>\`"
+run_triple_review "$CODE_REVIEW_CONTEXT" "$FOCUS_CODE_A" "$FOCUS_CODE_B" "$FOCUS_CODE_C" "$REVIEW_CODE_A" "$REVIEW_CODE_B" "$REVIEW_CODE_C" "**File:** \`path/to/file.ext:<line>\`"
 echo "    holistic code review ($MODEL_A): $REVIEW_CODE_A"
 echo "    detail code review   ($MODEL_B): $REVIEW_CODE_B"
+echo "    scope code review    ($MODEL_C): $REVIEW_CODE_C"
 
 set_stage address-code
 echo "==> [4/4] addressing code reviews (model: $MODEL_ADDR)"
 ADDRESS_COMMIT_INSTR=""
-[[ $IN_GIT -eq 1 ]] && ADDRESS_COMMIT_INSTR="After making all fixes, stage the changed files by name and create a single git commit titled 'Address review feedback' whose body references both review files. Do not push."
+[[ $IN_GIT -eq 1 ]] && ADDRESS_COMMIT_INSTR="After making all fixes, stage the changed files by name and create a single git commit titled 'Address review feedback' whose body references all three review files. Do not push."
 
 claude -p --model "$MODEL_ADDR" "${CLAUDE_FLAGS[@]}" \
-  "Two independent code reviews of the most recent implementation are at:
+  "Three independent code reviews of the most recent implementation are at:
 - \`$REVIEW_CODE_A\` — **holistic** reviewer (model: $MODEL_A).
 - \`$REVIEW_CODE_B\` — **detail** reviewer (model: $MODEL_B).
+- \`$REVIEW_CODE_C\` — **scope** reviewer (model: $MODEL_C).
 
-Read both reviews. The two reviewers have different lenses by design, so their findings will mostly be complementary rather than overlapping — still deduplicate where they do overlap. For every actionable finding you agree with, make the fix in the code. For findings you disagree with or choose to skip, note them briefly in your final summary with a reason.
+Read all three reviews. The reviewers have different lenses by design, so their findings will mostly be complementary rather than overlapping — still deduplicate where they do overlap. For every actionable finding you agree with, make the fix in the code. For findings you disagree with or choose to skip, note them briefly in your final summary with a reason.
 
 $ADDRESS_COMMIT_INSTR
 

@@ -3,6 +3,8 @@ set -euo pipefail
 
 die() { echo "error: $*" >&2; exit 1; }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Stage helper: only meaningful when invoked via the _bg launcher (WF_ID set).
 SET_STAGE_SH="$HOME/.claude/skills/_bg/set-stage.sh"
 set_stage() {
@@ -163,8 +165,31 @@ gh pr edit "$PR_NUM" --repo "$REPO" --add-reviewer copilot-pull-request-reviewer
   || die "could not request Copilot review (is it enabled in repo settings?)"
 
 set_stage ghreview
-echo "==> [4/6] running /ghreview"
-claude -p "${CLAUDE_FLAGS[@]}" "/ghreview $PR_URL" | progress_tee >/dev/null
+echo "==> [4/6] running reviews in parallel (/ghreview + scope)"
+( claude -p "${CLAUDE_FLAGS[@]}" "/ghreview $PR_URL" | progress_tee >/dev/null ) &
+pid_ghreview=$!
+
+[[ -s "$SCRIPT_DIR/../localimplement/lens-scope-code.md" ]] || die "missing or empty lens file: lens-scope-code.md"
+SCOPE_LENS=$(cat "$SCRIPT_DIR/../localimplement/lens-scope-code.md")
+SCOPE_REVIEW_TMP=$(mktemp /tmp/scope-review-XXXXXX.md)
+( claude -p "${CLAUDE_FLAGS[@]}" \
+  "You are a scope reviewer for a pull request. Your task is to assess whether the diff is the right size and shape for the plan.
+
+Lens:
+$SCOPE_LENS
+
+Steps:
+1. Read the issue body for the implementation plan: run \`gh issue view $ISSUE_NUM --repo $REPO\`.
+2. Read the PR diff: run \`gh pr diff $PR_URL\`.
+3. Apply the scope lens above to the diff vs the plan.
+4. Write your findings to $SCOPE_REVIEW_TMP, then post them via: \`gh pr review $PR_URL --comment --body-file $SCOPE_REVIEW_TMP\`.
+
+If the diff is scoped correctly, write exactly: 'Scoped correctly — nothing to flag.' to $SCOPE_REVIEW_TMP, then post it." \
+  | progress_tee >/dev/null ) &
+pid_scope=$!
+
+wait "$pid_ghreview" || { kill "$pid_scope" 2>/dev/null; wait "$pid_scope" 2>/dev/null; die "/ghreview failed"; }
+wait "$pid_scope"    || die "scope reviewer failed"
 
 set_stage wait-copilot
 echo "==> [5/6] waiting for Copilot review (20s interval, 10min timeout)"
