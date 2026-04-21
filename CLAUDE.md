@@ -25,11 +25,15 @@ Create the file under the corresponding repo directory (`skills/<name>/SKILL.md`
 
 The `ghgremlin` skill invokes [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh) to run an end-to-end GitHub-issue-driven workflow: `/ghplan`, an implementation + PR creation stage, `/ghreview` (with a scope reviewer running in parallel), and `/ghaddress`.
 
+## The local gremlin
+
+The `localgremlin` skill runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py). All artifacts land in `~/.local/state/claude-gremlins/<id>/artifacts/` off the product branch.
+
 Both `/ghgremlin` and `/localgremlin` accept `--design` as a first flag to invoke `/design` before the gremlin, running an interactive spec conversation and handing off automatically when the user is ready.
 
 ## Additional skills
 
-- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (diagnose and resume inline), `rm <id>` (delete state directory, worktree directory, and branch), `land <id>` (squash-land a local gremlin or merge a gh PR and clean up). Use `--here` to filter to the current repo.
+- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (diagnose and resume inline), `rm <id>` (delete state directory, worktree directory, and branch), `close <id>` (mark finished gremlin closed), `land <id>` (squash-land a local gremlin or merge a gh PR and clean up). Use `--here` to filter to the current repo.
 
 ## Not tracked
 
