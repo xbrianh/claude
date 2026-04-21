@@ -723,6 +723,26 @@ def do_drill_in(target: str):
     for key, val in state.items():
         print(f"    {key}: {json.dumps(val)}")
 
+    print()
+    print(f"  state directory: {wdir}")
+    log_path = os.path.join(wdir, "log")
+    artifacts_dir = os.path.join(wdir, "artifacts")
+    artifact_paths = []
+    if os.path.isdir(artifacts_dir):
+        for fname in sorted(os.listdir(artifacts_dir)):
+            fpath = os.path.join(artifacts_dir, fname)
+            if os.path.isfile(fpath):
+                artifact_paths.append(fpath)
+    has_log = os.path.isfile(log_path)
+    if has_log:
+        print(f"    log: {log_path}")
+    if artifact_paths:
+        print("    artifacts:")
+        for fpath in artifact_paths:
+            print(f"      {fpath}")
+    if not has_log and not artifact_paths:
+        print("    (no log or artifacts)")
+
 
 # ---------------------------------------------------------------------------
 # Argument parsing
