@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # SessionStart / UserPromptSubmit hook: reports on background gremlins for the
 # current project. Running gremlins are shown at session start; newly-finished
-# gremlins are shown in both hooks (and closed on first show).
+# gremlins are shown in both hooks (and marked `summarized` on first show so
+# they aren't re-announced). The `closed` marker is reserved for the explicit
+# user action (`/gremlins close <id>`) and hides the gremlin from `/gremlins`.
 #
 # Degrades silently on any unexpected condition: hooks must never break a
 # session.
@@ -77,7 +79,7 @@ fi
 NL=$'\n'
 RUNNING_BLOCK=""
 FINISHED_BLOCK=""
-NEWLY_CLOSED_DIRS=()
+NEWLY_SUMMARIZED_DIRS=()
 FINISHED_COUNT=0
 
 shopt -s nullglob
@@ -99,15 +101,16 @@ for sf in "$STATE_ROOT"/*/state.json; do
     [[ "$pr" == "$PROJECT_ROOT" ]] || continue
 
     finished_marker="$wdir/finished"
+    summarized_marker="$wdir/summarized"
     closed_marker="$wdir/closed"
     log="$wdir/log"
 
     desc_suffix=""
     [[ -n "$description" ]] && desc_suffix=" — _${description}_"
 
-    if [[ -f "$finished_marker" && ! -f "$closed_marker" ]]; then
+    if [[ -f "$finished_marker" && ! -f "$summarized_marker" && ! -f "$closed_marker" ]]; then
         FINISHED_BLOCK+="- \`$id\` ($kind): **$status**${exit_code:+ (exit $exit_code)}${desc_suffix} — log: $log${NL}"
-        NEWLY_CLOSED_DIRS+=("$wdir")
+        NEWLY_SUMMARIZED_DIRS+=("$wdir")
         FINISHED_COUNT=$((FINISHED_COUNT + 1))
         continue
     fi
@@ -174,8 +177,8 @@ if [[ -n "$SUMMARY" ]]; then
         --arg ctx   "$FULL" \
         '{hookSpecificOutput: {hookEventName: $event, additionalContext: $ctx}}'
 
-    for d in "${NEWLY_CLOSED_DIRS[@]}"; do
-        touch "$d/closed" 2>/dev/null || true
+    for d in "${NEWLY_SUMMARIZED_DIRS[@]}"; do
+        touch "$d/summarized" 2>/dev/null || true
     done
 fi
 

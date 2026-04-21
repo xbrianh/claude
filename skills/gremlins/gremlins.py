@@ -1030,6 +1030,10 @@ def do_list(args, here_root=None):
         include_closed=False,
     )
 
+    # Running gremlins float to the top; within each group, older gremlins
+    # appear first by started_at.
+    rows.sort(key=lambda r: (r["live_full"] != "running", r["started_at"]))
+
     if not rows:
         if here_root is not None:
             print(f"No active gremlins for project: {here_root}")
