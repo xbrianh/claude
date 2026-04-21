@@ -82,6 +82,32 @@ fi
 INSTR_RAW="$*"
 INSTR_SUMMARY="${INSTR_RAW:0:200}"
 
+# Walk $@ skipping leading flags (and their values) to find the first
+# positional arg — this avoids contaminating slugs with "-a opus -b sonnet".
+# Heuristic: assumes each flag takes one value. Boolean flags followed
+# by a positional will swallow the positional; on miss we still produce a
+# usable slug from the raw-instructions fallback below.
+# Hoisted before SLUG_SOURCE so spec-copying (after STATE_DIR creation) can
+# reuse the same value without repeating the walk.
+_args=("$@")
+_i=0
+while (( _i < ${#_args[@]} )); do
+    _a="${_args[_i]}"
+    if [[ "$_a" == "--" ]]; then
+        _i=$((_i + 1))
+        break
+    elif [[ "$_a" == -* ]]; then
+        _i=$((_i + 1))
+        if (( _i < ${#_args[@]} )) && [[ "${_args[_i]}" != -* ]]; then
+            _i=$((_i + 1))
+        fi
+    else
+        break
+    fi
+done
+_first_positional=""
+(( _i < ${#_args[@]} )) && _first_positional="${_args[_i]}"
+
 # Slug source resolution, in priority order. This runs *before* the
 # DESCRIPTION-from-INSTR_RAW fallback so the file-path branch isn't
 # shadowed by the fallback (which would feed the slugifier a path like
@@ -95,29 +121,6 @@ SLUG_SOURCE=""
 if [[ -n "$DESCRIPTION" ]]; then
     SLUG_SOURCE="$DESCRIPTION"
 else
-    # Walk $@ skipping leading flags (and their values) to find the first
-    # positional arg — this avoids contaminating slugs with "-a opus -b sonnet".
-    # Heuristic: assumes each flag takes one value. Boolean flags followed
-    # by a positional will swallow the positional; on miss we still produce a
-    # usable slug from the raw-instructions fallback below.
-    _args=("$@")
-    _i=0
-    while (( _i < ${#_args[@]} )); do
-        _a="${_args[_i]}"
-        if [[ "$_a" == "--" ]]; then
-            _i=$((_i + 1))
-            break
-        elif [[ "$_a" == -* ]]; then
-            _i=$((_i + 1))
-            if (( _i < ${#_args[@]} )) && [[ "${_args[_i]}" != -* ]]; then
-                _i=$((_i + 1))
-            fi
-        else
-            break
-        fi
-    done
-    _first_positional=""
-    (( _i < ${#_args[@]} )) && _first_positional="${_args[_i]}"
     if [[ -n "$_first_positional" && -f "$_first_positional" ]]; then
         # Quit on first `# …` line — BSD sed doesn't accept a line-range
         # with a nested {…} block, so we use a plain pattern with `q` and
@@ -142,6 +145,14 @@ else
     fi
 fi
 
+# If the first positional arg is a readable file (e.g. a spec from /design),
+# copy it into the artifacts dir as spec.md for durable storage. This happens
+# before the pipeline launches so the artifact is preserved even on failure.
+_spec_copy_pending=""
+if [[ -n "$_first_positional" && -r "$_first_positional" && -f "$_first_positional" ]]; then
+    _spec_copy_pending="$_first_positional"
+fi
+
 SLUG=$(slugify "$SLUG_SOURCE")
 [[ -z "$SLUG" ]] && SLUG="workflow"
 
@@ -159,6 +170,11 @@ WF_ID="${SLUG}-${RANDHEX}"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-workflows"
 STATE_DIR="$STATE_ROOT/$WF_ID"
 mkdir -p "$STATE_DIR" || die "could not create state dir: $STATE_DIR"
+
+if [[ -n "$_spec_copy_pending" ]]; then
+    mkdir -p "$STATE_DIR/artifacts"
+    cp "$_spec_copy_pending" "$STATE_DIR/artifacts/spec.md" || die "could not copy spec to artifacts: $_spec_copy_pending"
+fi
 
 # Isolated workdir setup. For localimplement in a git repo we create a named
 # branch (bg/localimplement/<WF_ID>) so the commits the pipeline makes stay

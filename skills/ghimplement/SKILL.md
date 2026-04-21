@@ -1,7 +1,7 @@
 ---
 name: ghimplement
 description: Run the end-to-end plan → implement → review → address workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them. The launcher returns immediately; you'll be notified when the pipeline finishes.
-argument-hint: [-r <ref>] <instructions>
+argument-hint: [--design] [-r <ref>] <instructions>
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
 
@@ -14,6 +14,14 @@ You are running the `ghimplement` workflow **in the background**. The skill is a
 
 A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for this project when the workflow finishes.
 
+## Where artifacts go
+
+Pipeline artifacts live outside the product branch. Point the user at:
+
+- `~/.local/state/claude-workflows/<workflow-id>/artifacts/spec.md` — the finalized design spec (only if launched with `--design`).
+- `~/.local/state/claude-workflows/<workflow-id>/log` — combined stdout/stderr of the pipeline.
+- `~/.local/state/claude-workflows/<workflow-id>/state.json` — workflow status, exit code, workdir path.
+
 ## Arguments
 
 $ARGUMENTS
@@ -21,6 +29,16 @@ $ARGUMENTS
 Forward them verbatim to the launcher. Quote the instructions string so shell word-splitting doesn't break it.
 
 ## What to do
+
+If `$ARGUMENTS` begins with `--design` (it must be the first token), strip that flag and invoke the design skill instead of the launcher:
+
+```
+Skill(skill="design", args="--target ghimplement <remaining-args>")
+```
+
+Do not proceed to the launcher invocation. The design skill will run an interactive design conversation and, when the user is ready, will invoke the launcher automatically.
+
+---
 
 Before invoking the launcher, compose a short (≤60 characters) human-readable phrase that summarizes the task — this becomes the workflow's `description` in status views (`/workflows`, session-summary hook). Examples:
 
