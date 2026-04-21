@@ -234,6 +234,7 @@ def build_row(gr_id, sf, wdir, state, live):
         "project_root": pr,
         "gr_id": gr_id,
         "wdir": wdir,
+        "closed": os.path.isfile(os.path.join(wdir, "closed")),
         "state": state,
     }
 
@@ -509,57 +510,36 @@ def do_rescue(target: str) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Ack helpers
-# ---------------------------------------------------------------------------
+def do_close(target: str) -> bool:
+    match = resolve_gremlin(target)
+    if match is None:
+        return False
 
-def do_ack(target: str):
-    """Acknowledge a single gremlin by substring match."""
-    matches = []
-    for gr_id, sf, wdir in iter_state_files():
-        if target in gr_id:
-            matches.append((gr_id, sf, wdir))
+    gr_id, sf, wdir = match
+    state = load_state(sf)
+    if not state:
+        print(f"error: could not read state for {gr_id}")
+        return False
 
-    if not matches:
-        print(f"no gremlin matched: {target}")
-        return
-    if len(matches) > 1:
-        print(f"ambiguous id '{target}' matched {len(matches)} gremlins — use a longer prefix:")
-        for gr_id, _, _ in matches:
-            print(f"  {gr_id}")
-        return
+    live = liveness_of_state_file(sf, state)
+    if live == "running" or live.startswith("stalled:"):
+        print(f"gremlin {gr_id} is still live ({live}) — use 'stop' first, then close")
+        return False
 
-    gr_id, sf, wdir = matches[0]
-    live = liveness_of_state_file(sf)
-    if live.startswith("dead:"):
-        try:
-            with open(os.path.join(wdir, "acknowledged"), "a"):
-                pass
-        except OSError:
+    closed_marker = os.path.join(wdir, "closed")
+    if os.path.isfile(closed_marker):
+        print(f"gremlin {gr_id} already closed")
+        return True
+
+    try:
+        with open(closed_marker, "a"):
             pass
-        print(f"acknowledged {gr_id} ({live})")
-    else:
-        print(
-            f"skipping {gr_id} ({live} is still running; "
-            "only dead/finished gremlins can be acknowledged)"
-        )
+    except OSError as e:
+        print(f"error: could not write closed marker: {e}")
+        return False
 
-
-def do_ack_all():
-    """Acknowledge every dead gremlin."""
-    matched = 0
-    for gr_id, sf, wdir in iter_state_files():
-        live = liveness_of_state_file(sf)
-        if live.startswith("dead:"):
-            try:
-                with open(os.path.join(wdir, "acknowledged"), "a"):
-                    pass
-            except OSError:
-                pass
-            print(f"acknowledged {gr_id} ({live})")
-            matched += 1
-    if matched == 0:
-        print("nothing to acknowledge.")
+    print(f"closed {gr_id} ({live})")
+    return True
 
 
 def expected_branch(state: dict, gr_id: str):
@@ -650,7 +630,7 @@ def do_rm(target: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def collect_rows(here_root=None, kind_filter=None, since_secs=None,
-                 liveness_filter=None, include_acknowledged=False):
+                 liveness_filter=None, include_closed=False):
     """
     Collect and return a list of row dicts, sorted by started_at ascending.
 
@@ -658,12 +638,12 @@ def collect_rows(here_root=None, kind_filter=None, since_secs=None,
     kind_filter       — if set ('local' or 'gh'), restrict to that kind.
     since_secs        — if set, restrict to gremlins started within this many seconds.
     liveness_filter   — if set, a set of prefixes ('running', 'dead', 'stalled').
-    include_acknowledged — if True, include acknowledged gremlins (for drill-in / --recent).
+    include_closed    — if True, include closed gremlins (for drill-in / --recent).
     """
     now = time.time()
     rows = []
     for gr_id, sf, wdir in iter_state_files():
-        if not include_acknowledged and os.path.isfile(os.path.join(wdir, "acknowledged")):
+        if not include_closed and os.path.isfile(os.path.join(wdir, "closed")):
             continue
 
         state = load_state(sf)
@@ -730,7 +710,7 @@ def do_list(args, here_root=None):
         kind_filter=args.kind,
         since_secs=since_secs,
         liveness_filter=liveness_filter,
-        include_acknowledged=False,
+        include_closed=False,
     )
 
     if not rows:
@@ -753,8 +733,12 @@ def do_recent(args, here_root=None):
         kind_filter=args.kind,
         since_secs=since_secs,
         liveness_filter={"dead:"},
-        include_acknowledged=True,
+        include_closed=True,
     )
+
+    for row in rows:
+        if row["closed"]:
+            row["desc"] = row["desc"][:51] + " [closed]"
 
     if not rows:
         if here_root is not None:
@@ -800,6 +784,7 @@ def do_drill_in(target: str):
 
     print(f"gremlin: {gr_id}")
     print(f"  liveness : {live}")
+    print(f"  closed   : {'yes' if os.path.isfile(os.path.join(wdir, 'closed')) else 'no'}")
     print(f"  age      : {age}")
     if local_start:
         print(f"  started  : {local_start}")
@@ -841,6 +826,7 @@ def parse_args(argv=None):
             "  stop <id>     Send SIGTERM to a running gremlin and wait for it to exit.\n"
             "  rescue <id>   Diagnose and resume a dead or stalled gremlin inline.\n"
             "  rm <id>       Delete a dead/finished gremlin's state directory, worktree, and branch.\n"
+            "  close <id>    Mark a dead/finished gremlin as closed (hides it from the default view).\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=True,
@@ -848,14 +834,6 @@ def parse_args(argv=None):
     parser.add_argument(
         "--here", action="store_true",
         help="Only gremlins whose project_root matches this repo.",
-    )
-    parser.add_argument(
-        "--ack", metavar="TARGET",
-        help="Acknowledge (hide) a dead/finished gremlin. Accepts full id or substring.",
-    )
-    parser.add_argument(
-        "--ack-all", action="store_true", dest="ack_all",
-        help="Acknowledge every dead/finished gremlin.",
     )
     parser.add_argument(
         "--running", action="store_true",
@@ -903,10 +881,8 @@ def parse_args(argv=None):
 
 def render_view(args, here_root):
     """Render whichever view the flags request. Used by both normal and --watch path."""
-    has_liveness_filter = args.running or args.dead or args.stalled
-
-    if args.recent is not None and has_liveness_filter:
-        print("error: --recent cannot be combined with --running/--dead/--stalled", file=sys.stderr)
+    if args.recent is not None and (args.running or args.stalled):
+        print("error: --recent cannot be combined with --running/--stalled", file=sys.stderr)
         return
 
     if args.recent is not None:
@@ -922,7 +898,7 @@ def _dispatch_subcommand():
     """
     raw = sys.argv[1:]
     non_flags = [a for a in raw if not a.startswith("-")]
-    if not non_flags or non_flags[0] not in ("stop", "rescue", "rm"):
+    if not non_flags or non_flags[0] not in ("stop", "rescue", "rm", "close"):
         return False, False
 
     subcommand = non_flags[0]
@@ -942,6 +918,8 @@ def _dispatch_subcommand():
         ok = do_stop(target)
     elif subcommand == "rm":
         ok = do_rm(target)
+    elif subcommand == "close":
+        ok = do_close(target)
     else:
         ok = do_rescue(target)
     return True, ok
@@ -962,15 +940,6 @@ def main():
     # Early exit if state root doesn't exist.
     if not os.path.isdir(STATE_ROOT):
         print("No gremlins have been launched on this machine.")
-        sys.exit(0)
-
-    # Ack modes don't need here_root.
-    if args.ack:
-        do_ack(args.ack)
-        sys.exit(0)
-
-    if args.ack_all:
-        do_ack_all()
         sys.exit(0)
 
     # Resolve --here once.

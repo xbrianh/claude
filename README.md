@@ -53,7 +53,7 @@ The skills cluster into a GitHub-issue-driven gremlin and a local gremlin (`/loc
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
 - [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Accepts `--design` to invoke `/design` first.
 - [`/localland`](skills/localland/SKILL.md) — squash-merge a finished `/localgremlin` gremlin branch onto the current branch as a single well-messaged commit, then delete the gremlin branch and state directory. `--gh` pushes the result as a new PR against `main` instead.
-- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>` (SIGTERM a running gremlin), `rescue <id>` (diagnose and resume a dead/stalled gremlin inline), `rm <id>` (delete the state directory, log, worktree directory, and branch). Flags include `--here`, `--ack`, `--ack-all`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
+- [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>`, `rescue <id>`, `rm <id>`, `close <id>`. Flags include `--here`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
 
 `skills/ghgremlin/ghgremlin.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
@@ -64,12 +64,12 @@ Both `/ghgremlin` and `/localgremlin` run **in the background**. Both accept `--
 - Creates an isolated worktree (via `git worktree add --detach` for git projects, `cp -a` otherwise) so concurrent invocations don't collide.
 - Discovers the gremlin script by trying `<kind>.py` before `<kind>.sh` — so [`localgremlin.py`](skills/localgremlin/localgremlin.py) takes precedence over any `.sh` fallback.
 - Spawns the gremlin detached (subshell + `nohup`), so it survives `Ctrl-C`, shell exit, and Claude Code quitting.
-- Records per-gremlin state under `~/.local/state/claude-gremlins/<id>/` — or `$XDG_STATE_HOME/claude-gremlins/<id>/` if `XDG_STATE_HOME` is set — (`state.json`, combined `log`, `finished` / `acknowledged` markers), deliberately rooted outside `~/.claude/` so Claude Code's sensitive-file guardrail doesn't block subagent writes. [`skills/_bg/finish.sh`](skills/_bg/finish.sh) writes the terminal `status` / `exit_code` and drops the `finished` marker that `session-summary.sh` keys off.
+- Records per-gremlin state under `~/.local/state/claude-gremlins/<id>/` — or `$XDG_STATE_HOME/claude-gremlins/<id>/` if `XDG_STATE_HOME` is set — (`state.json`, combined `log`, `finished` / `closed` markers), deliberately rooted outside `~/.claude/` so Claude Code's sensitive-file guardrail doesn't block subagent writes. [`skills/_bg/finish.sh`](skills/_bg/finish.sh) writes the terminal `status` / `exit_code` and drops the `finished` marker that `session-summary.sh` keys off.
 - Returns within ~1s with the gremlin id, workdir, log path, and state-file path.
 
 `/localgremlin` artifacts under `~/.local/state/claude-gremlins/<id>/artifacts/`: `plan.md`, `review-code-holistic-<model>.md`, `review-code-detail-<model>.md`, `review-code-scope-<model>.md`. If launched with `--design`, a `spec.md` is also written there.
 
-A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes [`skills/_bg/session-summary.sh`](skills/_bg/session-summary.sh), which reports running and newly-finished gremlins for the current project so you're notified the next time you open Claude Code in that tree. Acknowledged state dirs older than 14 days are pruned on the next hook firing.
+A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes [`skills/_bg/session-summary.sh`](skills/_bg/session-summary.sh), which reports running and newly-finished gremlins for the current project so you're notified the next time you open Claude Code in that tree. Closed state dirs older than 14 days are pruned on the next hook firing.
 
 ## Getting started
 

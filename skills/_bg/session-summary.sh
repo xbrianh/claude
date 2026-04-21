@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SessionStart / UserPromptSubmit hook: reports on background gremlins for the
 # current project. Running gremlins are shown at session start; newly-finished
-# gremlins are shown in both hooks (and acknowledged on first show).
+# gremlins are shown in both hooks (and closed on first show).
 #
 # Degrades silently on any unexpected condition: hooks must never break a
 # session.
@@ -77,7 +77,7 @@ fi
 NL=$'\n'
 RUNNING_BLOCK=""
 FINISHED_BLOCK=""
-NEWLY_ACK_DIRS=()
+NEWLY_CLOSED_DIRS=()
 FINISHED_COUNT=0
 
 shopt -s nullglob
@@ -99,15 +99,15 @@ for sf in "$STATE_ROOT"/*/state.json; do
     [[ "$pr" == "$PROJECT_ROOT" ]] || continue
 
     finished_marker="$wdir/finished"
-    ack_marker="$wdir/acknowledged"
+    closed_marker="$wdir/closed"
     log="$wdir/log"
 
     desc_suffix=""
     [[ -n "$description" ]] && desc_suffix=" — _${description}_"
 
-    if [[ -f "$finished_marker" && ! -f "$ack_marker" ]]; then
+    if [[ -f "$finished_marker" && ! -f "$closed_marker" ]]; then
         FINISHED_BLOCK+="- \`$id\` ($kind): **$status**${exit_code:+ (exit $exit_code)}${desc_suffix} — log: $log${NL}"
-        NEWLY_ACK_DIRS+=("$wdir")
+        NEWLY_CLOSED_DIRS+=("$wdir")
         FINISHED_COUNT=$((FINISHED_COUNT + 1))
         continue
     fi
@@ -174,24 +174,24 @@ if [[ -n "$SUMMARY" ]]; then
         --arg ctx   "$FULL" \
         '{hookSpecificOutput: {hookEventName: $event, additionalContext: $ctx}}'
 
-    for d in "${NEWLY_ACK_DIRS[@]}"; do
-        touch "$d/acknowledged" 2>/dev/null || true
+    for d in "${NEWLY_CLOSED_DIRS[@]}"; do
+        touch "$d/closed" 2>/dev/null || true
     done
 fi
 
-# Prune old acknowledged state dirs (>14 days by mtime of `acknowledged`).
+# Prune old closed state dirs (>14 days by mtime of `closed`).
 # Safety-guard the rm inside the state-root path.
 while IFS= read -r ack; do
     d=$(dirname "$ack")
     case "$d" in
         "$STATE_ROOT"/*) rm -rf "$d" 2>/dev/null || true ;;
     esac
-done < <(find "$STATE_ROOT" -maxdepth 2 -name acknowledged -mtime +14 -print 2>/dev/null || true)
+done < <(find "$STATE_ROOT" -maxdepth 2 -name closed -mtime +14 -print 2>/dev/null || true)
 
 # Prune old direct-CLI session dirs (>14 days by dir mtime). Direct
 # invocations of `localgremlin.sh` write artifacts under
 # `$STATE_ROOT/direct/<ts>-<rand>/` but never drop a `state.json` or
-# `acknowledged` marker, so the acknowledged-based sweep above would leave
+# `closed` marker, so the closed-based sweep above would leave
 # them to accumulate forever. Match by dir mtime instead; the artifacts
 # subtree under each direct session is self-contained.
 if [[ -d "$STATE_ROOT/direct" ]]; then
