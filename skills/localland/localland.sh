@@ -146,6 +146,12 @@ case "$MODE" in
     # gh CLI must be authenticated.
     gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run 'gh auth login' and retry"
 
+    # Fetch origin so origin/main reflects the true remote state.
+    fetch_err=$(git fetch origin 2>&1) \
+        || die "git fetch origin failed — check your network and remote configuration\n${fetch_err}"
+    git show-ref --verify --quiet refs/remotes/origin/main 2>/dev/null \
+        || die "origin/main does not exist after fetch — ensure the remote has a 'main' branch"
+
     # PR branch must not already exist locally.
     if git show-ref --verify --quiet "refs/heads/$PR_BRANCH" 2>/dev/null; then
         die "branch '$PR_BRANCH' already exists locally; delete it or choose a different name"
@@ -177,9 +183,9 @@ case "$MODE" in
     original_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) \
         || die "could not determine current branch"
 
-    # Create PR branch off main.
-    if ! git checkout -b "$PR_BRANCH" main 2>&1; then
-        die "could not create branch '$PR_BRANCH' off main; ensure 'main' exists and the working tree is clean"
+    # Create PR branch off origin/main.
+    if ! git checkout -b "$PR_BRANCH" origin/main 2>&1; then
+        die "could not create branch '$PR_BRANCH' off origin/main; ensure 'origin/main' exists and the working tree is clean"
     fi
 
     # Squash-merge the workflow branch onto the PR branch.
