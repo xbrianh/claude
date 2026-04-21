@@ -68,8 +68,12 @@ if [[ "$KIND" == "ghimplement" ]]; then
     command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 fi
 
-PIPELINE="$HOME/.claude/skills/$KIND/$KIND.sh"
-[[ -x "$PIPELINE" ]] || die "pipeline script not executable: $PIPELINE"
+PIPELINE=""
+for ext in py sh; do
+    candidate="$HOME/.claude/skills/$KIND/$KIND.$ext"
+    if [[ -x "$candidate" ]]; then PIPELINE="$candidate"; break; fi
+done
+[[ -n "$PIPELINE" ]] || die "no executable pipeline at $HOME/.claude/skills/$KIND/$KIND.{py,sh}"
 
 if PROJECT_ROOT=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null); then
     IS_GIT=1
