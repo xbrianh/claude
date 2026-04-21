@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # SessionStart / UserPromptSubmit hook: reports on background gremlins for the
 # current project. Running gremlins are shown at session start; newly-finished
-# gremlins are shown in both hooks (and closed on first show).
+# gremlins are shown in both hooks (and marked `summarized` on first show so
+# they aren't re-announced). The `closed` marker is reserved for the explicit
+# user action (`/gremlins close <id>`) and hides the gremlin from `/gremlins`.
 #
 # Degrades silently on any unexpected condition: hooks must never break a
 # session.

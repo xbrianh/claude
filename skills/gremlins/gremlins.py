@@ -1030,9 +1030,8 @@ def do_list(args, here_root=None):
         include_closed=False,
     )
 
-    # Running gremlins float to the top; everything else keeps age-ascending
-    # order within its group. sort() is stable, so this composes with
-    # collect_rows' started_at sort.
+    # Running gremlins float to the top; within each group, older gremlins
+    # appear first by started_at.
     rows.sort(key=lambda r: (r["live_full"] != "running", r["started_at"]))
 
     if not rows:
