@@ -9,7 +9,7 @@ CLAUDE.md             # repo-level doc for Claude, loaded when cwd is this repo 
 home/CLAUDE.md        # global preferences, synced to ~/.claude/CLAUDE.md
 settings.json         # harness settings: hooks, permissions, plugins
 skills/
-  _bg/                # background-gremlin scripts: launch.sh, finish.sh, session-summary.sh
+  _bg/                # background-gremlin scripts: finish.sh, launch.sh, liveness.sh, session-summary.sh, set-stage.sh
   design/             # /design: chat-driven spec writer; hands off to /ghgremlin or /localgremlin
   ghplan/             # /ghplan: draft a plan, post it as a GitHub issue
   ghgremlin/          # /ghgremlin: run the full gremlin in the background via skills/_bg/launch.sh
@@ -53,7 +53,7 @@ The skills cluster into a GitHub-issue-driven gremlin and a local gremlin (`/loc
 - [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Accepts `--design` to invoke `/design` first.
 - [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>`, `rescue <id>`, `rm <id>`, `close <id>`, `land <id>` (squash-land a local gremlin or merge a gh PR). Flags include `--here`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
 
-`skills/ghgremlin/ghgremlin.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
+`skills/ghgremlin/ghgremlin.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude in parallel with a scope reviewer) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
 ### Background execution
 
