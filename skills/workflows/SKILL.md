@@ -1,7 +1,7 @@
 ---
 name: workflows
 description: On-demand status of background pipelines launched by /localimplement and /ghimplement. Reads every ~/.local/state/claude-workflows/<id>/state.json on the machine and prints one line per active workflow with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed pipelines, acknowledge (hide) finished ones, stop a running workflow, or rescue a dead/stalled one. Not a project filter by default — set --here to restrict to the current repo.
-argument-hint: [stop|rescue <id>] [--here] [--ack <id>] [--ack-all] [--running] [--dead] [--stalled] [--kind local|gh] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
+argument-hint: [stop|rescue|rm <id>] [--here] [--ack <id>] [--ack-all] [--running] [--dead] [--stalled] [--kind local|gh] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
 allowed-tools: Bash(~/.claude/skills/workflows/workflows.py:*)
 ---
 
@@ -40,6 +40,7 @@ The script produces a small table. Each row is one workflow:
 - `<id-prefix>`: substring to drill into a single workflow — prints every field from `state.json` plus computed liveness, age, and local start time. Mutually exclusive with `--watch`.
 - `stop <id>`: send SIGTERM to a running (or stalled) workflow's process group and wait up to 6 seconds for it to exit cleanly. If the process doesn't exit in time, marks it stopped manually. Use when you want to cancel an in-progress pipeline.
 - `rescue <id>`: diagnose and resume a dead or stalled workflow. Reads the failure log and existing artifacts, then spawns a `claude -p` agent **inline** (synchronous, output visible in terminal) in the workflow's worktree. The agent diagnoses the failure, fixes the underlying issue, and completes the remaining pipeline stages. Runs synchronously — Ctrl-C to abort. After a successful rescue, run `/localland` to merge the branch if satisfied. Note: if the workflow is still running, `rescue` will refuse and suggest using `stop` first.
+- `rm <id>`: delete a dead or finished workflow's state directory from disk (the log, plan, reviews, and `state.json`). Refuses with an error if the workflow is still running or stalled — use `stop` first, then `rm`. This is permanent; use when you want to fully clean up a workflow rather than just hide it with `--ack`.
 
 ## Do not
 

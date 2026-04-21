@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -561,6 +562,32 @@ def do_ack_all():
         print("nothing to acknowledge.")
 
 
+def do_rm(target: str) -> bool:
+    match = resolve_workflow(target)
+    if match is None:
+        return False
+
+    wf_id, sf, wdir = match
+    state = load_state(sf)
+    if not state:
+        print(f"error: could not read state for {wf_id}")
+        return False
+
+    live = liveness_of_state_file(sf, state)
+
+    if not live:
+        print(f"error: could not determine liveness for {wf_id}")
+        return False
+
+    if live == "running" or live.startswith("stalled:"):
+        print(f"workflow {wf_id} is still live ({live}) — use 'stop' first, then rm")
+        return False
+
+    shutil.rmtree(wdir)
+    print(f"removed workflow {wf_id} ({wdir})")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # List / drill-in view
 # ---------------------------------------------------------------------------
@@ -756,6 +783,7 @@ def parse_args(argv=None):
             "Subcommands (positional, before flags):\n"
             "  stop <id>     Send SIGTERM to a running workflow and wait for it to exit.\n"
             "  rescue <id>   Diagnose and resume a dead or stalled workflow inline.\n"
+            "  rm <id>       Delete a dead/finished workflow's state directory.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=True,
@@ -837,7 +865,7 @@ def _dispatch_subcommand():
     """
     raw = sys.argv[1:]
     non_flags = [a for a in raw if not a.startswith("-")]
-    if not non_flags or non_flags[0] not in ("stop", "rescue"):
+    if not non_flags or non_flags[0] not in ("stop", "rescue", "rm"):
         return False, False
 
     subcommand = non_flags[0]
@@ -855,6 +883,8 @@ def _dispatch_subcommand():
 
     if subcommand == "stop":
         ok = do_stop(target)
+    elif subcommand == "rm":
+        ok = do_rm(target)
     else:
         ok = do_rescue(target)
     return True, ok
