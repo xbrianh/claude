@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Background pipeline for the /localimplement skill.
 
 Runs under the _bg launcher (which exports WF_ID and manages state.json under
@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import List, Optional, Tuple
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 SET_STAGE_SH = pathlib.Path.home() / ".claude" / "skills" / "_bg" / "set-stage.sh"
@@ -52,10 +53,11 @@ CLAUDE_FLAGS = [
 # SIGINT/SIGTERM we need to terminate every live child so a Ctrl-C'd run
 # doesn't leave orphaned claude processes burning tokens (the bash equivalent
 # was `trap 'kill -- -$$'`). We keep a module-level list of Popens under a
-# lock; children are added on spawn and removed on wait().
-
-_children_lock = threading.Lock()
-_children: list[subprocess.Popen] = []
+# reentrant lock — signal handlers run on the main thread and may land while
+# _track/_untrack already hold it, which would deadlock a plain Lock in that
+# narrow window. Children are added on spawn and removed on wait().
+_children_lock = threading.RLock()
+_children: List[subprocess.Popen] = []
 
 
 def _track(p: subprocess.Popen) -> None:
@@ -236,11 +238,15 @@ def run_claude(model: str, prompt: str, label: str, raw_path: pathlib.Path) -> N
     """Spawn `claude -p`, stream its stdout through log_stream, and raise
     RuntimeError on non-zero exit."""
     cmd = ["claude", "-p", "--model", model, *CLAUDE_FLAGS, prompt]
+    # Default bufsize (-1) gives a BufferedReader with 8 KiB reads, so
+    # readline() scans for '\n' in-buffer instead of doing one os.read() per
+    # byte. Streaming latency is preserved (readline returns on '\n' or EOF,
+    # it doesn't block for the buffer to fill) and throughput on the big
+    # implement-stage stream-json traces jumps by orders of magnitude.
     p = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=None,
-        bufsize=0,
         start_new_session=False,
     )
     _track(p)
@@ -321,7 +327,7 @@ class ReviewWorker(threading.Thread):
         self.where_field = where_field
         self.label = label
         self.raw_path = raw_path
-        self.error: Exception | None = None
+        self.error: Optional[Exception] = None
 
     def run(self) -> None:
         try:
@@ -342,9 +348,9 @@ class ReviewWorker(threading.Thread):
 
 def run_triple_review(
     context: str,
-    focuses: tuple[str, str, str],
-    out_files: tuple[pathlib.Path, pathlib.Path, pathlib.Path],
-    models: tuple[str, str, str],
+    focuses: Tuple[str, str, str],
+    out_files: Tuple[pathlib.Path, pathlib.Path, pathlib.Path],
+    models: Tuple[str, str, str],
     where_field: str,
     session_dir: pathlib.Path,
 ) -> None:
@@ -354,27 +360,30 @@ def run_triple_review(
     out_a, out_b, out_c = out_files
     focus_a, focus_b, focus_c = focuses
 
+    # Stable lens labels (not model names) as sub_stage keys so the shape is
+    # unambiguous when two lenses share a model. Model name is embedded in
+    # the value so status output can show it. The lens key also goes into
+    # each raw-trace filename so three reviewers sharing a model (the default
+    # sonnet×3 case) don't concurrently append to the same .jsonl.
+    lens_keys = ("holistic", "detail", "scope")
+
     workers = [
         ReviewWorker(
             model=model_a, out_file=out_a, focus=focus_a, context=context,
             where_field=where_field, label=f"review-code:{model_a}",
-            raw_path=session_dir / f"stream-review-code-{model_a}.jsonl",
+            raw_path=session_dir / f"stream-review-code-{lens_keys[0]}-{model_a}.jsonl",
         ),
         ReviewWorker(
             model=model_b, out_file=out_b, focus=focus_b, context=context,
             where_field=where_field, label=f"review-code:{model_b}",
-            raw_path=session_dir / f"stream-review-code-{model_b}.jsonl",
+            raw_path=session_dir / f"stream-review-code-{lens_keys[1]}-{model_b}.jsonl",
         ),
         ReviewWorker(
             model=model_c, out_file=out_c, focus=focus_c, context=context,
             where_field=where_field, label=f"review-code:{model_c}",
-            raw_path=session_dir / f"stream-review-code-{model_c}.jsonl",
+            raw_path=session_dir / f"stream-review-code-{lens_keys[2]}-{model_c}.jsonl",
         ),
     ]
-    # Stable lens labels (not model names) as sub_stage keys so the shape is
-    # unambiguous when two lenses share a model. Model name is embedded in
-    # the value so status output can show it.
-    lens_keys = ("holistic", "detail", "scope")
     statuses = ["running", "running", "running"]
 
     def emit_sub_stage() -> None:
@@ -465,7 +474,8 @@ def changes_outside_git(sentinel: pathlib.Path, session_dir: pathlib.Path) -> bo
         dirnames[:] = [d for d in dirnames if d != ".git"]
         dp = pathlib.Path(dirpath)
         try:
-            if dp.resolve() == session_resolved or session_resolved in dp.resolve().parents:
+            dp_resolved = dp.resolve()
+            if dp_resolved == session_resolved or session_resolved in dp_resolved.parents:
                 dirnames[:] = []
                 continue
         except Exception:
@@ -484,24 +494,27 @@ def changes_outside_git(sentinel: pathlib.Path, session_dir: pathlib.Path) -> bo
 # Main
 # ---------------------------------------------------------------------------
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    # Short-only flags to preserve the bash `getopts "p:i:x:a:b:c:"` contract —
+    # no `--plan-model` etc. leak in via argparse's default long-form expansion.
     usage = (
         'usage: localimplement.py [-p <plan-model>] [-i <impl-model>] '
         '[-x <address-model>] [-a <holistic-review-model>] '
         '[-b <detail-review-model>] [-c <scope-review-model>] "<instructions>"'
     )
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
-    parser.add_argument("-p", "--plan-model", dest="plan", default="sonnet")
-    parser.add_argument("-i", "--impl-model", dest="impl", default="sonnet")
-    parser.add_argument("-x", "--address-model", dest="address", default="sonnet")
-    parser.add_argument("-a", "--holistic-model", dest="holistic", default="sonnet")
-    parser.add_argument("-b", "--detail-model", dest="detail", default="sonnet")
-    parser.add_argument("-c", "--scope-model", dest="scope", default="sonnet")
+    parser.add_argument("-p", dest="plan", default="sonnet")
+    parser.add_argument("-i", dest="impl", default="sonnet")
+    parser.add_argument("-x", dest="address", default="sonnet")
+    parser.add_argument("-a", dest="holistic", default="sonnet")
+    parser.add_argument("-b", dest="detail", default="sonnet")
+    parser.add_argument("-c", dest="scope", default="sonnet")
     parser.add_argument("instructions", nargs="*")
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit:
-        die(usage)
+    # No try/except around parse_args: argparse already prints its own
+    # `usage: …\nlocalimplement.py: error: <specific>` to stderr before
+    # raising SystemExit. Wrapping it would bury the specific error behind
+    # a second copy of the usage line.
+    args = parser.parse_args(argv)
     if not args.instructions:
         die(usage)
     for m in (args.plan, args.impl, args.address, args.holistic, args.detail, args.scope):
@@ -510,7 +523,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
-def main(argv: list[str]) -> int:
+def main(argv: List[str]) -> int:
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
 
@@ -540,9 +553,12 @@ def main(argv: list[str]) -> int:
     for name, path in lens_files.items():
         if not path.exists() or path.stat().st_size == 0:
             die(f"missing or empty lens file: {path}")
-    focus_a = lens_files["holistic"].read_text()
-    focus_b = lens_files["detail"].read_text()
-    focus_c = lens_files["scope"].read_text()
+    # Explicit utf-8 — lens files contain em-dashes and other non-ASCII, so
+    # relying on the process default encoding would crash under a non-UTF-8
+    # locale (e.g. a minimal container with LANG=C).
+    focus_a = lens_files["holistic"].read_text(encoding="utf-8")
+    focus_b = lens_files["detail"].read_text(encoding="utf-8")
+    focus_c = lens_files["scope"].read_text(encoding="utf-8")
 
     # ----- plan -----
     set_stage("plan")
@@ -573,7 +589,7 @@ Task: {instructions}"""
     set_stage("implement")
     print(f"==> [2/4] implementing (model: {args.impl}, from {plan_file})", flush=True)
     pre_head = ""
-    pre_sentinel: pathlib.Path | None = None
+    pre_sentinel: Optional[pathlib.Path] = None
     if is_git:
         pre_head = git_head()
     else:
