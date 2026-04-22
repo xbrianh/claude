@@ -8,6 +8,6 @@ Focus on:
 - **Simplicity:** unnecessary abstraction, speculative generality, over-engineering, dead code, features the task did not require.
 - **Separation of concerns:** mixed responsibilities in a single module, leaky abstractions, business logic in the wrong layer, tight coupling that should be inverted.
 - **Fit with existing code:** does the change follow conventions already in the repo, or reinvent them? Are new files/modules placed where they belong?
-- **Completeness at the system level:** tests, error handling at boundaries, observability — anything a reviewer thinking about "shipping this" would flag.
+- **Completeness at the system level:** tests, error handling at trust boundaries (external input, third-party APIs, user data — not internal call chains), observability — anything a reviewer thinking about "shipping this" would flag. Do not flag missing defensive checks inside internal code paths; those are anti-signals, not gaps.
 
 Do NOT spend effort on line-level nits, naming micro-critiques, or local correctness — the other reviewer is covering those. If you notice one, skip it.
