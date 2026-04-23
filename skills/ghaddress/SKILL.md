@@ -4,7 +4,7 @@ description: Address review comments on a GitHub PR. Fixes issues raised by revi
 argument-hint: <pr-reference> [instructions]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh *) Read Glob Grep Edit
+allowed-tools: Bash(gh *) Bash(~/.claude/skills/_bg/set-bail.sh:*) Read Glob Grep Edit
 ---
 
 You are addressing review comments on a GitHub pull request. Your job is to fix the issues raised by reviewers and reply to each comment thread.
@@ -43,3 +43,23 @@ $ARGUMENTS[1:]
    - For questions or acknowledgements (no code change needed), reply briefly.
    - Skip comments that have already been resolved.
 5. Summarize what was done.
+
+## Bail markers (only when running under a gremlin)
+
+If the env var `GR_ID` is set, you are running inside a background gremlin pipeline. If you cannot safely address one or more comments, write a structured bail marker before finishing — `/gremlins rescue --headless` reads it to decide whether to attempt automated recovery. Do NOT make speculative changes when bailing; just record why and stop.
+
+Use the helper:
+
+- A comment touches **secrets** (credential management, API keys, encryption material) and you cannot safely make the requested change:
+
+  ```
+  ~/.claude/skills/_bg/set-bail.sh "$GR_ID" secrets "<one-line reason>"
+  ```
+
+- For any other reason you decline to proceed (ambiguous reviewer ask, conflicting comments, scope outside this PR, etc.):
+
+  ```
+  ~/.claude/skills/_bg/set-bail.sh "$GR_ID" other "<one-line reason>"
+  ```
+
+In both cases, also state in your final summary that you bailed and why. If you successfully addressed every actionable comment, do not write a bail marker — just exit normally.
