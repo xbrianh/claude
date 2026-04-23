@@ -83,19 +83,40 @@ confirm() {
 BASE_FLAGS=(-a --itemize-changes)
 [[ $DRY -eq 1 ]] && BASE_FLAGS+=(--dry-run)
 
-# Emit rsync-anchored paths ("/relpath") for regular files that are byte-identical
-# between src_dir and dst_dir. Feeding these to rsync via --exclude-from makes rsync
-# skip the file entirely — not just the content transfer but the mtime/perms update
-# that --checksum alone still performs on content-identical files.
+# Print octal permission bits for $1 (e.g. "755"). Portable across macOS and Linux.
+file_mode() {
+    if stat -f '%Lp' "$1" 2>/dev/null; then
+        return 0
+    fi
+    stat -c '%a' "$1"
+}
+
+# True iff $1 and $2 are both regular files with identical contents AND identical
+# permission bits. We include mode so that exec-bit drift still triggers a sync —
+# rsync -a would otherwise never see the file and never fix the mode.
+fully_identical() {
+    local a="$1" b="$2"
+    [[ -f "$a" && -f "$b" ]] || return 1
+    cmp -s "$a" "$b" || return 1
+    [[ "$(file_mode "$a")" == "$(file_mode "$b")" ]]
+}
+
+# Emit NUL-terminated rsync-anchored paths ("/relpath\0") for regular files that
+# are fully identical (contents + mode) between src_dir and dst_dir. Feeding these
+# to rsync via `--from0 --exclude-from=` makes rsync skip the file entirely — not
+# just the content transfer but the mtime/perms update that --checksum alone still
+# performs on content-identical files. NUL-delimited so filenames containing
+# rsync filter metacharacters (`*?[]`, leading `#`) or embedded newlines are safe.
 identical_files() {
     local src_dir="$1" dst_dir="$2"
     [[ ! -d "$src_dir" || ! -d "$dst_dir" ]] && return 0
-    (cd "$src_dir" && find . -type f) | while IFS= read -r rel; do
+    local rel
+    while IFS= read -r -d '' rel; do
         rel="${rel#./}"
-        if [[ -f "$dst_dir/$rel" ]] && cmp -s "$src_dir/$rel" "$dst_dir/$rel"; then
-            printf '/%s\n' "$rel"
+        if fully_identical "$src_dir/$rel" "$dst_dir/$rel"; then
+            printf '/%s\0' "$rel"
         fi
-    done
+    done < <(cd "$src_dir" && find . -type f -print0)
 }
 
 sync_file() {
@@ -104,7 +125,7 @@ sync_file() {
         echo "skip: $src (not present)"
         return
     fi
-    if [[ -f "$src" && -f "$dst" ]] && cmp -s "$src" "$dst"; then
+    if fully_identical "$src" "$dst"; then
         return
     fi
     mkdir -p "$(dirname "$dst")"
@@ -120,9 +141,13 @@ sync_dir() {
     mkdir -p "$dst"
     local exclude_file
     exclude_file=$(mktemp)
-    identical_files "$src" "$dst" > "$exclude_file"
-    rsync "${BASE_FLAGS[@]}" --delete --exclude-from="$exclude_file" "$src/" "$dst/"
-    rm -f "$exclude_file"
+    # Clean up the temp file on any exit path, including rsync failure under set -e.
+    # EXIT trap on a subshell scopes cleanup to this function call only.
+    (
+        trap 'rm -f "$exclude_file"' EXIT
+        identical_files "$src" "$dst" > "$exclude_file"
+        rsync "${BASE_FLAGS[@]}" --delete --from0 --exclude-from="$exclude_file" "$src/" "$dst/"
+    )
 }
 
 # Count files rsync would delete from dst when syncing src -> dst.
