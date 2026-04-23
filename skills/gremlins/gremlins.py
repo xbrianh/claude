@@ -817,6 +817,25 @@ def _parse_commit_output(text: str) -> tuple:
     return subject, body
 
 
+def _run_claude_p_text(prompt: str, timeout: int = 60) -> str:
+    """Run `claude -p` and return its stdout as plain text.
+
+    Suppresses the session-summary hook via `GREMLIN_SKIP_SUMMARY=1`; otherwise
+    the hook's "surface this verbatim" directive prepends the gremlin status
+    block to the model's reply and corrupts structured output. Any `claude -p`
+    caller in this repo that parses the reply as text should go through here.
+    """
+    env = os.environ.copy()
+    env["GREMLIN_SKIP_SUMMARY"] = "1"
+    result = subprocess.run(
+        ["claude", "-p", "--output-format", "text"],
+        input=prompt, capture_output=True, text=True, timeout=timeout, env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"claude -p exited {result.returncode}: {result.stderr.strip()}")
+    return result.stdout
+
+
 def _synthesize_commit_message_ai(inputs: dict) -> tuple:
     """Call `claude -p` to produce a commit message from gathered inputs."""
     parts = []
@@ -849,14 +868,8 @@ Requirements:
 
 Output only the commit message text, nothing else."""
 
-    result = subprocess.run(
-        ["claude", "-p", "--output-format", "text"],
-        input=prompt, capture_output=True, text=True, timeout=60,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"claude -p exited {result.returncode}: {result.stderr.strip()}")
-
-    subject, body = _parse_commit_output(result.stdout)
+    stdout = _run_claude_p_text(prompt)
+    subject, body = _parse_commit_output(stdout)
     if not subject:
         raise RuntimeError("claude -p returned empty subject")
     return subject, body
