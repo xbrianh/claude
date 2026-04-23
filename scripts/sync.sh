@@ -83,10 +83,28 @@ confirm() {
 BASE_FLAGS=(-a --itemize-changes)
 [[ $DRY -eq 1 ]] && BASE_FLAGS+=(--dry-run)
 
+# Emit rsync-anchored paths ("/relpath") for regular files that are byte-identical
+# between src_dir and dst_dir. Feeding these to rsync via --exclude-from makes rsync
+# skip the file entirely — not just the content transfer but the mtime/perms update
+# that --checksum alone still performs on content-identical files.
+identical_files() {
+    local src_dir="$1" dst_dir="$2"
+    [[ ! -d "$src_dir" || ! -d "$dst_dir" ]] && return 0
+    (cd "$src_dir" && find . -type f) | while IFS= read -r rel; do
+        rel="${rel#./}"
+        if [[ -f "$dst_dir/$rel" ]] && cmp -s "$src_dir/$rel" "$dst_dir/$rel"; then
+            printf '/%s\n' "$rel"
+        fi
+    done
+}
+
 sync_file() {
     local src="$1" dst="$2"
     if [[ ! -e "$src" ]]; then
         echo "skip: $src (not present)"
+        return
+    fi
+    if [[ -f "$src" && -f "$dst" ]] && cmp -s "$src" "$dst"; then
         return
     fi
     mkdir -p "$(dirname "$dst")"
@@ -100,7 +118,11 @@ sync_dir() {
         return
     fi
     mkdir -p "$dst"
-    rsync "${BASE_FLAGS[@]}" --delete "$src/" "$dst/"
+    local exclude_file
+    exclude_file=$(mktemp)
+    identical_files "$src" "$dst" > "$exclude_file"
+    rsync "${BASE_FLAGS[@]}" --delete --exclude-from="$exclude_file" "$src/" "$dst/"
+    rm -f "$exclude_file"
 }
 
 # Count files rsync would delete from dst when syncing src -> dst.
