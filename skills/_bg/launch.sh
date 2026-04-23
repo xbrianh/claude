@@ -147,6 +147,11 @@ if [[ -n "$RESUME_GR_ID" ]]; then
     # pipeline's first set-stage call. The resumed pipeline will repopulate
     # stage_updated_at via set-stage.sh; sub_stage will reappear only when
     # the stage actually re-enters a sub-staged phase (e.g. review-code).
+    # Clear bail markers too: stale .bail_class would false-fire check_bail
+    # on the resumed stage (e.g. /ghreview finds nothing to flag but the
+    # old class is still present); stale .bail_reason / .bail_detail would
+    # mislabel a successfully-finished gremlin as `dead:bailed:<old>` in
+    # the liveness classifier, which prefers bail_reason over exit_code=0.
     jq --arg    status             "running" \
        --arg    stage              "$STAGE" \
        --arg    rescued_at         "$NOW_ISO" \
@@ -157,6 +162,9 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         | del(.ended_at)
         | del(.sub_stage)
         | del(.stage_updated_at)
+        | del(.bail_class)
+        | del(.bail_reason)
+        | del(.bail_detail)
         | .rescue_count = ((.rescue_count // 0) + 1)
         | .rescued_at = $rescued_at
         | .resumed_from_stage = $resumed_from_stage

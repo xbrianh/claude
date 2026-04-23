@@ -40,7 +40,7 @@ liveness_of_state_file() {
     IFS=$'\x1f' read -r gr_status gr_pid gr_exit_code gr_bail_reason < <(
         jq -r '[.status, (.pid // "" | tostring),
                 (.exit_code // "" | tostring),
-                (.bail_reason // "")] | join("")' "$sf" 2>/dev/null || true
+                (.bail_reason // "")] | join("\u001f")' "$sf" 2>/dev/null || true
     )
 
     # Terminal: finish.sh (or headless rescue's bail path) wrote the

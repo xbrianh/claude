@@ -37,9 +37,14 @@ FMT = "%-5s  %-47s  %-22s  %-28s  %-5s  %s"
 # while headless hard-refuses. The wall-clock timeout bounds Phase A so a
 # stuck `claude -p` doesn't hang an unattended caller indefinitely.
 RESCUE_CAP = 3
-HEADLESS_PHASE_A_TIMEOUT_SECS = int(
-    os.environ.get("HEADLESS_RESCUE_TIMEOUT_SECS") or 1800
-)
+try:
+    HEADLESS_PHASE_A_TIMEOUT_SECS = int(
+        os.environ.get("HEADLESS_RESCUE_TIMEOUT_SECS") or 1800
+    )
+except (ValueError, TypeError):
+    # A misconfigured env var must not break the rest of /gremlins (listing,
+    # stop, rm, close, land). Fall back silently to the default.
+    HEADLESS_PHASE_A_TIMEOUT_SECS = 1800
 
 # Bail classes the upstream stages may write into state.json.bail_class.
 # The first three are excluded from headless rescue: the spec is explicit
@@ -510,7 +515,10 @@ def _atomic_patch_state(sf: str, patch: dict) -> bool:
     except Exception:
         return False
     state.update(patch)
-    tmp = sf + ".bail.tmp"
+    # Unique temp path (pid-scoped) so two concurrent bail-patchers can't
+    # clobber each other's in-flight write. Matches the `$$`-suffixed
+    # pattern used by set-stage.sh / set-bail.sh.
+    tmp = f"{sf}.bail.tmp.{os.getpid()}"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(state, fh, indent=2)
@@ -572,11 +580,15 @@ def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
         prompt,
     ]
     try:
+        # Discard stdout — the agent's reply can be large and we don't read
+        # it (results come from the marker file, not the process output).
+        # Keep stderr for the failure-path snippet.
         result = subprocess.run(
             cmd,
             cwd=workdir,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             timeout=HEADLESS_PHASE_A_TIMEOUT_SECS,
             env=env,

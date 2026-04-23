@@ -35,7 +35,7 @@ TMP="$STATE_FILE.bail.tmp.$$"
 if jq --arg cls "$BAIL_CLASS" \
       --arg det "$BAIL_DETAIL" \
       '.bail_class = $cls
-       | (if $det == "" then . else .bail_detail = $det end)' \
+       | (if $det == "" then del(.bail_detail) else .bail_detail = $det end)' \
       "$STATE_FILE" > "$TMP" 2>/dev/null; then
     mv "$TMP" "$STATE_FILE" 2>/dev/null || rm -f "$TMP" 2>/dev/null
 else
