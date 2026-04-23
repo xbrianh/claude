@@ -12,10 +12,11 @@ set -u
 # Opt-out for callers that invoke `claude -p` for structured text output (e.g.
 # commit-message synthesis in gremlins.py `land`). The hook's "surface this
 # verbatim" directive otherwise prepends the status block to the model's reply
-# and corrupts the caller's parse.
-[[ "${CLAUDE_SKIP_GREMLIN_SUMMARY:-0}" == "1" ]] && exit 0
+# and corrupts the caller's parse. Repo-scoped prefix (not `CLAUDE_`) so we
+# don't collide with Claude Code's own env-var namespace.
+[[ "${GREMLIN_SKIP_SUMMARY:-0}" == "1" ]] && exit 0
 
-# Missing jq → nothing to report. Bail before `set -e` would bite us anywhere.
+# Missing jq → nothing to report, so exit quietly.
 command -v jq >/dev/null 2>&1 || exit 0
 
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins"
