@@ -80,13 +80,29 @@ confirm() {
     [[ "$reply" =~ ^[Yy]$ ]]
 }
 
-BASE_FLAGS=(-a --itemize-changes)
+BASE_FLAGS=(-a --omit-dir-times --itemize-changes)
 [[ $DRY -eq 1 ]] && BASE_FLAGS+=(--dry-run)
+
+# NUL-terminated list of content-identical files, for rsync's --from0 --exclude-from.
+identical_files() {
+    local src_dir="$1" dst_dir="$2"
+    [[ ! -d "$src_dir" || ! -d "$dst_dir" ]] && return 0
+    local rel
+    while IFS= read -r -d '' rel; do
+        rel="${rel#./}"
+        if [[ -f "$dst_dir/$rel" ]] && cmp -s "$src_dir/$rel" "$dst_dir/$rel"; then
+            printf '/%s\0' "$rel"
+        fi
+    done < <(cd "$src_dir" && find . -type f -print0)
+}
 
 sync_file() {
     local src="$1" dst="$2"
     if [[ ! -e "$src" ]]; then
         echo "skip: $src (not present)"
+        return
+    fi
+    if [[ -f "$src" && -f "$dst" ]] && cmp -s "$src" "$dst"; then
         return
     fi
     mkdir -p "$(dirname "$dst")"
@@ -100,7 +116,15 @@ sync_dir() {
         return
     fi
     mkdir -p "$dst"
-    rsync "${BASE_FLAGS[@]}" --delete "$src/" "$dst/"
+    local exclude_file
+    exclude_file=$(mktemp)
+    # Clean up the temp file on any exit path, including rsync failure under set -e.
+    # EXIT trap on a subshell scopes cleanup to this function call only.
+    (
+        trap 'rm -f "$exclude_file"' EXIT
+        identical_files "$src" "$dst" > "$exclude_file"
+        rsync "${BASE_FLAGS[@]}" --delete --from0 --exclude-from="$exclude_file" "$src/" "$dst/"
+    )
 }
 
 # Count files rsync would delete from dst when syncing src -> dst.
