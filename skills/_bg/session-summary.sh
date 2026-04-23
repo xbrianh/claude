@@ -9,6 +9,12 @@
 # session.
 set -u
 
+# Opt-out for callers that invoke `claude -p` for structured text output (e.g.
+# commit-message synthesis in gremlins.py `land`). The hook's "surface this
+# verbatim" directive otherwise prepends the status block to the model's reply
+# and corrupts the caller's parse.
+[[ "${CLAUDE_SKIP_GREMLIN_SUMMARY:-0}" == "1" ]] && exit 0
+
 # Missing jq → nothing to report. Bail before `set -e` would bite us anywhere.
 command -v jq >/dev/null 2>&1 || exit 0
 

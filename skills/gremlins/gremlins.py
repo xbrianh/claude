@@ -849,9 +849,13 @@ Requirements:
 
 Output only the commit message text, nothing else."""
 
+    # Suppress the session-summary hook so its "surface this verbatim" directive
+    # doesn't prepend the gremlin status block to the commit message.
+    env = os.environ.copy()
+    env["CLAUDE_SKIP_GREMLIN_SUMMARY"] = "1"
     result = subprocess.run(
         ["claude", "-p", "--output-format", "text"],
-        input=prompt, capture_output=True, text=True, timeout=60,
+        input=prompt, capture_output=True, text=True, timeout=60, env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"claude -p exited {result.returncode}: {result.stderr.strip()}")
