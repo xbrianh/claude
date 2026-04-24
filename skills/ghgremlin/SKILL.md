@@ -1,7 +1,7 @@
 ---
 name: ghgremlin
 description: Run the end-to-end plan → implement → review → address workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them. The launcher returns immediately; you'll be notified when the gremlin finishes.
-argument-hint: [--design] [-r <ref>] <instructions>
+argument-hint: [--design] [-r <ref>] [--plan <path|issue-ref> | <instructions>]
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
 
@@ -58,6 +58,38 @@ Report the gremlin id, workdir, and log path that it prints. Make clear to the u
 - The gremlin is running in the background — their session is free immediately.
 - They do **not** need to keep this Claude Code session open.
 - They will see a notification in a future session (any project-scoped session) once the gremlin finishes; the log path is where the final PR URL and per-stage output will be.
+
+## `--plan <source>`
+
+If the user already has a plan, pass `--plan <source>` to skip the `/ghplan`
+stage (no new GitHub issue is created). The plan body is copied into the
+gremlin's session as `plan.md` and fed to the implement stage. Four forms:
+
+- **Local file path** — the file contents become the plan. The PR is opened
+  with no `Closes #N` link since there's no issue to close.
+- **`42` or `#42`** — resolves to issue #42 in the current repo. The PR
+  includes `Closes #42`, same as a fresh `/ghplan` run.
+- **`owner/repo#42`** — resolves to issue #42 in a different repo. Uses the
+  issue body as plan content only; the PR is opened in the current repo
+  without a `Closes` link (to avoid auto-closing an unrelated issue in the
+  PR's target repo).
+- **Full URL `https://github.com/owner/repo/issues/42`** — same cross-repo
+  semantics. `github.com` only; GitHub Enterprise hosts are not recognized
+  as URLs — use the `owner/repo#42` form instead (which works for any host
+  `gh` is configured to reach).
+
+Rules:
+
+- Mutually exclusive with the positional `<instructions>`. Pass exactly one.
+- Files must be non-empty; issues must exist and have a non-empty body.
+- Failure modes split by where they fire:
+  - **Clean (no state dir):** mutex violations (`--plan` + positional, or
+    neither) and missing / empty local file are caught in `launch.sh`
+    before the state directory is created.
+  - **Dirty (failed state dir left behind):** issue-ref errors (unreachable
+    issue, unrecognized shape, empty issue body) fire in `ghgremlin.sh`
+    after the state dir has already been created. Use `/gremlins rm <id>`
+    to clean up.
 
 ## Do not
 

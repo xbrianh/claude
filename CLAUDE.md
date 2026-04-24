@@ -23,11 +23,11 @@ Create the file under the corresponding repo directory (`skills/<name>/SKILL.md`
 
 ## The `gh*` gremlin
 
-The `ghgremlin` skill invokes [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh) to run an end-to-end GitHub-issue-driven workflow: `/ghplan`, an implementation + PR creation stage, `/ghreview` (with a scope reviewer running in parallel), and `/ghaddress`.
+The `ghgremlin` skill invokes [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh) to run an end-to-end GitHub-issue-driven workflow: `/ghplan`, an implementation + PR creation stage, `/ghreview` (with a scope reviewer running in parallel), and `/ghaddress`. `--plan <path|issue-ref>` skips the `/ghplan` stage and uses the supplied file or existing issue as the plan instead.
 
 ## The local gremlin
 
-The `localgremlin` skill runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py). All artifacts land in `~/.local/state/claude-gremlins/<id>/artifacts/` off the product branch.
+The `localgremlin` skill runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py). All artifacts land in `~/.local/state/claude-gremlins/<id>/artifacts/` off the product branch. `--plan <path>` skips the plan stage and uses the supplied file as the plan.
 
 The review-code and address-code stage bodies live in [`skills/localgremlin/_core.py`](skills/localgremlin/_core.py) alongside the orchestrator, so the standalone `/localreview` and `/localaddress` skills execute the same code as the gremlin's review and address stages.
 
