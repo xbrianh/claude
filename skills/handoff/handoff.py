@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""handoff.py — per-step planner for chained gremlin workflows.
+
+Reads the current plan document, inspects the diff accumulated on the branch
+since the chain started, decides whether there is more work to do, and writes
+an updated plan document plus (on next-plan) a child plan suitable for
+`launch.sh --plan`.
+
+Exit codes:
+  0  — one of the three recognized outcomes; read signal file to distinguish
+  1  — infrastructure failure (bad args, missing claude, agent crash, etc.)
+"""
+
+import argparse
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+from typing import List, Optional, Tuple
+
+
+CLAUDE_FLAGS = [
+    "--permission-mode", "bypassPermissions",
+    "--output-format", "text",
+]
+
+
+def die(msg: str) -> None:
+    sys.stderr.write(f"error: {msg}\n")
+    sys.stderr.flush()
+    sys.exit(1)
+
+
+def run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git"] + list(args),
+        capture_output=True,
+        text=True,
+        check=check,
+    )
+
+
+def auto_name_out(plan_path: pathlib.Path) -> pathlib.Path:
+    """Given plan.md → plan-001.md; given plan-001.md → plan-002.md, etc."""
+    # Strip trailing -NNN so plan-001.md produces plan-002.md, not plan-001-001.md
+    base = re.sub(r"-\d{3}$", "", plan_path.stem) or plan_path.stem
+    parent = plan_path.parent
+    n = 1
+    while True:
+        candidate = parent / f"{base}-{n:03d}.md"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def collect_git_context(base_ref: Optional[str]) -> Tuple[str, str, str]:
+    """Return (branch_name, git_log, git_diff) since merge-base with base_ref."""
+    target = base_ref or "main"
+
+    # Validate target ref exists early so we get a clear error message
+    result = run_git("rev-parse", "--verify", target, check=False)
+    if result.returncode != 0:
+        die(f"--base ref not found in repo: {target!r}")
+
+    result = run_git("rev-parse", "--abbrev-ref", "HEAD")
+    branch = result.stdout.strip()
+
+    result = run_git("merge-base", "HEAD", target, check=False)
+    if result.returncode != 0:
+        die(f"could not compute merge-base between HEAD and {target!r}")
+    merge_base = result.stdout.strip()
+
+    result = run_git("log", f"{merge_base}..HEAD", "--oneline")
+    git_log = result.stdout.strip()
+
+    result = run_git("diff", f"{merge_base}..HEAD")
+    git_diff = result.stdout
+
+    return branch, git_log, git_diff
+
+
+def build_prompt(
+    plan_text: str,
+    branch: str,
+    git_log: str,
+    git_diff: str,
+    out_path: pathlib.Path,
+    child_plan_path: pathlib.Path,
+    signal_path: pathlib.Path,
+) -> str:
+    diff_body = git_diff[:50000] if git_diff else "(empty — no changes yet)"
+    diff_trunc = f"\n(diff truncated to 50000 chars; {len(git_diff)} chars total)" if len(git_diff) > 50000 else ""
+    log_body = git_log if git_log else "(no commits yet — branch just started)"
+
+    return f"""You are a chain-manager agent. Inspect the plan document and the work that has landed on the current branch, then decide whether the chain is complete or a next step is needed.
+
+## Input plan
+
+~~~~
+{plan_text}
+~~~~
+
+## Branch context
+
+Branch: {branch}
+
+Git log since chain start:
+```
+{log_body}
+```
+
+Git diff since chain start:
+```diff
+{diff_body}
+```{diff_trunc}
+
+## Your task
+
+1. Read the plan. Identify every task listed under `## Tasks`.
+2. Compare each task against the landed diff and git log to determine whether it has been implemented.
+3. Decide the exit state:
+   - **`chain-done`**: all tasks in the plan are implemented and landed.
+   - **`next-plan`**: some tasks remain unimplemented; the next gremlin should tackle them.
+   - **`bail`**: something prevents safe continuation (broken state, incoherent plan, security issue, etc.).
+
+4. Write an **updated plan document** to: `{out_path}`
+   - Free-form markdown. A human reading it must be able to see what is done and what remains.
+   - Mark completed tasks (e.g. `[x]`) and leave remaining tasks as `[ ]`.
+   - If `bail`, record the bail reason prominently at the top.
+
+5. If exit state is **`next-plan`**, write a **child plan** to: `{child_plan_path}`
+   - Use the standard localgremlin plan structure exactly:
+
+     ```
+     ## Context
+     <brief description of what this child gremlin should implement>
+
+     ## Approach
+     <implementation approach for the remaining work>
+
+     ## Tasks
+     - [ ] Task N: ...
+     <only the tasks that are not yet done>
+
+     ## Open questions
+     <risks or open questions, or "(none)" if there are none>
+     ```
+   - The child plan must be self-contained — a fresh gremlin with only this file must know exactly what to implement.
+
+6. Write the **signal marker** to: `{signal_path}`
+   - Valid JSON, exactly this structure:
+     ```json
+     {{"exit_state": "next-plan|chain-done|bail", "child_plan": "<absolute path or null>", "reason": "<bail reason or null>"}}
+     ```
+   - `child_plan`: `{child_plan_path}` (as a string) if exit state is `next-plan`, otherwise `null`.
+   - `reason`: a short human-readable explanation if exit state is `bail`, otherwise `null`.
+
+Write all required files before finishing. Do not explain your reasoning in stdout — the files are the output."""
+
+
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    usage = "usage: handoff.py --plan <path> [--out <path>] [--base <ref>] [--model <model>]"
+    parser = argparse.ArgumentParser(add_help=False, usage=usage)
+    parser.add_argument("--plan", dest="plan", required=True)
+    parser.add_argument("--out", dest="out", default=None)
+    parser.add_argument("--base", dest="base", default=None)
+    parser.add_argument("--model", dest="model", default="sonnet")
+    parser.add_argument("--timeout", dest="timeout", type=int, default=None,
+                        help="timeout in seconds for the inner claude agent (default: no timeout)")
+    return parser.parse_args(argv)
+
+
+def main(argv: List[str]) -> int:
+    args = parse_args(argv)
+
+    if shutil.which("claude") is None:
+        die("claude CLI not found")
+
+    plan_path = pathlib.Path(args.plan).resolve()
+    if not plan_path.exists():
+        die(f"--plan does not exist: {plan_path}")
+    if not plan_path.is_file():
+        die(f"--plan is not a file: {plan_path}")
+    if plan_path.stat().st_size == 0:
+        die(f"--plan is empty: {plan_path}")
+    try:
+        plan_text = plan_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        die(f"--plan is not valid UTF-8: {plan_path}")
+    except OSError as exc:
+        die(f"failed to read --plan {plan_path}: {exc}")
+
+    if args.out:
+        out_path = pathlib.Path(args.out).resolve()
+    else:
+        out_path = auto_name_out(plan_path)
+
+    child_plan_path = out_path.parent / (out_path.stem + "-child" + out_path.suffix)
+    signal_path = out_path.parent / (out_path.stem + ".state.json")
+
+    try:
+        branch, git_log, git_diff = collect_git_context(args.base)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        die(f"git context collection failed: {exc}")
+
+    prompt = build_prompt(
+        plan_text=plan_text,
+        branch=branch,
+        git_log=git_log,
+        git_diff=git_diff,
+        out_path=out_path,
+        child_plan_path=child_plan_path,
+        signal_path=signal_path,
+    )
+
+    cmd = ["claude", "-p", "--model", args.model, *CLAUDE_FLAGS, prompt]
+    print(f"==> running handoff agent (model: {args.model})", flush=True)
+    try:
+        result = subprocess.run(cmd, timeout=args.timeout)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write(f"error: handoff agent timed out after {args.timeout}s\n")
+        return 1
+    if result.returncode != 0:
+        sys.stderr.write(f"error: claude -p exited {result.returncode}\n")
+        return 1
+
+    if not signal_path.exists():
+        sys.stderr.write(f"error: signal file not written by agent: {signal_path}\n")
+        return 1
+
+    try:
+        state = json.loads(signal_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        sys.stderr.write(f"error: could not parse signal file {signal_path}: {exc}\n")
+        return 1
+
+    exit_state = state.get("exit_state")
+    if exit_state not in ("next-plan", "chain-done", "bail"):
+        sys.stderr.write(f"error: signal file has unrecognized exit_state: {exit_state!r}\n")
+        return 1
+
+    print(f"==> handoff complete: {exit_state}", flush=True)
+    if exit_state == "next-plan":
+        child_plan = state.get("child_plan")
+        if not child_plan:
+            sys.stderr.write("warning: signal file exit_state is next-plan but child_plan is null\n")
+        elif not pathlib.Path(child_plan).exists():
+            sys.stderr.write(f"error: child plan path in signal file does not exist: {child_plan}\n")
+            return 1
+        print(f"    updated plan: {out_path}", flush=True)
+        print(f"    child plan:   {child_plan or '(missing)'}", flush=True)
+        print(f"    signal file:  {signal_path}", flush=True)
+    elif exit_state == "chain-done":
+        print(f"    updated plan: {out_path}", flush=True)
+        print(f"    signal file:  {signal_path}", flush=True)
+    elif exit_state == "bail":
+        reason = state.get("reason") or "(no reason given)"
+        print(f"    bail reason:  {reason}", flush=True)
+        print(f"    updated plan: {out_path}", flush=True)
+        print(f"    signal file:  {signal_path}", flush=True)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
