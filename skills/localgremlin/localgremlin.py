@@ -83,18 +83,18 @@ VALID_RESUME_STAGES = ["plan", "implement", "review-code", "address-code"]
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    # Short-only flags to preserve the bash `getopts "p:i:x:a:b:c:"` contract —
-    # no `--plan-model` etc. leak in via argparse's default long-form expansion.
-    # `--resume-from` is the sole long-form flag, added for the Phase B rescue
-    # path driven by launch.sh --resume.
+    # Short-only model flags to preserve the bash `getopts "p:i:x:a:b:c:"`
+    # contract — no `--plan-model` etc. leak in via argparse's default
+    # long-form expansion. Long-form flags: `--resume-from` (Phase B rescue)
+    # and `--plan` (skip the plan stage, read plan from a file instead).
     usage = (
         'usage: localgremlin.py [-p <plan-model>] [-i <impl-model>] '
         '[-x <address-model>] [-a <holistic-review-model>] '
         '[-b <detail-review-model>] [-c <scope-review-model>] '
-        '[--resume-from <stage>] "<instructions>"'
+        '[--resume-from <stage>] [--plan <path>] "<instructions>"'
     )
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
-    parser.add_argument("-p", dest="plan", default="sonnet")
+    parser.add_argument("-p", dest="plan_model", default="sonnet")
     parser.add_argument("-i", dest="impl", default="sonnet")
     parser.add_argument("-x", dest="address", default="sonnet")
     parser.add_argument("-a", dest="holistic", default="sonnet")
@@ -102,15 +102,37 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("-c", dest="scope", default="sonnet")
     parser.add_argument("--resume-from", dest="resume_from", default=None,
                         choices=VALID_RESUME_STAGES)
+    parser.add_argument("--plan", dest="plan_path", default=None)
     parser.add_argument("instructions", nargs="*")
     # No try/except around parse_args: argparse already prints its own
     # `usage: …\nlocalgremlin.py: error: <specific>` to stderr before
     # raising SystemExit. Wrapping it would bury the specific error behind
     # a second copy of the usage line.
     args = parser.parse_args(argv)
-    if not args.instructions:
-        die(usage)
-    for m in (args.plan, args.impl, args.address, args.holistic, args.detail, args.scope):
+    # launch.sh resume may pass an empty-string positional when a --plan
+    # gremlin is resumed; treat that as "no positional supplied" rather than
+    # a literal empty-string instruction.
+    args.instructions = [s for s in args.instructions if s]
+    if args.plan_path:
+        if args.instructions:
+            die("--plan and positional instructions are mutually exclusive")
+        # Existing plan.md snapshot (resume path): don't re-validate the source
+        # file — it may have been deleted or edited since launch, and the
+        # snapshot in session_dir/plan.md is the durable record.
+        # Fresh launch: validate that the path is a readable, non-empty file.
+        # The snapshot check happens in main() against session_dir, so here
+        # we only do the fresh-launch validation. When resumed, main() skips
+        # re-copying, so a missing source file is tolerated there.
+        if not args.resume_from:
+            p = pathlib.Path(args.plan_path)
+            if not p.is_file():
+                die(f"--plan: file not found: {args.plan_path}")
+            if p.stat().st_size == 0:
+                die(f"--plan: file is empty: {args.plan_path}")
+    else:
+        if not args.instructions:
+            die(usage)
+    for m in (args.plan_model, args.impl, args.address, args.holistic, args.detail, args.scope):
         if not MODEL_RE.match(m):
             die(f"invalid model: {m}")
     return args
@@ -215,9 +237,21 @@ def main(argv: List[str]) -> int:
 
     # Stages run back-to-back; inserting sleeps >~5 min between them drops the Anthropic prompt cache TTL and loses inter-stage cache benefits.
     # ----- plan -----
-    if start_idx <= VALID_RESUME_STAGES.index("plan"):
+    # When --plan <path> is set, we short-circuit the plan stage: copy the
+    # user-supplied plan file into session_dir/plan.md and skip the planning
+    # agent entirely. An existing plan.md (resume path) is left alone — the
+    # snapshot captured at initial launch is authoritative, per the spec's
+    # rescue-determinism rule.
+    if args.plan_path:
+        if not plan_file.exists():
+            src = pathlib.Path(args.plan_path)
+            if not src.is_file() or src.stat().st_size == 0:
+                die(f"--plan: source file missing or empty at resume: {src}")
+            shutil.copyfile(src, plan_file)
+        print(f"==> [1/4] plan supplied via --plan -> {plan_file}", flush=True)
+    elif start_idx <= VALID_RESUME_STAGES.index("plan"):
         set_stage("plan")
-        print(f"==> [1/4] planning (model: {args.plan}) -> {plan_file}", flush=True)
+        print(f"==> [1/4] planning (model: {args.plan_model}) -> {plan_file}", flush=True)
         plan_prompt = f"""Create a detailed implementation plan for the following task and write it to the file `{plan_file}`. Use this structure:
 
 ## Context
@@ -236,7 +270,7 @@ Anything that needs discussion before implementation.
 Read any relevant code in the repo to inform the plan. Do NOT make any code changes yet — only write the plan file.
 
 Task: {instructions}"""
-        run_claude(args.plan, plan_prompt, "plan", session_dir / "stream-plan.jsonl")
+        run_claude(args.plan_model, plan_prompt, "plan", session_dir / "stream-plan.jsonl")
         if not plan_file.exists() or plan_file.stat().st_size == 0:
             die(f"plan stage did not produce {plan_file}")
     plan_text = plan_file.read_text(encoding="utf-8")

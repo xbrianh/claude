@@ -1,7 +1,7 @@
 ---
 name: localgremlin
 description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Plan and code reviews land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the gremlin finishes.
-argument-hint: [--design] [-a <model>] [-b <model>] [-c <model>] <instructions>
+argument-hint: [--design] [-a <model>] [-b <model>] [-c <model>] [--plan <path> | <instructions>]
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
 
@@ -65,6 +65,19 @@ Report the gremlin id, workdir, and log path that it prints. Make clear to the u
 - The gremlin is running in the background — their session is free immediately.
 - They do **not** need to keep this Claude Code session open.
 - They will see a notification in a future session (any project-scoped session) once the gremlin finishes.
+
+## `--plan <path>`
+
+If the user already has an implementation plan, pass `--plan <path>` to skip
+the plan stage. The file's contents are copied into the gremlin's session as
+`plan.md` and the implement stage reads them as-is.
+
+- Mutually exclusive with the positional `<instructions>`. Pass exactly one.
+- The path must point to a readable, non-empty file.
+- The gremlin's description defaults to the first `# heading` in the plan
+  file unless `--description` is supplied explicitly.
+- Errors (file missing, file empty, both `--plan` and positional supplied,
+  neither supplied) are surfaced before the state directory is created.
 
 ## Do not
 

@@ -40,12 +40,14 @@ slugify() {
 }
 
 DESCRIPTION=""
+DESCRIPTION_EXPLICIT=0
 RESUME_GR_ID=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --description)
             [[ $# -ge 2 ]] || usage
             DESCRIPTION="$2"
+            DESCRIPTION_EXPLICIT=1
             shift 2
             ;;
         --resume)
@@ -193,10 +195,25 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         done < <(jq -r '.[]' <<<"$PIPELINE_ARGS_JSON")
     fi
 
+    # When --plan is in pipeline_args, the gremlin was launched without a
+    # positional instructions string (the two are mutually exclusive), so the
+    # sidecar INSTRUCTIONS is just flag-echo garbage. Appending it as a
+    # positional on resume would make the gremlin re-parse flag text as
+    # prose — omit the trailing positional in that case.
+    _has_plan=0
+    for _pa in "${PIPELINE_ARGS[@]}"; do
+        [[ "$_pa" == "--plan" ]] && { _has_plan=1; break; }
+    done
+
     (
         cd "$WORKDIR"
-        nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
-            -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
+        if [[ $_has_plan -eq 1 ]]; then
+            nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" </dev/null >>"$STATE_DIR/log" 2>&1 &
+        else
+            nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
+        fi
         echo $! >"$STATE_DIR/pid"
     )
 
@@ -279,41 +296,94 @@ done
 _first_positional=""
 (( _i < ${#_args[@]} )) && _first_positional="${_args[_i]}"
 
+# Find --plan <arg> in the pipeline args so both the slug-source and
+# description fallback paths can peek at the plan file's H1. The arg
+# may be a file path (local plan source) or an issue reference (ghgremlin
+# only) — only file-path values are used here; non-files fall through to
+# the raw-arg fallback, and ghgremlin.sh overwrites .description after
+# resolving the issue body.
+_plan_arg=""
+_plan_arg_idx=-1
+for (( _k=0; _k<${#_args[@]}; _k++ )); do
+    if [[ "${_args[_k]}" == "--plan" && $((_k+1)) -lt ${#_args[@]} ]]; then
+        _plan_arg="${_args[_k+1]}"
+        _plan_arg_idx=$((_k+1))
+        break
+    fi
+done
+
+# Resolve --plan file path to absolute so the initial dispatch (which
+# cd's to $WORKDIR) and any later rescue (which also cd's to $WORKDIR)
+# both find the file. A relative --plan path would resolve relative to
+# $WORKDIR post-cd, not the original caller's cwd — breaking on first run.
+# Persisted pipeline_args picks up the normalized value via `set --` below.
+_plan_abs=""
+if [[ -n "$_plan_arg" && -f "$_plan_arg" ]]; then
+    _plan_abs=$(cd "$(dirname "$_plan_arg")" 2>/dev/null && printf '%s/%s' "$(pwd)" "$(basename "$_plan_arg")") || _plan_abs=""
+    if [[ -n "$_plan_abs" && $_plan_arg_idx -ge 0 ]]; then
+        _args[$_plan_arg_idx]="$_plan_abs"
+        # Rebuild $@ so the initial dispatch at the bottom of this script
+        # uses the same normalized arg list as the persisted pipeline_args.
+        set -- "${_args[@]}"
+    fi
+fi
+
+# Extract first `# heading` from --plan file once for reuse in slug + description.
+_plan_h1=""
+if [[ -n "$_plan_arg" && -f "$_plan_arg" ]]; then
+    _plan_h1=$(head -n 50 "$_plan_arg" 2>/dev/null \
+               | sed -nE '/^#+[[:space:]]+.+/{s/^#+[[:space:]]+//p;q;}' \
+               || true)
+fi
+
+# Mutex: --plan and a positional instructions string cannot both be supplied.
+# Checked here (before any state dir creation) so the error path leaves no
+# litter behind. The gremlin scripts separately validate plan-source content
+# (file existence / issue-ref shape / non-empty body), which happens after
+# state dir creation.
+if [[ -n "$_plan_arg" && -n "$_first_positional" ]]; then
+    die "--plan and positional instructions are mutually exclusive"
+fi
+
 # Slug source resolution, in priority order. This runs *before* the
 # DESCRIPTION-from-INSTR_RAW fallback so the file-path branch isn't
 # shadowed by the fallback (which would feed the slugifier a path like
 # `/tmp/test-spec-slug.md` and produce `tmp-test-spec-slug-md`).
 #   1. Explicit --description (SKILL.md callers compose a clean ≤60-char phrase).
-#   2. If the first positional argument is a readable file, use its first
-#      `# heading` line, or fall back to its basename without extension.
-#   3. The raw instructions with leading flags stripped, first 80 chars.
-#   4. Literal "gremlin" last-resort (applied after slugify if result empty).
+#   2. --plan <file>: use the file's H1, or its basename without extension.
+#   3. First positional argument that is a readable file: same logic.
+#   4. --plan <non-file-arg>: use the raw arg (issue ref like "42" or "owner/repo#42").
+#   5. The raw instructions with leading flags stripped, first 80 chars.
+#   6. Literal "gremlin" last-resort (applied after slugify if result empty).
 SLUG_SOURCE=""
 if [[ -n "$DESCRIPTION" ]]; then
     SLUG_SOURCE="$DESCRIPTION"
-else
-    if [[ -n "$_first_positional" && -f "$_first_positional" ]]; then
-        # Quit on first `# …` line — BSD sed doesn't accept a line-range
-        # with a nested {…} block, so we use a plain pattern with `q` and
-        # cap the scan to 50 lines by piping through head (sed stops reading
-        # once `q` fires, so this is only a safety bound).
-        _title=$(head -n 50 "$_first_positional" 2>/dev/null \
-                 | sed -nE '/^#+[[:space:]]+.+/{s/^#+[[:space:]]+//p;q;}' \
-                 || true)
-        if [[ -n "$_title" ]]; then
-            SLUG_SOURCE="$_title"
-        else
-            _base="${_first_positional##*/}"
-            SLUG_SOURCE="${_base%.*}"
-        fi
+elif [[ -n "$_plan_arg" && -f "$_plan_arg" ]]; then
+    if [[ -n "$_plan_h1" ]]; then
+        SLUG_SOURCE="$_plan_h1"
     else
-        _rem=""
-        for (( _j=_i; _j<${#_args[@]}; _j++ )); do
-            _rem+="${_args[_j]} "
-        done
-        SLUG_SOURCE="${_rem% }"
-        SLUG_SOURCE="${SLUG_SOURCE:0:80}"
+        _base="${_plan_arg##*/}"
+        SLUG_SOURCE="${_base%.*}"
     fi
+elif [[ -n "$_first_positional" && -f "$_first_positional" ]]; then
+    _title=$(head -n 50 "$_first_positional" 2>/dev/null \
+             | sed -nE '/^#+[[:space:]]+.+/{s/^#+[[:space:]]+//p;q;}' \
+             || true)
+    if [[ -n "$_title" ]]; then
+        SLUG_SOURCE="$_title"
+    else
+        _base="${_first_positional##*/}"
+        SLUG_SOURCE="${_base%.*}"
+    fi
+elif [[ -n "$_plan_arg" ]]; then
+    SLUG_SOURCE="$_plan_arg"
+else
+    _rem=""
+    for (( _j=_i; _j<${#_args[@]}; _j++ )); do
+        _rem+="${_args[_j]} "
+    done
+    SLUG_SOURCE="${_rem% }"
+    SLUG_SOURCE="${SLUG_SOURCE:0:80}"
 fi
 
 # If the first positional arg is a readable file (e.g. a spec from /design),
@@ -327,11 +397,20 @@ fi
 SLUG=$(slugify "$SLUG_SOURCE")
 [[ -z "$SLUG" ]] && SLUG="gremlin"
 
-# Description fallback: explicit --description wins; otherwise fall back to
-# a truncated slice of the raw instructions so the status views always have
-# something to print.
+# Description fallback: explicit --description wins; otherwise prefer the
+# --plan file's H1 (when the plan arg is a local file), and finally fall back
+# to a truncated slice of the raw instructions. For a --plan issue-ref where
+# launch.sh can't see the issue body, DESCRIPTION stays empty so ghgremlin.sh
+# can fill it in after resolving the issue (INSTR_RAW would be just the
+# flag echo "--plan 42" which is not a useful description).
 if [[ -z "$DESCRIPTION" ]]; then
-    DESCRIPTION="${INSTR_RAW:0:60}"
+    if [[ -n "$_plan_h1" ]]; then
+        DESCRIPTION="${_plan_h1:0:60}"
+    elif [[ -n "$_plan_arg" ]]; then
+        DESCRIPTION=""
+    else
+        DESCRIPTION="${INSTR_RAW:0:60}"
+    fi
 fi
 
 RANDHEX=$(LC_ALL=C tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 6 || true)
@@ -394,23 +473,29 @@ fi
 
 STATE_FILE="$STATE_DIR/state.json"
 STATE_TMP="$STATE_FILE.tmp"
+if [[ $DESCRIPTION_EXPLICIT -eq 1 ]]; then
+    DESC_EXPLICIT_JSON=true
+else
+    DESC_EXPLICIT_JSON=false
+fi
 jq -n \
-    --arg     id            "$GR_ID" \
-    --arg     kind          "$KIND" \
-    --arg     project_root  "$PROJECT_ROOT" \
-    --arg     workdir       "$WORKDIR" \
-    --arg     setup_kind    "$SETUP_KIND" \
-    --arg     branch        "$BRANCH" \
-    --arg     status        "running" \
-    --arg     started_at    "$NOW_ISO" \
-    --arg     instructions  "$INSTR_SUMMARY" \
-    --arg     description   "$DESCRIPTION" \
-    --argjson pipeline_args "$PIPELINE_ARGS_JSON" \
+    --arg     id                   "$GR_ID" \
+    --arg     kind                 "$KIND" \
+    --arg     project_root         "$PROJECT_ROOT" \
+    --arg     workdir              "$WORKDIR" \
+    --arg     setup_kind           "$SETUP_KIND" \
+    --arg     branch               "$BRANCH" \
+    --arg     status               "running" \
+    --arg     started_at           "$NOW_ISO" \
+    --arg     instructions         "$INSTR_SUMMARY" \
+    --arg     description          "$DESCRIPTION" \
+    --argjson description_explicit "$DESC_EXPLICIT_JSON" \
+    --argjson pipeline_args        "$PIPELINE_ARGS_JSON" \
     '{id: $id, kind: $kind, project_root: $project_root, workdir: $workdir,
       setup_kind: $setup_kind, branch: $branch, status: $status,
       started_at: $started_at, instructions: $instructions,
-      description: $description, pipeline_args: $pipeline_args,
-      stage: "starting", pid: null}' \
+      description: $description, description_explicit: $description_explicit,
+      pipeline_args: $pipeline_args, stage: "starting", pid: null}' \
     > "$STATE_TMP" || die "failed to write initial state"
 mv "$STATE_TMP" "$STATE_FILE"
 

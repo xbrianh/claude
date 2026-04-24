@@ -25,7 +25,8 @@ progress_tee() {
 
 REF=""
 RESUME_FROM=""
-USAGE='usage: ghgremlin.sh [-r <ref>] [--resume-from <stage>] "<instructions>"'
+PLAN_SOURCE=""
+USAGE='usage: ghgremlin.sh [-r <ref>] [--resume-from <stage>] [--plan <path|issue-ref>] "<instructions>"'
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -r)
@@ -34,13 +35,25 @@ while [[ $# -gt 0 ]]; do
     --resume-from)
       [[ $# -ge 2 ]] || die "$USAGE"
       RESUME_FROM="$2"; shift 2 ;;
+    --plan)
+      [[ $# -ge 2 ]] || die "$USAGE"
+      PLAN_SOURCE="$2"; shift 2 ;;
     --) shift; break ;;
     -*) die "unknown flag: $1" ;;
     *) break ;;
   esac
 done
-[[ $# -ge 1 ]] || die "$USAGE"
-INSTRUCTIONS="$*"
+
+# --plan replaces the positional instructions: either one must be supplied,
+# never both. Launch.sh enforces the mutex earlier (before state dir
+# creation); this check catches direct invocations that bypass the launcher.
+if [[ -n "$PLAN_SOURCE" ]]; then
+  [[ $# -eq 0 ]] || die "--plan and positional instructions are mutually exclusive"
+  INSTRUCTIONS=""
+else
+  [[ $# -ge 1 ]] || die "$USAGE"
+  INSTRUCTIONS="$*"
+fi
 
 # Validate REF against a conservative git-ref charset. INSTRUCTIONS is
 # intentionally *not* sanitized: it is the prompt this tool exists to send.
@@ -127,6 +140,94 @@ command -v jq >/dev/null     || die "jq not found"
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner) \
   || die "not in a gh-recognized repo"
 
+# Artifacts dir (for plan.md snapshot + persisted plan cache). Falls back to
+# a mktemp dir for gremlin-less direct invocations — resume needs GR_ID/state
+# anyway, so that mode is single-shot only.
+ARTIFACTS_DIR=""
+if [[ -n "$STATE_FILE" ]]; then
+  ARTIFACTS_DIR="$(dirname "$STATE_FILE")/artifacts"
+  mkdir -p "$ARTIFACTS_DIR"
+else
+  ARTIFACTS_DIR=$(mktemp -d -t "ghgremlin-artifacts.XXXXXX")
+fi
+
+# Plan-source resolution: populate ISSUE_URL/ISSUE_NUM (empty for non-issue
+# sources so the commit-pr stage knows to omit `Closes #N`) and write the
+# canonical plan body into $ARTIFACTS_DIR/plan.md. On resume, the snapshot
+# is authoritative — don't re-read the source file or re-fetch the issue.
+ISSUE_URL=""
+ISSUE_NUM=""
+ISSUE_BODY=""
+PLAN_MD="$ARTIFACTS_DIR/plan.md"
+
+if [[ -n "$PLAN_SOURCE" ]]; then
+  if [[ -s "$PLAN_MD" ]]; then
+    # Resume path: reload from snapshot + persisted state fields.
+    ISSUE_URL=$(jq -r '.issue_url // ""' "$STATE_FILE" 2>/dev/null || true)
+    ISSUE_NUM=$(jq -r '.issue_num // ""' "$STATE_FILE" 2>/dev/null || true)
+    ISSUE_BODY=$(cat "$PLAN_MD")
+    echo "==> [1/6] plan resumed from snapshot: $PLAN_MD${ISSUE_NUM:+ (issue #$ISSUE_NUM)}"
+  else
+    # Fresh launch: classify source shape.
+    if [[ -f "$PLAN_SOURCE" ]]; then
+      # Local file source. No Closes link (no issue to close).
+      [[ -s "$PLAN_SOURCE" ]] || die "--plan: file is empty: $PLAN_SOURCE"
+      ISSUE_BODY=$(cat "$PLAN_SOURCE")
+      cp "$PLAN_SOURCE" "$PLAN_MD" || die "--plan: failed to copy to $PLAN_MD"
+      echo "==> [1/6] plan supplied via --plan (file): $PLAN_SOURCE"
+    else
+      # Issue reference. Accepted shapes:
+      #   42         → issue #42 in the current repo
+      #   #42        → same
+      #   owner/repo#42  → issue #42 in owner/repo (cross-repo)
+      #   https://github.com/owner/repo/issues/42[#fragment] → absolute URL
+      _issue_ref=""
+      _target_repo=""
+      if [[ "$PLAN_SOURCE" =~ ^#?([0-9]+)$ ]]; then
+        _issue_ref="${BASH_REMATCH[1]}"
+        _target_repo="$REPO"
+      elif [[ "$PLAN_SOURCE" =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$ ]]; then
+        _target_repo="${BASH_REMATCH[1]}"
+        _issue_ref="${BASH_REMATCH[2]}"
+      elif [[ "$PLAN_SOURCE" =~ ^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([0-9]+)(#.*)?$ ]]; then
+        _target_repo="${BASH_REMATCH[1]}"
+        _issue_ref="${BASH_REMATCH[2]}"
+      else
+        die "--plan: not a readable file or recognized issue reference: $PLAN_SOURCE"
+      fi
+      _issue_json=$(gh issue view "$_issue_ref" --repo "$_target_repo" --json number,url,body,repository 2>&1) \
+        || die "--plan: could not resolve issue $PLAN_SOURCE: $_issue_json"
+      ISSUE_BODY=$(jq -r '.body // ""' <<<"$_issue_json")
+      [[ -n "$ISSUE_BODY" ]] || die "--plan: issue $PLAN_SOURCE has an empty body"
+      _resolved_url=$(jq -r '.url // ""' <<<"$_issue_json")
+      _resolved_num=$(jq -r '.number // ""' <<<"$_issue_json")
+      _resolved_nwo=$(jq -r '.repository.nameWithOwner // empty' <<<"$_issue_json")
+      # Only set ISSUE_URL/ISSUE_NUM (which drive the `Closes #N` link) when
+      # the resolved issue's repo matches the PR's target repo. Cross-repo
+      # issue sources get the body as plan content but no auto-close link.
+      if [[ "$_resolved_nwo" == "$REPO" ]]; then
+        ISSUE_URL="$_resolved_url"
+        ISSUE_NUM="$_resolved_num"
+      fi
+      printf '%s' "$ISSUE_BODY" > "$PLAN_MD"
+      echo "==> [1/6] plan supplied via --plan (issue ${_target_repo}#${_issue_ref})"
+    fi
+    patch_state '.issue_url = $url | .issue_num = $num' \
+      --arg url "$ISSUE_URL" --arg num "$ISSUE_NUM"
+    # Fill in description from plan body's first H1, but only if the caller
+    # didn't pass --description explicitly (launch.sh records that).
+    _desc_explicit=$(jq -r '.description_explicit // false' "$STATE_FILE" 2>/dev/null || echo false)
+    if [[ "$_desc_explicit" != "true" ]]; then
+      _plan_h1=$(head -n 50 "$PLAN_MD" 2>/dev/null \
+                 | sed -nE '/^#+[[:space:]]+.+/{s/^#+[[:space:]]+//p;q;}' \
+                 || true)
+      if [[ -n "$_plan_h1" ]]; then
+        patch_state '.description = $d' --arg d "${_plan_h1:0:60}"
+      fi
+    fi
+  fi
+fi
+
 CLAUDE_FLAGS=(--permission-mode bypassPermissions --output-format stream-json --verbose)
 # Stages run sequentially; the wait-copilot sleep 20 loop should not be extended beyond ~5 min intervals or the Anthropic prompt cache TTL expires and cache benefits between the review and address stages are lost.
 
@@ -203,7 +304,7 @@ extract_session_id() {
   echo "$sid"
 }
 
-if run_stage plan; then
+if [[ -z "$PLAN_SOURCE" ]] && run_stage plan; then
   set_stage plan
   echo "==> [1/6] running /ghplan"
   # Stream the plan output to a persistent artifact as well as capturing it in
@@ -228,10 +329,13 @@ if run_stage plan; then
     "issue")
   ISSUE_NUM=$(basename "$ISSUE_URL")
   echo "    issue: $ISSUE_URL"
-  # Persist issue_url so --resume-from implement (or later) can rehydrate
-  # ISSUE_URL without re-running /ghplan.
-  patch_state '.issue_url = $url' --arg url "$ISSUE_URL"
-else
+  # Persist issue_url/issue_num so --resume-from implement (or later) can
+  # rehydrate without re-running /ghplan.
+  patch_state '.issue_url = $url | .issue_num = $num' \
+    --arg url "$ISSUE_URL" --arg num "$ISSUE_NUM"
+  ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json body --jq .body)
+  [[ -n "$ISSUE_BODY" ]] || die "issue $ISSUE_NUM has an empty body"
+elif [[ -z "$PLAN_SOURCE" ]]; then
   [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]] \
     || die "--resume-from $RESUME_FROM requires GR_ID and state.json"
   ISSUE_URL=$(jq -r '.issue_url // ""' "$STATE_FILE")
@@ -239,9 +343,11 @@ else
     || die "--resume-from $RESUME_FROM: no issue_url in state.json (rewind to plan?)"
   ISSUE_NUM=$(basename "$ISSUE_URL")
   echo "    resumed issue: $ISSUE_URL"
+  ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json body --jq .body)
+  [[ -n "$ISSUE_BODY" ]] || die "issue $ISSUE_NUM has an empty body"
 fi
-ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --repo "$REPO" --json body --jq .body)
-[[ -n "$ISSUE_BODY" ]] || die "issue $ISSUE_NUM has an empty body"
+# When PLAN_SOURCE is set, ISSUE_BODY was populated by the plan-source
+# resolution block above (from file contents or gh issue view at launch time).
 
 PRAGMATIC_DEV_FILE="$SCRIPT_DIR/../../agents/pragmatic-developer.md"
 [[ -f "$PRAGMATIC_DEV_FILE" ]] || die "missing agent file: $PRAGMATIC_DEV_FILE"
@@ -256,16 +362,23 @@ if run_stage implement; then
 
   set_stage implement
   echo "==> [2a/6] implementing plan"
+  if [[ -n "$ISSUE_NUM" ]]; then
+    _plan_source_label="from the GitHub issue"
+    _plan_location_note="The plan lives in the GitHub issue and reviews go to PR comments; the only changes in this working tree should be product code."
+  else
+    _plan_source_label="below"
+    _plan_location_note="Reviews go to PR comments; the only changes in this working tree should be product code."
+  fi
   IMPL_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" \
     "When writing code, follow these principles:
 
 ${CORE_PRINCIPLES}
 
-The following is the implementation plan from the GitHub issue:
+The following is the implementation plan ${_plan_source_label}:
 
 ${ISSUE_BODY}
 
-Implement the plan above by making the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. The plan lives in the GitHub issue and reviews go to PR comments; the only changes in this working tree should be product code." \
+Implement the plan above by making the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. ${_plan_location_note}" \
     | progress_tee)
   IMPL_SESSION=$(extract_session_id "$IMPL_OUT")
 
@@ -283,11 +396,21 @@ fi
 if run_stage commit-pr; then
   set_stage commit-pr
   echo "==> [2b/6] committing + opening PR"
+  # With an issue to close, name the branch after it and include `Closes #N`
+  # in the commit + PR body. Without one (--plan from a file, or cross-repo
+  # issue ref), the branch name derives from the plan description and no
+  # Closes link is emitted — the PR would otherwise auto-close an unrelated
+  # issue in the target repo.
+  if [[ -n "$ISSUE_NUM" ]]; then
+    _pr_prompt="Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'. Name the branch 'issue-${ISSUE_NUM}-<short-slug>', end the commit message with 'Closes #${ISSUE_NUM}', and include 'Closes #${ISSUE_NUM}' in the PR body. Print ONLY the PR URL on the final line of your response."
+  else
+    _pr_prompt="Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'. Name the branch with a short descriptive slug derived from the plan title. Do NOT include any 'Closes #N' or 'Fixes #N' link in the commit message or PR body. Print ONLY the PR URL on the final line of your response."
+  fi
   # The --resume "$IMPL_SESSION" pairing means commit-pr only runs in the same
   # pipeline invocation as its implement stage. Resumes that start here are
   # rewound to implement above.
   PR_OUT=$(claude -p "${CLAUDE_FLAGS[@]}" --resume "$IMPL_SESSION" \
-    "Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'. Name the branch 'issue-${ISSUE_NUM}-<short-slug>', end the commit message with 'Closes #${ISSUE_NUM}', and include 'Closes #${ISSUE_NUM}' in the PR body. Print ONLY the PR URL on the final line of your response." | progress_tee)
+    "$_pr_prompt" | progress_tee)
   PR_URL=$(extract_gh_url "$PR_OUT" \
     'https://github\.com/[^ )]+/pull/[0-9]+' \
     'gh pr create' \
@@ -329,7 +452,7 @@ if run_stage ghreview; then
 Lens:
 $SCOPE_LENS
 
-Implementation plan (from the GitHub issue):
+Implementation plan:
 
 $SCOPE_ISSUE_BODY
 
