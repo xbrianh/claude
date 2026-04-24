@@ -18,12 +18,13 @@ set_stage() {
 # summary) to stderr. All output is trimmed to 200 chars per line.
 progress_tee() {
   tee >(jq -r --unbuffered '
+    def trimline: tostring | gsub("\n"; " ") | .[0:200];
     if .type == "system" and .subtype == "init" then
-      "    @ session=\(.session_id // "?") model=\(.model // "?") cwd=\(.cwd // "?")"
+      "    @ session=\((.session_id // "?") | trimline) model=\((.model // "?") | trimline) cwd=\((.cwd // "?") | trimline)"
     elif .type == "assistant" then
       .message.content[]?
       | if .type == "tool_use" then
-          "    · \(.name) \(.input.file_path // .input.command // .input.pattern // "" | .[0:200])"
+          "    · \(.name) \(.input.file_path // .input.command // .input.pattern // .input.url // .input.output_file // "" | gsub("\n"; " ") | .[0:200])"
         elif .type == "thinking" then
           "    ~ think: \(.thinking // "" | gsub("\n"; " ") | .[0:200])"
         elif .type == "text" then
@@ -40,7 +41,9 @@ progress_tee() {
           end
         )"
     elif .type == "result" then
-      "    = done: subtype=\(.subtype // "?") turns=\(.num_turns // "?") cost=\(.total_cost_usd // .cost_usd // "?")"
+      ("    = done: subtype=\(.subtype // "?") turns=\(.num_turns // "?") cost=\(.total_cost_usd // .cost_usd // "?")"
+       | gsub("\n"; " ")
+       | .[0:200])
     else empty
     end
   ' 2>/dev/null >&2)
