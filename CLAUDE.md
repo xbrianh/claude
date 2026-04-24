@@ -39,6 +39,7 @@ Both `/ghgremlin` and `/localgremlin` accept `--design` as a first flag to invok
 - [`/localreview`](skills/localreview/SKILL.md) — foreground: run the triple-lens parallel code review over local changes, writing `review-code-*.md` files to `--dir` (cwd by default). No planning, no implementation, no background gremlin.
 - [`/localaddress`](skills/localaddress/SKILL.md) — foreground: read the three `review-code-*.md` files from `--dir` and address actionable findings. In a git repo, creates a single `Address review feedback` commit (no push).
 - [`/handoff`](skills/handoff/SKILL.md) — foreground: reads the current plan and landed diff, decides `next-plan` / `chain-done` / `bail`, and writes an updated plan plus a child plan for the next gremlin. Accepts `--plan <path> [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]`.
+- [`/bossgremlin`](skills/bossgremlin/SKILL.md) — background chained serial workflow driven by a top-level spec; invokes `/handoff` between child gremlins and lands each before proceeding. Requires `--plan <spec-path> --chain-kind local|gh`. Monitor with `/gremlins` (`KIND=boss`); rescue a stalled chain with `rescue <boss-id>`.
 
 ## Not tracked
 

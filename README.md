@@ -19,6 +19,8 @@ skills/
   localreview/        # /localreview: standalone triple-lens code review over local changes (foreground)
   localaddress/       # /localaddress: standalone address-code stage over existing review files (foreground)
   gremlins/           # /gremlins: on-demand status of background gremlins; supports stop/rescue/rm/close/land subcommands
+  handoff/            # /handoff: foreground chain-step decision agent; decides next-plan/chain-done/bail and writes child plan
+  bossgremlin/        # /bossgremlin: chained serial gremlin workflow; runs multiple child gremlins via handoff agent
 agents/
   pragmatic-developer.md
 commands/             # slash commands (created on first sync; no files tracked yet)
@@ -56,6 +58,8 @@ The skills cluster into a GitHub-issue-driven gremlin and a local gremlin (`/loc
 - [`/localreview`](skills/localreview/SKILL.md) — standalone triple-lens code review (holistic, detail, scope) over local changes, foreground. Writes `review-code-*.md` files to `--dir` (defaults to cwd).
 - [`/localaddress`](skills/localaddress/SKILL.md) — standalone address-code stage that reads `review-code-*.md` files from `--dir` and applies actionable findings. Foreground. In a git repo, creates one `Address review feedback` commit (no push).
 - [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>`, `rescue <id>`, `rm <id>`, `close <id>`, `land <id>` (squash-land a local gremlin or merge a gh PR). Flags include `--here`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
+- [`/handoff`](skills/handoff/SKILL.md) — foreground chain-step decision agent. Reads the current plan and the diff landed so far, produces `next-plan` / `chain-done` / `bail`, and writes an updated plan plus a child plan for the next gremlin. Accepts `--plan <path> [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]`.
+- [`/bossgremlin`](skills/bossgremlin/SKILL.md) — background chained serial workflow. Requires `--plan <spec-path>` (immutable top-level spec) and `--chain-kind local|gh`. The boss invokes `/handoff` between child gremlins, lands each one before proceeding, and notifies when the chain finishes. Use `/gremlins` to monitor (`KIND=boss`) and `rescue <boss-id>` to resume a stalled chain.
 
 `skills/ghgremlin/ghgremlin.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude in parallel with a scope reviewer) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
