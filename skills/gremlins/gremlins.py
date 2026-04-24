@@ -1176,11 +1176,124 @@ def _build_commit_message(wdir: str, state: dict, branch: str, merge_base: str, 
     except Exception as exc:
         print(f"warning: AI commit message synthesis failed ({exc}); falling back to plan.md extraction", flush=True)
         plan_path = os.path.join(wdir, "artifacts", "plan.md")
+        if not os.path.isfile(plan_path):
+            print(f"error: plan.md not found at {plan_path} — cannot build commit message")
+            raise
         return _compose_commit_message(plan_path)
 
 
-def _land_local(gr_id: str, sf: str, wdir: str, state: dict) -> bool:
-    """Squash-land a local gremlin branch onto the current branch."""
+def _inside_worktree(workdir: str) -> bool:
+    if not workdir or not os.path.exists(workdir):
+        return False
+    cwd_real = os.path.realpath(os.getcwd())
+    worktree_real = os.path.realpath(workdir)
+    return cwd_real == worktree_real or cwd_real.startswith(worktree_real + os.sep)
+
+
+def _preflight_land(state: dict, cwd) -> tuple:
+    """Shared land preflight. Returns (current_branch, ok)."""
+    workdir = state.get("workdir") or ""
+    if _inside_worktree(workdir):
+        print("you are inside this gremlin's worktree — cd elsewhere before landing")
+        return "", False
+
+    r = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if r.returncode != 0:
+        print("error: could not determine current branch")
+        return "", False
+    current = r.stdout.strip()
+
+    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=cwd)
+    if r.stdout.strip():
+        print("error: working tree is not clean — commit or stash changes before landing")
+        return current, False
+
+    return current, True
+
+
+def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
+                 source_ref: str, source_label: str,
+                 current: str, delete_branch: bool) -> bool:
+    """Squash all commits above the merge-base of `source_ref` and HEAD, then commit."""
+    r = subprocess.run(["git", "merge-base", "HEAD", source_ref], capture_output=True, text=True, cwd=cwd)
+    if r.returncode != 0:
+        print(f"error: could not compute merge-base between HEAD and {source_label}")
+        return False
+    merge_base = r.stdout.strip()
+
+    r = subprocess.run(
+        ["git", "rev-list", "--count", f"{merge_base}..{source_ref}"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if int(r.stdout.strip() or "0") < 1:
+        print(f"{current} is already up to date with {source_label}.")
+        _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
+        return True
+
+    print(f"Squash-merging {source_label} onto {current}...")
+    r = subprocess.run(["git", "merge", "--squash", source_ref], cwd=cwd)
+    if r.returncode != 0:
+        reset_ok = subprocess.run(
+            ["git", "reset", "--hard", "HEAD"], capture_output=True, cwd=cwd,
+        ).returncode == 0
+        subprocess.run(["git", "clean", "-fd"], capture_output=True, cwd=cwd)
+        suffix = "working tree restored" if reset_ok else "manual cleanup may be needed"
+        print(f"error: git merge --squash failed — {suffix}")
+        return False
+
+    subject, body = _build_commit_message(wdir, state, source_ref, merge_base, cwd)
+    commit_msg = f"{subject}\n\n{body}" if body else subject
+
+    r = subprocess.run(["git", "commit", "-m", commit_msg], cwd=cwd)
+    if r.returncode != 0:
+        print("error: git commit failed")
+        return False
+
+    print(f"Landed {source_label} onto {current}.")
+    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
+    return True
+
+
+def _ff_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
+             source_ref: str, source_label: str,
+             current: str, delete_branch: bool) -> bool:
+    """Fast-forward the caller's branch to `source_ref`. Hard fail if ff is not possible."""
+    r = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "HEAD", source_ref],
+        capture_output=True, cwd=cwd,
+    )
+    if r.returncode != 0:
+        print(
+            f"error: cannot fast-forward — {current} has diverged from {source_label}. "
+            f"Re-run with --squash to condense the chain into one commit, or rebase manually."
+        )
+        return False
+
+    r = subprocess.run(
+        ["git", "rev-list", "--count", f"HEAD..{source_ref}"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if int(r.stdout.strip() or "0") < 1:
+        print(f"{current} is already up to date with {source_label}.")
+        _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
+        return True
+
+    print(f"Fast-forwarding {current} to {source_label}...")
+    r = subprocess.run(["git", "merge", "--ff-only", source_ref], cwd=cwd)
+    if r.returncode != 0:
+        print("error: git merge --ff-only failed")
+        return False
+
+    print(f"Landed {source_label} onto {current}.")
+    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
+    return True
+
+
+def _land_local(gr_id: str, sf: str, wdir: str, state: dict, mode: str) -> bool:
+    """Land a local gremlin branch onto the current branch (mode: 'squash' or 'ff')."""
     setup_kind = state.get("setup_kind", "")
     if setup_kind != "worktree-branch":
         print(f"gremlin {gr_id} has setup_kind={setup_kind!r} — only worktree-branch gremlins support local landing")
@@ -1194,15 +1307,6 @@ def _land_local(gr_id: str, sf: str, wdir: str, state: dict) -> bool:
     project_root = state.get("project_root") or ""
     cwd = project_root if project_root and os.path.isdir(project_root) else None
 
-    # Safety: refuse if cwd is inside the gremlin's worktree.
-    workdir = state.get("workdir") or ""
-    if workdir and os.path.exists(workdir):
-        cwd_real = os.path.realpath(os.getcwd())
-        worktree_real = os.path.realpath(workdir)
-        if cwd_real == worktree_real or cwd_real.startswith(worktree_real + os.sep):
-            print("you are inside this gremlin's worktree — cd elsewhere before landing")
-            return False
-
     r = subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
         capture_output=True, cwd=cwd,
@@ -1211,64 +1315,48 @@ def _land_local(gr_id: str, sf: str, wdir: str, state: dict) -> bool:
         print(f"error: gremlin branch {branch!r} does not exist — may already have been cleaned up")
         return False
 
-    r = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, cwd=cwd,
-    )
-    if r.returncode != 0:
-        print("error: could not determine current branch")
+    current, ok = _preflight_land(state, cwd)
+    if not ok:
         return False
-    current = r.stdout.strip()
     if current == branch:
         print(f"error: currently on gremlin branch {branch!r} — switch to your target branch first")
         return False
 
-    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=cwd)
-    if r.stdout.strip():
-        print("error: working tree is not clean — commit or stash changes before landing")
-        return False
+    if mode == "squash":
+        return _squash_land(gr_id, sf, wdir, state, cwd, branch, branch, current, delete_branch=True)
+    return _ff_land(gr_id, sf, wdir, state, cwd, branch, branch, current, delete_branch=True)
 
-    r = subprocess.run(["git", "merge-base", "HEAD", branch], capture_output=True, text=True, cwd=cwd)
-    if r.returncode != 0:
-        print(f"error: could not compute merge-base between HEAD and {branch!r}")
+
+def _land_boss(gr_id: str, sf: str, wdir: str, state: dict, mode: str) -> bool:
+    """Land a boss gremlin's chain of squash commits onto the current branch."""
+    workdir = state.get("workdir") or ""
+    if not workdir or not os.path.isdir(workdir):
+        print(
+            f"error: boss worktree missing ({workdir!r}) — cannot resolve chain HEAD. "
+            f"Its commits are likely unreachable; use 'gremlins rm {gr_id}' to clean up."
+        )
         return False
-    merge_base = r.stdout.strip()
 
     r = subprocess.run(
-        ["git", "rev-list", "--count", f"{merge_base}..{branch}"],
-        capture_output=True, text=True, cwd=cwd,
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True, text=True, cwd=workdir,
     )
-    if int(r.stdout.strip() or "0") < 1:
-        print(f"error: gremlin branch {branch!r} has no commits above merge-base")
+    if r.returncode != 0 or not r.stdout.strip():
+        print(f"error: could not resolve HEAD in boss worktree {workdir}")
+        return False
+    boss_head = r.stdout.strip()
+
+    project_root = state.get("project_root") or ""
+    cwd = project_root if project_root and os.path.isdir(project_root) else None
+
+    current, ok = _preflight_land(state, cwd)
+    if not ok:
         return False
 
-    plan_path = os.path.join(wdir, "artifacts", "plan.md")
-    if not os.path.isfile(plan_path):
-        print(f"error: plan.md not found at {plan_path}")
-        return False
-
-    print(f"Squash-merging {branch} onto {current}...")
-    r = subprocess.run(["git", "merge", "--squash", branch], cwd=cwd)
-    if r.returncode != 0:
-        reset_ok = subprocess.run(
-            ["git", "reset", "--hard", "HEAD"], capture_output=True, cwd=cwd,
-        ).returncode == 0
-        subprocess.run(["git", "clean", "-fd"], capture_output=True, cwd=cwd)
-        suffix = "working tree restored" if reset_ok else "manual cleanup may be needed"
-        print(f"error: git merge --squash failed — {suffix}")
-        return False
-
-    subject, body = _build_commit_message(wdir, state, branch, merge_base, cwd)
-    commit_msg = f"{subject}\n\n{body}" if body else subject
-
-    r = subprocess.run(["git", "commit", "-m", commit_msg], cwd=cwd)
-    if r.returncode != 0:
-        print("error: git commit failed")
-        return False
-
-    print(f"Landed {branch} onto {current}.")
-    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=True, remove_state_dir=False)
-    return True
+    label = f"boss {gr_id} ({boss_head[:12]})"
+    if mode == "squash":
+        return _squash_land(gr_id, sf, wdir, state, cwd, boss_head, label, current, delete_branch=False)
+    return _ff_land(gr_id, sf, wdir, state, cwd, boss_head, label, current, delete_branch=False)
 
 
 def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -> bool:
@@ -1369,7 +1457,7 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
     return True
 
 
-def do_land(target: str, force: bool = False) -> bool:
+def do_land(target: str, force: bool = False, mode: str = None) -> bool:
     match = resolve_gremlin(target)
     if match is None:
         return False
@@ -1390,15 +1478,17 @@ def do_land(target: str, force: bool = False) -> bool:
         if live != "dead:finished":
             print(f"gremlin {gr_id} is not finished (liveness: {live})")
             return False
-        return _land_local(gr_id, sf, wdir, state)
-    elif kind == "ghgremlin":
-        return _land_gh(gr_id, sf, wdir, state, force=force)
+        return _land_local(gr_id, sf, wdir, state, mode or "squash")
     elif kind == "bossgremlin":
-        print(
-            f"bossgremlin chains complete automatically — use "
-            f"'gremlins close {gr_id}' (or '/gremlins close {gr_id}') to hide it"
-        )
-        return False
+        if live != "dead:finished":
+            print(f"gremlin {gr_id} is not finished (liveness: {live})")
+            return False
+        return _land_boss(gr_id, sf, wdir, state, mode or "ff")
+    elif kind == "ghgremlin":
+        if mode is not None:
+            print("error: --squash/--ff are not applicable to gh gremlins (merged via PR)")
+            return False
+        return _land_gh(gr_id, sf, wdir, state, force=force)
     else:
         print(f"error: unknown gremlin kind {kind!r} — cannot land")
         return False
@@ -1630,7 +1720,12 @@ def parse_args(argv=None):
             "                bail_reason to state.json on bail.\n"
             "  rm <id>       Delete a dead/finished gremlin's state directory, worktree, and branch.\n"
             "  close <id>    Mark a dead/finished gremlin as closed (hides it from the default view).\n"
-            "  land <id>     Land a finished gremlin: squash-merge locally (local) or merge the PR (gh).\n"
+            "  land <id>     Land a finished gremlin onto the current branch, then clean up.\n"
+            "                Default mode: localgremlin → --squash, bossgremlin → --ff.\n"
+            "                gh → merges the PR (mode flags not applicable).\n"
+            "                --squash: collapse all commits above the merge base into one.\n"
+            "                --ff:     fast-forward the current branch (hard fail if diverged).\n"
+            "                --squash and --ff are mutually exclusive.\n"
             "                Preserves the state directory — use 'rm' for full cleanup.\n"
             "                Pass --force to skip merge and clean up a closed gh PR.\n"
         ),
@@ -1728,7 +1823,13 @@ def _dispatch_subcommand():
         ok = do_close(target)
     elif subcommand == "land":
         force = "--force" in raw
-        ok = do_land(target, force=force)
+        squash_flag = "--squash" in raw
+        ff_flag = "--ff" in raw
+        if squash_flag and ff_flag:
+            print("error: --squash and --ff are mutually exclusive")
+            sys.exit(1)
+        mode = "squash" if squash_flag else ("ff" if ff_flag else None)
+        ok = do_land(target, force=force, mode=mode)
     else:
         headless = "--headless" in raw
         ok = do_rescue(target, headless=headless)

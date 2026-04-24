@@ -50,8 +50,12 @@ SETUP_KIND=$(jq  -r '.setup_kind   // empty' "$STATE_FILE" 2>/dev/null || true)
 # (SETUP_KIND=worktree-branch) has committed code changes to its branch, and
 # its plan/review artifacts live under $STATE_DIR/artifacts/ — outside the
 # worktree, so they survive removal independently.
+# Bossgremlin is exempt: its detached HEAD holds the chain's squash commits
+# with no branch ref, so removing the worktree would make them unreachable
+# before `land <boss-id>` can ff or squash them onto the target branch.
 # On failure (EC != 0) we leave the worktree in place for debugging.
 if [[ "$EC" == "0" \
+      && "$KIND" != "bossgremlin" \
       && ( "$SETUP_KIND" == "worktree" || "$SETUP_KIND" == "worktree-branch" ) \
       && -n "$PROJECT_ROOT" && -n "$WORKDIR" ]]; then
     git -C "$PROJECT_ROOT" worktree remove --force "$WORKDIR" 2>/dev/null || true
