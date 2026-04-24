@@ -13,13 +13,36 @@ set_stage() {
   "$SET_STAGE_SH" "$GR_ID" "$@" >/dev/null 2>&1 || true
 }
 
-# Tee stream-json to stdout while printing a live progress trace of tool_use
-# events to stderr.
+# Tee stream-json to stdout while printing a live progress trace of agent
+# activity (session init, tool calls, thinking, text, tool results, and final
+# summary) to stderr. All output is trimmed to 200 chars per line.
 progress_tee() {
   tee >(jq -r --unbuffered '
-    select(.type=="assistant") | .message.content[]?
-    | select(.type=="tool_use")
-    | "    · \(.name) \(.input.file_path // .input.command // .input.pattern // "")"
+    if .type == "system" and .subtype == "init" then
+      "    @ session=\(.session_id // "?") model=\(.model // "?") cwd=\(.cwd // "?")"
+    elif .type == "assistant" then
+      .message.content[]?
+      | if .type == "tool_use" then
+          "    · \(.name) \(.input.file_path // .input.command // .input.pattern // "" | .[0:200])"
+        elif .type == "thinking" then
+          "    ~ think: \(.thinking // "" | gsub("\n"; " ") | .[0:200])"
+        elif .type == "text" then
+          "    ~ text: \(.text // "" | gsub("\n"; " ") | .[0:200])"
+        else empty
+        end
+    elif .type == "user" then
+      .message.content[]?
+      | select(.type == "tool_result")
+      | "    < result\(if .is_error then " ERROR" else "" end): \(
+          if (.content | type) == "array"
+          then ([.content[] | .text // ""] | join(" ") | gsub("\n"; " ") | .[0:200])
+          else (.content // "" | tostring | gsub("\n"; " ") | .[0:200])
+          end
+        )"
+    elif .type == "result" then
+      "    = done: subtype=\(.subtype // "?") turns=\(.num_turns // "?") cost=\(.total_cost_usd // .cost_usd // "?")"
+    else empty
+    end
   ' 2>/dev/null >&2)
 }
 
