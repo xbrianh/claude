@@ -30,7 +30,7 @@ STATE_ROOT = os.path.join(
     "claude-gremlins",
 )
 
-FMT = "%-5s  %-47s  %-22s  %-28s  %-5s  %s"
+FMT = "%-5s  %-47s  %-22s  %-28s  %-5s  %-20s  %s"
 
 # Headless rescue caps. The attempt cap is shared across interactive and
 # headless rescues — both check `rescue_count`, but interactive only warns
@@ -263,14 +263,13 @@ def build_row(gr_id, sf, wdir, state, live):
     age = humanize_age(started_at)
     sid = display_id(gr_id)
     parent_id = state.get("parent_id") or ""
-    if parent_id:
-        boss_prefix = f"[boss:{display_id(parent_id)}] "
-        desc_trim = (boss_prefix + desc)[:60]
+    boss_disp = display_id(parent_id) if parent_id else ""
 
     return {
         "started_at": started_at,
         "kind": k,
         "sid": sid,
+        "boss": boss_disp,
         "stage": stage_trim,
         "live": live_trim,
         "live_full": live,
@@ -286,9 +285,9 @@ def build_row(gr_id, sf, wdir, state, live):
 
 def print_table(rows):
     """Print header + rows using the fixed format string."""
-    print(FMT % ("KIND", "ID", "STAGE", "LIVENESS", "AGE", "DESCRIPTION"))
+    print(FMT % ("KIND", "ID", "STAGE", "LIVENESS", "AGE", "BOSS", "DESCRIPTION"))
     for r in rows:
-        print(FMT % (r["kind"], r["sid"], r["stage"], r["live"], r["age"], r["desc"]))
+        print(FMT % (r["kind"], r["sid"], r["stage"], r["live"], r["age"], r["boss"], r["desc"]))
 
 
 # ---------------------------------------------------------------------------
