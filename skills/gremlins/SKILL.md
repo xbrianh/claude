@@ -1,7 +1,7 @@
 ---
 name: gremlins
 description: On-demand status of background gremlins launched by /localgremlin and /ghgremlin. Reads every ~/.local/state/claude-gremlins/<id>/state.json on the machine and prints one line per active gremlin with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed gremlins, close finished ones, stop a running gremlin, rescue a dead/stalled one, or land a finished gremlin onto its target branch. Not a project filter by default — set --here to restrict to the current repo.
-argument-hint: [stop|rescue [--headless]|rm|close|land <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
+argument-hint: [stop|rescue [--headless]|rm|close|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
 allowed-tools: Bash(~/.claude/skills/gremlins/gremlins.py:*)
 ---
 
@@ -51,10 +51,14 @@ The script produces a small table. Each row is one gremlin:
 - `rm <id>`: delete a dead or finished gremlin's state directory from disk (the log, plan, reviews, and `state.json`). Refuses with an error if the gremlin is still running or stalled — use `stop` first, then `rm`. This is permanent; use when you want to fully clean up a gremlin rather than just hide it with `close`.
 - `close <id>`: mark a dead or finished gremlin as closed (hides it from the default list view). Artifacts, logs, state directory, and branch remain on disk until `rm` is run. If the gremlin is still running or stalled, `close` will refuse and suggest using `stop` first.
 - `land <id>`: land a finished gremlin onto its target branch, then clean up. Preserves the state directory (`artifacts/plan.md`, review artifacts under `artifacts/`, `log`, `state.json`) so you can inspect the gremlin's record after merge — use `rm <id>` for full cleanup. Behavior depends on gremlin kind:
-  - **local** (`/localgremlin`): validates that the gremlin branch is finished and the working tree is clean, squash-merges the branch onto the current branch using a commit message distilled from `plan.md`'s `## Context` section, then deletes the branch. State directory is preserved.
+  - **local** (`/localgremlin`): validates that the gremlin branch is finished and the working tree is clean, then (by default) squash-merges the branch onto the current branch using a commit message distilled from `plan.md`'s `## Context` section, and deletes the branch. State directory is preserved.
+  - **boss** (`/bossgremlin`): fast-forwards the current branch to the boss's worktree HEAD by default, preserving each child gremlin's squash commit as a discrete step in history. Removes the boss worktree on success. State directory is preserved.
   - **gh** (`/ghgremlin`): reads `pr_url` from state, checks for merge blockers (changes requested, failed CI), merges the PR with `--squash --delete-branch`, fast-forwards local `main`, then removes the worktree. State directory is preserved.
   - Refuses if the gremlin is still running or stalled — use `stop` first.
   - Refuses for `CHANGES_REQUESTED` reviews or failed CI checks; prints the PR URL so you can act.
+  - `--squash`: collapse all commits above the merge base into a single commit before landing. Default for local; for boss this condenses the whole chain into one commit. Not applicable to gh (always PR-merged).
+  - `--ff`: fast-forward the current branch to the gremlin's HEAD. Default for boss; for local this preserves the implementation commits. Hard-fails if the current branch is not an ancestor of the gremlin's HEAD — re-run with `--squash` or rebase manually. Not applicable to gh.
+  - `--squash` and `--ff` are mutually exclusive.
   - `--force`: for a closed (not merged) gh PR, skips the merge and goes straight to cleanup.
 
 ## Do not
