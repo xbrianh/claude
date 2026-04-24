@@ -194,6 +194,9 @@ def _emit_event(prefix: str, evt: dict) -> None:
             ct = c.get("type")
             if ct == "text":
                 out.write(f"{prefix}text: {_trunc(c.get('text', ''))}\n")
+            elif ct == "thinking":
+                thought = c.get("thinking", "") or ""
+                out.write(f"{prefix}think: {_trunc(thought)}\n")
             elif ct == "tool_use":
                 inp = c.get("input") or {}
                 arg = ""
