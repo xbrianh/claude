@@ -204,7 +204,9 @@ if [[ -n "$PLAN_SOURCE" ]]; then
       [[ -s "$PLAN_SOURCE" ]] || die "--plan: file is empty: $PLAN_SOURCE"
       ISSUE_BODY=$(cat "$PLAN_SOURCE")
       echo "==> [1/6] plan supplied via --plan (file): $PLAN_SOURCE — posting as GitHub issue"
-      _issue_title=$(claude -p --permission-mode bypassPermissions --output-format text \
+      _title_flags=(--permission-mode bypassPermissions --output-format text)
+      [[ -n "$MODEL" ]] && _title_flags+=(--model "$MODEL")
+      _issue_title=$(claude -p "${_title_flags[@]}" \
         "Produce a concise GitHub issue title (under 80 characters) summarizing the spec below. Output ONLY the title, nothing else.
 
 $ISSUE_BODY") || die "--plan: title-generation agent failed"
@@ -278,8 +280,14 @@ $ISSUE_BODY") || die "--plan: title-generation agent failed"
   fi
 fi
 
+# On resume, restore MODEL from state.json if --model was not re-supplied.
+if [[ -z "$MODEL" && -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
+  MODEL=$(jq -r '.model // ""' "$STATE_FILE" 2>/dev/null || true)
+fi
+
 CLAUDE_FLAGS=(--permission-mode bypassPermissions --output-format stream-json --verbose)
 [[ -n "$MODEL" ]] && CLAUDE_FLAGS+=(--model "$MODEL")
+[[ -n "$MODEL" ]] && patch_state '.model = $m' --arg m "$MODEL"
 # Stages run sequentially; the wait-copilot sleep 20 loop should not be extended beyond ~5 min intervals or the Anthropic prompt cache TTL expires and cache benefits between the review and address stages are lost.
 
 # Extract a URL from a Bash-tool_result event matching a regex, preferring
