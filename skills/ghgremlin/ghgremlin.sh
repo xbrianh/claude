@@ -170,11 +170,25 @@ if [[ -n "$PLAN_SOURCE" ]]; then
   else
     # Fresh launch: classify source shape.
     if [[ -f "$PLAN_SOURCE" ]]; then
-      # Local file source. No Closes link (no issue to close).
+      # Local file source: post as a GitHub issue so the PR closes it.
       [[ -s "$PLAN_SOURCE" ]] || die "--plan: file is empty: $PLAN_SOURCE"
       ISSUE_BODY=$(cat "$PLAN_SOURCE")
       cp "$PLAN_SOURCE" "$PLAN_MD" || die "--plan: failed to copy to $PLAN_MD"
-      echo "==> [1/6] plan supplied via --plan (file): $PLAN_SOURCE"
+      echo "==> [1/6] plan supplied via --plan (file): $PLAN_SOURCE — posting as GitHub issue"
+      _issue_title=$(claude -p --permission-mode bypassPermissions --output-format text \
+        "Produce a concise GitHub issue title (under 80 characters) summarizing the spec below. Output ONLY the title, nothing else.
+
+$ISSUE_BODY") || die "--plan: title-generation agent failed"
+      _issue_title=$(printf '%s' "$_issue_title" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      _issue_title="${_issue_title:0:80}"
+      [[ -n "$_issue_title" ]] || die "--plan: title agent returned empty output"
+      _create_out=$(gh issue create --repo "$REPO" \
+        --title "$_issue_title" \
+        --body-file "$PLAN_SOURCE") || die "--plan: failed to create GitHub issue"
+      ISSUE_URL=$(printf '%s' "$_create_out" | grep -oE 'https://github\.com/[^ ]+/issues/[0-9]+' | tail -1)
+      [[ -n "$ISSUE_URL" ]] || die "--plan: could not extract issue URL from gh output: $_create_out"
+      ISSUE_NUM=$(basename "$ISSUE_URL")
+      echo "    issue: $ISSUE_URL"
     else
       # Issue reference. Accepted shapes:
       #   42         → issue #42 in the current repo
