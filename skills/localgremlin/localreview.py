@@ -60,9 +60,16 @@ def main(argv: List[str]) -> int:
         plan_path = pathlib.Path(args.plan)
         if not plan_path.exists():
             die(f"--plan does not exist: {plan_path}")
+        if not plan_path.is_file():
+            die(f"--plan is not a file: {plan_path}")
         if plan_path.stat().st_size == 0:
             die(f"--plan is empty: {plan_path}")
-        plan_text = plan_path.read_text(encoding="utf-8")
+        try:
+            plan_text = plan_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            die(f"--plan is not valid UTF-8 text: {plan_path}")
+        except OSError as exc:
+            die(f"failed to read --plan {plan_path}: {exc}")
 
     is_git = in_git_repo()
     if is_git:
@@ -84,6 +91,8 @@ def main(argv: List[str]) -> int:
             capture_output=True, text=True, check=False,
         ).stdout.strip())
         if not has_commit_diff and not has_dirty:
+            if not head1_exists:
+                die("nothing to review: no commit history beyond HEAD and working tree is clean")
             die("nothing to review: HEAD~1..HEAD has no changes and working tree is clean")
 
     print(f"==> reviewing code in parallel (models: {args.holistic}, {args.detail}, {args.scope})", flush=True)

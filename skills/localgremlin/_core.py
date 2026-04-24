@@ -526,10 +526,34 @@ def run_review_code_stage(
     """Execute the review-code stage: load lenses, fan out three reviewers,
     and return the three output paths. Emits bail_class=other on failure
     when running under a gremlin (no-op otherwise). Shared by the
-    orchestrator and /localreview."""
+    orchestrator and /localreview.
+
+    Passing ``plan_text=""`` (empty string, not None) intentionally omits
+    the plan block from the review prompt entirely — this is the contract
+    that lets standalone ``/localreview`` callers run without ``--plan``.
+    Any non-empty ``plan_text`` (even whitespace-only) takes the with-plan
+    branch and is rendered verbatim into the prompt.
+
+    Stale ``review-code-<lens>-*.md`` files for each lens are unlinked
+    before spawning the reviewers so a ``--resume-from review-code`` with
+    different ``-a/-b/-c`` models cannot leave the directory with two
+    files for the same lens (which would later confuse
+    ``run_address_code_stage``'s glob-based discovery).
+    """
     review_code_a = session_dir / f"review-code-holistic-{holistic}.md"
     review_code_b = session_dir / f"review-code-detail-{detail}.md"
     review_code_c = session_dir / f"review-code-scope-{scope}.md"
+
+    # Clean up stale per-lens review files from a previous run with
+    # different reviewer models. Without this, --resume-from review-code
+    # with changed -a/-b/-c would leave two files for the same lens and
+    # break run_address_code_stage's uniqueness check.
+    for lens in ("holistic", "detail", "scope"):
+        for stale in session_dir.glob(f"review-code-{lens}-*.md"):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     focus_a, focus_b, focus_c = load_lenses()
 
@@ -582,51 +606,68 @@ def run_address_code_stage(
 ) -> None:
     """Execute the address-code stage: glob for the three review files,
     build the address prompt, and invoke claude. Emits bail_class=other
-    on failure when running under a gremlin (no-op otherwise). Shared by
+    on failure when running under a gremlin (no-op otherwise) — including
+    failures during glob/validation before claude is spawned. Shared by
     the orchestrator and /localaddress."""
-    review_files = {}
-    for lens in ("holistic", "detail", "scope"):
-        matches = sorted(glob.glob(str(session_dir / f"review-code-{lens}-*.md")))
-        if not matches:
-            die(f"no review-code-{lens}-*.md file found in {session_dir}")
-        if len(matches) > 1:
-            die(
-                f"multiple review-code-{lens}-*.md files in {session_dir}: "
-                f"{', '.join(matches)}"
+    # Outer try/except so *any* stage failure (missing or ambiguous review
+    # files, invalid model in a filename, read errors, or the claude -p
+    # subprocess itself) records a bail marker before SystemExit
+    # propagates. Without this wrapping the pre-claude failure paths would
+    # exit via die() without ever calling emit_bail, and headless rescue
+    # would have no bail_class to act on.
+    try:
+        review_files = {}
+        for lens in ("holistic", "detail", "scope"):
+            matches = sorted(glob.glob(str(session_dir / f"review-code-{lens}-*.md")))
+            if not matches:
+                die(f"no review-code-{lens}-*.md file found in {session_dir}")
+            if len(matches) > 1:
+                die(
+                    f"multiple review-code-{lens}-*.md files in {session_dir}: "
+                    f"{', '.join(matches)}"
+                )
+            review_files[lens] = pathlib.Path(matches[0])
+
+        # Model names are embedded in the filenames as the suffix between
+        # the lens tag and the `.md` extension. Extracting them here keeps
+        # the address prompt's per-lens model labels in sync with the files
+        # that were actually produced, for both orchestrator and standalone
+        # callers. Validate against MODEL_RE so a malformed filename (e.g.
+        # review-code-holistic-.md, or one with unexpected characters)
+        # fails loudly instead of producing an empty/garbled prompt label.
+        def _model_from(path: pathlib.Path, lens: str) -> str:
+            stem = path.stem  # review-code-<lens>-<model>
+            prefix = f"review-code-{lens}-"
+            model = stem[len(prefix):] if stem.startswith(prefix) else ""
+            if not model or not MODEL_RE.match(model):
+                die(
+                    f"cannot extract a valid model name from review file: "
+                    f"{path.name}"
+                )
+            return model
+
+        model_a = _model_from(review_files["holistic"], "holistic")
+        model_b = _model_from(review_files["detail"], "detail")
+        model_c = _model_from(review_files["scope"], "scope")
+
+        text_a = review_files["holistic"].read_text(encoding="utf-8")
+        text_b = review_files["detail"].read_text(encoding="utf-8")
+        text_c = review_files["scope"].read_text(encoding="utf-8")
+
+        address_commit_instr = ""
+        if is_git:
+            address_commit_instr = (
+                "After making all fixes, stage the changed files by name and "
+                "create a single git commit titled 'Address review feedback' whose "
+                "body references all three review files. Do not push."
             )
-        review_files[lens] = pathlib.Path(matches[0])
 
-    # Model names are embedded in the filenames as the suffix between the
-    # lens tag and the `.md` extension. Extracting them here keeps the
-    # address prompt's per-lens model labels in sync with the files that
-    # were actually produced, for both orchestrator and standalone callers.
-    def _model_from(path: pathlib.Path, lens: str) -> str:
-        stem = path.stem  # review-code-<lens>-<model>
-        prefix = f"review-code-{lens}-"
-        return stem[len(prefix):] if stem.startswith(prefix) else stem
-
-    model_a = _model_from(review_files["holistic"], "holistic")
-    model_b = _model_from(review_files["detail"], "detail")
-    model_c = _model_from(review_files["scope"], "scope")
-
-    text_a = review_files["holistic"].read_text(encoding="utf-8")
-    text_b = review_files["detail"].read_text(encoding="utf-8")
-    text_c = review_files["scope"].read_text(encoding="utf-8")
-
-    address_commit_instr = ""
-    if is_git:
-        address_commit_instr = (
-            "After making all fixes, stage the changed files by name and "
-            "create a single git commit titled 'Address review feedback' whose "
-            "body references all three review files. Do not push."
-        )
-
-    # Only attached when running under a gremlin so direct invocations
-    # (no GR_ID) don't see prompt instructions for a helper they can't
-    # usefully invoke.
-    bail_section = ""
-    if os.environ.get("GR_ID"):
-        bail_section = """
+        # Only attached when running under a gremlin so direct invocations
+        # (no GR_ID) don't see prompt instructions for a helper they can't
+        # usefully invoke.
+        bail_section = ""
+        if os.environ.get("GR_ID"):
+            bail_section = """
 
 If a finding asks you to change something that touches secrets/credentials, or you decline to address one or more findings for any other reason that should halt automated recovery, run the bail helper before finishing:
   - `~/.claude/skills/_bg/set-bail.sh "$GR_ID" secrets "<one-line reason>"` if the blocked finding touches secrets.
@@ -634,7 +675,7 @@ If a finding asks you to change something that touches secrets/credentials, or y
 Do not call this helper if you successfully addressed every actionable finding.
 """
 
-    address_prompt = f"""Three independent code reviews of the most recent implementation follow. The reviewers have different lenses by design, so their findings will mostly be complementary rather than overlapping — still deduplicate where they do overlap. For every actionable finding you agree with, make the fix in the code. For findings you disagree with or choose to skip, note them briefly in your final summary with a reason.
+        address_prompt = f"""Three independent code reviews of the most recent implementation follow. The reviewers have different lenses by design, so their findings will mostly be complementary rather than overlapping — still deduplicate where they do overlap. For every actionable finding you agree with, make the fix in the code. For findings you disagree with or choose to skip, note them briefly in your final summary with a reason.
 
 ---
 **Holistic reviewer** (model: {model_a}):
@@ -656,7 +697,6 @@ Do not call this helper if you successfully addressed every actionable finding.
 {address_commit_instr}{bail_section}
 
 End with a short summary (to stdout) of: what you addressed, what you skipped and why."""
-    try:
         run_claude(
             address_model, address_prompt, "address-code",
             session_dir / "stream-address.jsonl",
