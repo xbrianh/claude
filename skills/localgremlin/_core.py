@@ -501,7 +501,7 @@ def load_lenses() -> Tuple[str, str, str]:
         "detail": SCRIPT_DIR / "lens-detail-code.md",
         "scope": SCRIPT_DIR / "lens-scope-code.md",
     }
-    for _name, path in lens_files.items():
+    for path in lens_files.values():
         if not path.exists() or path.stat().st_size == 0:
             die(f"missing or empty lens file: {path}")
     # Explicit utf-8 — lens files contain em-dashes and other non-ASCII, so
