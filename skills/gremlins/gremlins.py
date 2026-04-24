@@ -1618,6 +1618,7 @@ def parse_args(argv=None):
             "  rm <id>       Delete a dead/finished gremlin's state directory, worktree, and branch.\n"
             "  close <id>    Mark a dead/finished gremlin as closed (hides it from the default view).\n"
             "  land <id>     Land a finished gremlin: squash-merge locally (local) or merge the PR (gh).\n"
+            "                Preserves the state directory — use 'rm' for full cleanup.\n"
             "                Pass --force to skip merge and clean up a closed gh PR.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
