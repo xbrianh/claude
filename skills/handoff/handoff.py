@@ -146,6 +146,8 @@ Git diff since chain start:
    - Use the standard localgremlin plan structure exactly:
 
      ```
+     # <short one-line title summarising what this step implements>
+
      ## Context
      <brief description of what this child gremlin should implement>
 
