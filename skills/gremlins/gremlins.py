@@ -32,6 +32,26 @@ STATE_ROOT = os.path.join(
 
 FMT = "%-5s  %-47s  %-22s  %-28s  %-5s  %s"
 
+# Headless rescue caps. The attempt cap is shared across interactive and
+# headless rescues — both check `rescue_count`, but interactive only warns
+# while headless hard-refuses. The wall-clock timeout bounds Phase A so a
+# stuck `claude -p` doesn't hang an unattended caller indefinitely.
+RESCUE_CAP = 3
+try:
+    HEADLESS_PHASE_A_TIMEOUT_SECS = int(
+        os.environ.get("HEADLESS_RESCUE_TIMEOUT_SECS") or 1800
+    )
+except (ValueError, TypeError):
+    # A misconfigured env var must not break the rest of /gremlins (listing,
+    # stop, rm, close, land). Fall back silently to the default.
+    HEADLESS_PHASE_A_TIMEOUT_SECS = 1800
+
+# Bail classes the upstream stages may write into state.json.bail_class.
+# The first three are excluded from headless rescue: the spec is explicit
+# that interpreting reviewer-blocking changes, security findings, or
+# secrets-touching diffs autonomously is not safe. `other` is attempted.
+EXCLUDED_BAIL_CLASSES = ("reviewer_requested_changes", "security", "secrets")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -101,9 +121,15 @@ def liveness_of_state_file(sf: str, state=None) -> str:
     gr_status = state.get("status")
     gr_pid = state.get("pid")
     gr_exit_code = state.get("exit_code")
+    gr_bail_reason = state.get("bail_reason")
 
-    # Terminal: finish.sh ran → `finished` marker exists.
+    # Terminal: finish.sh (or headless rescue's bail path) wrote the
+    # `finished` marker. A bail_reason takes precedence over the generic
+    # exit code so listings show *why* rescue gave up rather than just
+    # "dead:exit 2".
     if os.path.isfile(os.path.join(wdir, "finished")):
+        if gr_bail_reason:
+            return f"dead:bailed:{gr_bail_reason}"
         if gr_exit_code is not None and gr_exit_code != 0 and gr_exit_code != "null":
             return f"dead:exit {gr_exit_code}"
         return "dead:finished"
@@ -383,7 +409,8 @@ def do_stop(target: str) -> bool:
     return True
 
 
-def build_rescue_prompt(state, wdir, log_tail, artifact_paths):
+def build_rescue_prompt(state, wdir, log_tail, artifact_paths,
+                        *, headless=False, marker_path=None):
     kind = state.get("kind", "localgremlin")
     stage = state.get("stage") or "unknown"
     instructions = state.get("instructions") or "(not recorded)"
@@ -405,7 +432,7 @@ def build_rescue_prompt(state, wdir, log_tail, artifact_paths):
     rescue_note_path = os.path.join(wdir, "artifacts", f"rescue-{timestamp}.md")
     log_tail_safe = log_tail.replace("```", "` ` `")
 
-    return f"""You are diagnosing a failed background gremlin so it can resume.
+    head = f"""You are diagnosing a failed background gremlin so it can resume.
 
 ## Original task
 
@@ -426,7 +453,43 @@ Stage order for {kind}: {' → '.join(stages)}
 ```
 {log_tail_safe}
 ```
+"""
 
+    if headless:
+        return head + f"""
+## What to do (headless mode — no human is watching)
+
+1. Diagnose the failure from the log above.
+2. Decide which of these applies and act accordingly:
+   - **fixable**: edit code or clean up partial state in this worktree (working directory: {workdir}) so rerunning the failed stage ({stage}) will succeed.
+   - **transient**: the failure was a flake (network, tool timeout, retriable infra). No code change needed; rerunning the same stage as-is should succeed.
+   - **unsalvageable**: the failure cannot be fixed without human input. Do NOT make speculative changes.
+3. Write a brief rescue note to `{rescue_note_path}` describing what failed and what (if anything) you did.
+4. Write a marker file to **exactly** this path:
+
+       {marker_path}
+
+   The marker MUST be a single JSON object with these fields:
+   - `"status"`: one of `"fixed"`, `"transient"`, or `"unsalvageable"` (mapping to the cases above).
+   - `"summary"` (optional): a one-line string explaining your decision.
+
+   Example:
+
+   ```json
+   {{"status": "fixed", "summary": "removed stale lockfile blocking the build"}}
+   ```
+
+5. Stop. Do NOT re-run the failed stage or any remaining stages yourself — the wrapper reads the marker and (on `fixed`/`transient`) hands off to a background resume that relaunches the pipeline starting at {stage}. On `unsalvageable`, the wrapper writes a bail reason and the gremlin stays terminal.
+
+Constraints for headless mode:
+- Do NOT prompt for input; there is no TTY.
+- Do NOT call `exit` or otherwise abort — finish normally so the wrapper can read the marker.
+- If you cannot write the marker file, the wrapper will treat that as an unsalvageable failure.
+
+Work directly in the current directory. Do not re-invoke the gremlin script.
+"""
+
+    return head + f"""
 ## What to do
 
 1. Diagnose the failure from the log above.
@@ -438,7 +501,130 @@ Work directly in the current directory. Do not re-invoke the gremlin script.
 """
 
 
-def do_rescue(target: str) -> bool:
+def _atomic_patch_state(sf: str, patch: dict) -> bool:
+    """Merge `patch` into state.json atomically. Returns True on success.
+
+    Used by headless rescue's bail paths so a partial write can't leave
+    state.json corrupt mid-bail. Stages that need to write a single field
+    (bail_class, stage) should still go through their dedicated jq-based
+    helper scripts for parity with the non-Python callers.
+    """
+    try:
+        with open(sf, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except Exception:
+        return False
+    state.update(patch)
+    # Unique temp path (pid-scoped) so two concurrent bail-patchers can't
+    # clobber each other's in-flight write. Matches the `$$`-suffixed
+    # pattern used by set-stage.sh / set-bail.sh.
+    tmp = f"{sf}.bail.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2)
+        os.replace(tmp, sf)
+        return True
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _write_bail(sf: str, wdir: str, bail_reason: str, bail_detail: str = "") -> None:
+    """Mark a gremlin as bailed by headless rescue.
+
+    Writes bail_reason/bail_detail/status/exit_code/ended_at into state.json
+    and touches the `finished` marker so liveness classifies the gremlin as
+    terminal (`dead:bailed:<reason>`). Best-effort throughout — failing to
+    write either piece leaves the gremlin in its prior state, which is no
+    worse than before headless rescue ran.
+    """
+    now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    _atomic_patch_state(sf, {
+        "bail_reason": bail_reason,
+        "bail_detail": bail_detail,
+        "status": "bailed",
+        "exit_code": 2,
+        "ended_at": now_iso,
+    })
+    try:
+        pathlib.Path(os.path.join(wdir, "finished")).touch()
+    except OSError:
+        pass
+
+
+def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
+    """Run Phase A non-interactively. Returns (status, error_msg).
+
+    status ∈ {"fixed", "transient", "unsalvageable"} → handled by caller
+    status ∈ {"timeout", "claude_exit", "no_marker", "bad_marker"} →
+        Phase A failure modes that should write a bail_reason.
+
+    error_msg is empty for the success-shaped statuses ("fixed",
+    "transient") and populated for the failure-shaped ones (including
+    "unsalvageable", which carries the agent's summary if provided).
+    """
+    env = os.environ.copy()
+    # Same rationale as _run_claude_p_text below — keep the session-summary
+    # hook from prepending its block to the agent's output, which would
+    # otherwise corrupt anything the agent prints to its final reply (we
+    # don't actually read the reply here, but the hook also slows things
+    # down materially when scanning state).
+    env["GREMLIN_SKIP_SUMMARY"] = "1"
+    cmd = [
+        "claude", "-p",
+        "--permission-mode", "bypassPermissions",
+        "--output-format", "text",
+        prompt,
+    ]
+    try:
+        # Discard stdout — the agent's reply can be large and we don't read
+        # it (results come from the marker file, not the process output).
+        # Keep stderr for the failure-path snippet.
+        result = subprocess.run(
+            cmd,
+            cwd=workdir,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=HEADLESS_PHASE_A_TIMEOUT_SECS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return "timeout", f"claude -p exceeded {HEADLESS_PHASE_A_TIMEOUT_SECS}s"
+    except FileNotFoundError:
+        return "claude_exit", "'claude' CLI not found in PATH"
+
+    if result.returncode != 0:
+        stderr_snip = (result.stderr or "").strip().splitlines()[-1:] or [""]
+        return "claude_exit", f"claude -p exited {result.returncode}: {stderr_snip[0]}"
+
+    if not os.path.isfile(marker_path):
+        return "no_marker", f"agent did not write marker file at {marker_path}"
+
+    try:
+        with open(marker_path, encoding="utf-8") as fh:
+            marker = json.load(fh)
+    except Exception as exc:
+        return "bad_marker", f"marker file unreadable: {exc}"
+
+    if not isinstance(marker, dict):
+        return "bad_marker", "marker file is not a JSON object"
+
+    status = marker.get("status")
+    summary = marker.get("summary") or ""
+    if status not in ("fixed", "transient", "unsalvageable"):
+        return "bad_marker", f"marker has invalid status: {status!r}"
+
+    if status == "unsalvageable":
+        return status, summary or "agent declared failure unsalvageable"
+    return status, ""
+
+
+def do_rescue(target: str, headless: bool = False) -> bool:
     match = resolve_gremlin(target)
     if match is None:
         return False
@@ -462,11 +648,51 @@ def do_rescue(target: str) -> bool:
         if not do_stop(target):
             print("error: could not stop the stalled gremlin — aborting rescue")
             return False
+        # Reload state — do_stop wrote ended_at / status / exit_code via the
+        # finished-marker fallback, and we want the fresh values for the
+        # bail-class and rescue_count checks below.
+        state = load_state(sf) or state
 
     workdir = state.get("workdir")
     if not workdir:
         print(f"error: no workdir recorded in state for {gr_id} — cannot rescue")
         return False
+
+    rescue_count_raw = state.get("rescue_count") or 0
+    try:
+        rescue_count = int(rescue_count_raw)
+    except (ValueError, TypeError):
+        rescue_count = 0
+
+    bail_class = state.get("bail_class") or ""
+
+    # Headless: hard-refuse on excluded class or exhausted attempts. Both
+    # paths write a fresh bail_reason (overwriting any prior one) so the
+    # most recent decision is what /gremlins listings show.
+    if headless:
+        if bail_class in EXCLUDED_BAIL_CLASSES:
+            reason = f"excluded_class:{bail_class}"
+            detail = state.get("bail_detail") \
+                or f"upstream stage bailed with bail_class={bail_class}"
+            _write_bail(sf, wdir, reason, detail)
+            print(f"headless rescue refused: {reason}")
+            return False
+        if rescue_count >= RESCUE_CAP:
+            reason = "attempts_exhausted"
+            detail = f"rescue_count={rescue_count} reached cap of {RESCUE_CAP}"
+            _write_bail(sf, wdir, reason, detail)
+            print(f"headless rescue refused: {reason}")
+            return False
+    else:
+        # Interactive: warn but let the human override. The cap is
+        # primarily a guardrail for autonomous callers; a person watching
+        # Phase A can decide for themselves whether attempt #4 is worth it.
+        if rescue_count >= RESCUE_CAP:
+            print(
+                f"warning: gremlin has been rescued {rescue_count} times "
+                f"(cap is {RESCUE_CAP}); proceeding because this is interactive — "
+                f"Ctrl-C to abort."
+            )
 
     stage = state.get("stage") or "unknown"
 
@@ -488,39 +714,87 @@ def do_rescue(target: str) -> bool:
             if os.path.isfile(fpath):
                 artifact_paths.append(fpath)
 
-    prompt = build_rescue_prompt(state, wdir, log_tail, artifact_paths)
+    marker_path = None
+    if headless:
+        # The marker file is the contract between the headless agent and
+        # this wrapper. We pre-create the artifacts dir so the agent doesn't
+        # need to mkdir it themselves — one less thing to get wrong.
+        try:
+            os.makedirs(artifacts_dir, exist_ok=True)
+        except OSError:
+            pass
+        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        marker_path = os.path.join(artifacts_dir, f"rescue-{ts}.done")
+
+    prompt = build_rescue_prompt(state, wdir, log_tail, artifact_paths,
+                                 headless=headless, marker_path=marker_path)
 
     print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
     print(f"Working directory: {workdir}")
-    print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
-    print()
 
-    try:
-        result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
-    except FileNotFoundError:
-        print("error: 'claude' CLI not found in PATH")
-        return False
-    except KeyboardInterrupt:
-        print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
-        return False
+    if headless:
+        print(
+            f"Phase A (headless): running diagnosis agent "
+            f"(timeout: {HEADLESS_PHASE_A_TIMEOUT_SECS}s, marker: {marker_path})..."
+        )
+        status, err_msg = _run_headless_phase_a(workdir, prompt, marker_path)
 
-    if result.returncode != 0:
+        if status == "timeout":
+            _write_bail(sf, wdir, "phase_a_timeout", err_msg)
+            print(f"Phase A timed out: {err_msg}")
+            return False
+        if status == "claude_exit":
+            _write_bail(sf, wdir, "phase_a_claude_error", err_msg)
+            print(f"Phase A claude error: {err_msg}")
+            return False
+        if status == "no_marker":
+            _write_bail(sf, wdir, "phase_a_no_marker", err_msg)
+            print(f"Phase A produced no marker file: {err_msg}")
+            return False
+        if status == "bad_marker":
+            _write_bail(sf, wdir, "phase_a_bad_marker", err_msg)
+            print(f"Phase A marker file invalid: {err_msg}")
+            return False
+        if status == "unsalvageable":
+            _write_bail(sf, wdir, "unsalvageable", err_msg)
+            print(f"Phase A: agent declared the failure unsalvageable ({err_msg})")
+            return False
+        # status == "fixed" or "transient" → proceed to Phase B. Both count
+        # as a rescue attempt; the launcher increments rescue_count when it
+        # actually relaunches.
+        print(f"Phase A complete (status: {status}); handing off to Phase B...")
+    else:
+        print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
         print()
-        print(f"Rescue agent exited with code {result.returncode}.")
-        print("Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
-        print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
-        return False
+        try:
+            result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
+        except FileNotFoundError:
+            print("error: 'claude' CLI not found in PATH")
+            return False
+        except KeyboardInterrupt:
+            print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
+            return False
+
+        if result.returncode != 0:
+            print()
+            print(f"Rescue agent exited with code {result.returncode}.")
+            print("Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
+            print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
+            return False
 
     # Phase B: hand off to launch.sh --resume so the remaining stages run in the
     # background under the same GR_ID. launch.sh patches state.json, clears the
-    # finished/summarized markers, and relaunches the pipeline with
-    # --resume-from <stage>.
+    # finished/summarized markers, increments rescue_count, and relaunches the
+    # pipeline with --resume-from <stage>.
     launcher = os.path.expanduser("~/.claude/skills/_bg/launch.sh")
     # os.access(..., X_OK) rather than os.path.isfile: an un-chmod'd launcher
     # (e.g. after a manual edit) would pass the existence check and then fail
     # with a PermissionError inside subprocess.run, which isn't caught by the
     # FileNotFoundError handler below.
     if not os.access(launcher, os.X_OK):
+        if headless:
+            _write_bail(sf, wdir, "phase_b_launcher_missing",
+                        f"launcher not executable at {launcher}")
         print(f"error: launcher not executable at {launcher} — cannot resume in background")
         return False
 
@@ -532,10 +806,16 @@ def do_rescue(target: str) -> bool:
             cwd=workdir,
         )
     except FileNotFoundError:
+        if headless:
+            _write_bail(sf, wdir, "phase_b_launcher_missing",
+                        f"could not exec launcher at {launcher}")
         print(f"error: could not exec launcher at {launcher}")
         return False
 
     if resume_result.returncode != 0:
+        if headless:
+            _write_bail(sf, wdir, "phase_b_relaunch_failed",
+                        f"launcher exit {resume_result.returncode}")
         print(f"error: background resume failed (launcher exit {resume_result.returncode})")
         return False
 
@@ -1276,6 +1556,23 @@ def do_drill_in(target: str):
     print(f"  age      : {age}")
     if local_start:
         print(f"  started  : {local_start}")
+
+    # Surface bail markers (if any) above the raw state dump so they're
+    # immediately visible. bail_class is upstream-set by review/address
+    # stages; bail_reason/bail_detail are headless-rescue-set when it
+    # declined to proceed.
+    bail_class = state.get("bail_class")
+    bail_reason = state.get("bail_reason")
+    bail_detail = state.get("bail_detail")
+    if bail_class or bail_reason:
+        print("  bail:")
+        if bail_class:
+            print(f"    class  : {bail_class}")
+        if bail_reason:
+            print(f"    reason : {bail_reason}")
+        if bail_detail:
+            print(f"    detail : {bail_detail}")
+
     print("  state.json fields:")
     for key, val in state.items():
         print(f"    {key}: {json.dumps(val)}")
@@ -1313,6 +1610,9 @@ def parse_args(argv=None):
             "Subcommands (positional, before flags):\n"
             "  stop <id>     Send SIGTERM to a running gremlin and wait for it to exit.\n"
             "  rescue <id>   Diagnose and resume a dead or stalled gremlin inline.\n"
+            "                Pass --headless to run end-to-end with no TTY: refuses\n"
+            "                excluded bail classes, caps at 3 attempts, writes a\n"
+            "                bail_reason to state.json on bail.\n"
             "  rm <id>       Delete a dead/finished gremlin's state directory, worktree, and branch.\n"
             "  close <id>    Mark a dead/finished gremlin as closed (hides it from the default view).\n"
             "  land <id>     Land a finished gremlin: squash-merge locally (local) or merge the PR (gh).\n"
@@ -1414,7 +1714,8 @@ def _dispatch_subcommand():
         force = "--force" in raw
         ok = do_land(target, force=force)
     else:
-        ok = do_rescue(target)
+        headless = "--headless" in raw
+        ok = do_rescue(target, headless=headless)
     return True, ok
 
 

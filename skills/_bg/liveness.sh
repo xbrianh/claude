@@ -31,20 +31,26 @@ liveness_of_state_file() {
     [[ -f "$sf" ]] || return 0
     # Note: avoid `status` as a local name — it's a special/readonly in zsh,
     # and this file is intended to be sourced from either bash or zsh hooks.
-    local wdir gr_status gr_pid gr_exit_code
+    local wdir gr_status gr_pid gr_exit_code gr_bail_reason
     wdir=$(dirname "$sf")
 
     # US (\x1f) separator, matching session-summary.sh and gremlins.py: bash
     # treats tab as IFS-whitespace and collapses consecutive empty columns, so
-    # a future 4th field could silently lose a value. US is non-whitespace.
-    IFS=$'\x1f' read -r gr_status gr_pid gr_exit_code < <(
+    # a future 5th field could silently lose a value. US is non-whitespace.
+    IFS=$'\x1f' read -r gr_status gr_pid gr_exit_code gr_bail_reason < <(
         jq -r '[.status, (.pid // "" | tostring),
-                (.exit_code // "" | tostring)] | join("\u001f")' "$sf" 2>/dev/null || true
+                (.exit_code // "" | tostring),
+                (.bail_reason // "")] | join("\u001f")' "$sf" 2>/dev/null || true
     )
 
-    # Terminal: finish.sh ran → `finished` marker exists.
+    # Terminal: finish.sh (or headless rescue's bail path) wrote the
+    # `finished` marker. A bail_reason takes precedence over the generic
+    # exit code so listings show *why* rescue gave up rather than just
+    # "dead:exit 2".
     if [[ -f "$wdir/finished" ]]; then
-        if [[ -n "$gr_exit_code" && "$gr_exit_code" != "0" && "$gr_exit_code" != "null" ]]; then
+        if [[ -n "$gr_bail_reason" ]]; then
+            echo "dead:bailed:$gr_bail_reason"
+        elif [[ -n "$gr_exit_code" && "$gr_exit_code" != "0" && "$gr_exit_code" != "null" ]]; then
             echo "dead:exit $gr_exit_code"
         else
             echo "dead:finished"

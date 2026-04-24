@@ -36,6 +36,7 @@ from typing import List, Optional, Tuple
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 SET_STAGE_SH = pathlib.Path.home() / ".claude" / "skills" / "_bg" / "set-stage.sh"
+SET_BAIL_SH = pathlib.Path.home() / ".claude" / "skills" / "_bg" / "set-bail.sh"
 MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GR_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -135,6 +136,32 @@ def set_stage(stage: str, sub_stage=None) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+        )
+    except Exception:
+        pass
+
+
+def emit_bail(bail_class: str, bail_detail: str = "") -> None:
+    """Shell out to set-bail.sh to record a bail_class (and optional detail)
+    on the running gremlin's state.json. Read by /gremlins rescue --headless
+    to decide whether to attempt automated recovery. No-op without GR_ID or
+    when the helper is missing — never raises, the stage is already failing
+    and bail bookkeeping must not mask the underlying error."""
+    gr_id = os.environ.get("GR_ID")
+    if not gr_id:
+        return
+    try:
+        if not SET_BAIL_SH.exists() or not os.access(str(SET_BAIL_SH), os.X_OK):
+            return
+    except Exception:
+        return
+    try:
+        subprocess.run(
+            [str(SET_BAIL_SH), gr_id, bail_class, bail_detail],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
         )
     except Exception:
         pass
@@ -748,14 +775,23 @@ Task: {instructions}"""
         code_review_context = (
             f"The plan for this change is:\n\n{plan_text}\n\n{code_scope}"
         )
-        run_triple_review(
-            context=code_review_context,
-            focuses=(focus_a, focus_b, focus_c),
-            out_files=(review_code_a, review_code_b, review_code_c),
-            models=(args.holistic, args.detail, args.scope),
-            where_field="**File:** `path/to/file.ext:<line>`",
-            session_dir=session_dir,
-        )
+        # Wrap so any infrastructure failure (claude -p crash, missing
+        # output file, etc.) records bail_class=other before the SystemExit
+        # propagates. Headless rescue can attempt the `other` class — but
+        # at least the bail field tells callers *something* failed during
+        # review-code rather than leaving them to grep the log.
+        try:
+            run_triple_review(
+                context=code_review_context,
+                focuses=(focus_a, focus_b, focus_c),
+                out_files=(review_code_a, review_code_b, review_code_c),
+                models=(args.holistic, args.detail, args.scope),
+                where_field="**File:** `path/to/file.ext:<line>`",
+                session_dir=session_dir,
+            )
+        except (SystemExit, Exception) as exc:
+            emit_bail("other", f"review-code stage failed: {exc}"[:200])
+            raise
         print(f"    holistic code review ({args.holistic}): {review_code_a}", flush=True)
         print(f"    detail code review   ({args.detail}): {review_code_b}", flush=True)
         print(f"    scope code review    ({args.scope}): {review_code_c}", flush=True)
@@ -774,6 +810,18 @@ Task: {instructions}"""
         text_a = review_code_a.read_text(encoding="utf-8")
         text_b = review_code_b.read_text(encoding="utf-8")
         text_c = review_code_c.read_text(encoding="utf-8")
+        # Only attached when running under a gremlin so direct invocations
+        # (no GR_ID) don't see prompt instructions for a helper they can't
+        # usefully invoke.
+        bail_section = ""
+        if os.environ.get("GR_ID"):
+            bail_section = """
+
+If a finding asks you to change something that touches secrets/credentials, or you decline to address one or more findings for any other reason that should halt automated recovery, run the bail helper before finishing:
+  - `~/.claude/skills/_bg/set-bail.sh "$GR_ID" secrets "<one-line reason>"` if the blocked finding touches secrets.
+  - `~/.claude/skills/_bg/set-bail.sh "$GR_ID" other "<one-line reason>"` for any other reason you cannot proceed.
+Do not call this helper if you successfully addressed every actionable finding.
+"""
         address_prompt = f"""Three independent code reviews of the most recent implementation follow. The reviewers have different lenses by design, so their findings will mostly be complementary rather than overlapping — still deduplicate where they do overlap. For every actionable finding you agree with, make the fix in the code. For findings you disagree with or choose to skip, note them briefly in your final summary with a reason.
 
 ---
@@ -793,13 +841,17 @@ Task: {instructions}"""
 
 ---
 
-{address_commit_instr}
+{address_commit_instr}{bail_section}
 
 End with a short summary (to stdout) of: what you addressed, what you skipped and why."""
-        run_claude(
-            args.address, address_prompt, "address-code",
-            session_dir / "stream-address.jsonl",
-        )
+        try:
+            run_claude(
+                args.address, address_prompt, "address-code",
+                session_dir / "stream-address.jsonl",
+            )
+        except (SystemExit, Exception) as exc:
+            emit_bail("other", f"address-code stage failed: {exc}"[:200])
+            raise
 
     print("", flush=True)
     print(f"done. session artifacts in: {session_dir}", flush=True)

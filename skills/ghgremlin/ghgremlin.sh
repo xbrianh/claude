@@ -106,6 +106,20 @@ patch_state() {
   fi
 }
 
+# check_bail <stage-label> — if the just-completed stage wrote a bail_class
+# into state.json (via _bg/set-bail.sh), die so the gremlin pipeline halts
+# cleanly. /gremlins rescue --headless then reads bail_class to decide
+# whether to attempt automated recovery; for excluded classes (security,
+# secrets, reviewer_requested_changes) it refuses outright.
+check_bail() {
+  [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]] || return 0
+  local label="${1:-stage}" cls
+  cls=$(jq -r '.bail_class // ""' "$STATE_FILE" 2>/dev/null)
+  if [[ -n "$cls" ]]; then
+    die "$label bailed: bail_class=$cls (see state.json bail_detail)"
+  fi
+}
+
 command -v claude >/dev/null || die "claude CLI not found"
 command -v gh >/dev/null     || die "gh CLI not found"
 command -v jq >/dev/null     || die "jq not found"
@@ -331,6 +345,7 @@ If the diff is scoped correctly, write exactly: 'Scoped correctly — nothing to
 
   wait "$pid_ghreview" || { kill "$pid_scope" 2>/dev/null; wait "$pid_scope" 2>/dev/null; die "/ghreview failed"; }
   wait "$pid_scope"    || die "scope reviewer failed"
+  check_bail "/ghreview"
 fi
 
 if run_stage wait-copilot; then
@@ -358,6 +373,7 @@ if run_stage ghaddress; then
   set_stage ghaddress
   echo "==> [6/6] running /ghaddress"
   claude -p "${CLAUDE_FLAGS[@]}" "/ghaddress $PR_URL" | progress_tee >/dev/null
+  check_bail "/ghaddress"
 fi
 
 echo ""
