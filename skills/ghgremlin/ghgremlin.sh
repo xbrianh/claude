@@ -52,7 +52,8 @@ progress_tee() {
 REF=""
 RESUME_FROM=""
 PLAN_SOURCE=""
-USAGE='usage: ghgremlin.sh [-r <ref>] [--resume-from <stage>] [--plan <path|issue-ref>] "<instructions>"'
+MODEL=""
+USAGE='usage: ghgremlin.sh [-r <ref>] [--resume-from <stage>] [--plan <path|issue-ref>] [--model <model>] "<instructions>"'
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -r)
@@ -64,6 +65,9 @@ while [[ $# -gt 0 ]]; do
     --plan)
       [[ $# -ge 2 ]] || die "$USAGE"
       PLAN_SOURCE="$2"; shift 2 ;;
+    --model)
+      [[ $# -ge 2 ]] || die "$USAGE"
+      MODEL="$2"; shift 2 ;;
     --) shift; break ;;
     -*) die "unknown flag: $1" ;;
     *) break ;;
@@ -275,6 +279,7 @@ $ISSUE_BODY") || die "--plan: title-generation agent failed"
 fi
 
 CLAUDE_FLAGS=(--permission-mode bypassPermissions --output-format stream-json --verbose)
+[[ -n "$MODEL" ]] && CLAUDE_FLAGS+=(--model "$MODEL")
 # Stages run sequentially; the wait-copilot sleep 20 loop should not be extended beyond ~5 min intervals or the Anthropic prompt cache TTL expires and cache benefits between the review and address stages are lost.
 
 # Extract a URL from a Bash-tool_result event matching a regex, preferring
