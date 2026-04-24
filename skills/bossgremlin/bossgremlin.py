@@ -147,7 +147,7 @@ def save_boss_state(state_dir: str, boss_state: dict) -> None:
 
 
 def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
-                project_root: str, model: str) -> tuple:
+                project_root: str, model: str, target_branch: str) -> tuple:
     """Run handoff agent. Returns (exit_state, signal dict).
 
     Updates boss_state in place (handoff_count, current_plan, handoff_records).
@@ -164,7 +164,7 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     current_plan = boss_state["current_plan"]
     base_ref = boss_state["chain_base_ref"]
 
-    log(f"handoff {n}: plan={current_plan}, base={base_ref[:12]}")
+    log(f"handoff {n}: plan={current_plan}, base={base_ref[:12]}, rev={target_branch or 'HEAD'}")
     cmd = [
         handoff_script,
         "--plan", current_plan,
@@ -173,6 +173,11 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
         "--model", model,
         "--timeout", str(HANDOFF_TIMEOUT),
     ]
+    if target_branch:
+        # Run in the real repo root so git can resolve the target branch, and
+        # pass --rev so handoff inspects landed work on that branch rather than
+        # whatever HEAD the caller happens to have checked out.
+        cmd += ["--rev", target_branch]
     rc = run_proc(cmd, cwd=project_root)
     check_stop()
 
@@ -379,6 +384,7 @@ def main(argv):
                 boss_state=boss_state,
                 project_root=project_root,
                 model=args.model,
+                target_branch=boss_state.get("target_branch", ""),
             )
             save_boss_state(state_dir, boss_state)
             check_stop()
@@ -404,16 +410,57 @@ def main(argv):
             current_child_id = launch_child(gr_id, launch_kind, child_plan)
             boss_state["current_child_id"] = current_child_id
             save_boss_state(state_dir, boss_state)
+            # Stop the freshly launched child if a stop was requested during
+            # or just after launch (pre-wait window).
+            if _stop_requested:
+                log(f"stop requested — stopping newly launched child {current_child_id}")
+                gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
+                if os.access(gremlins, os.X_OK):
+                    subprocess.run([gremlins, "stop", current_child_id], capture_output=True)
+                sys.exit(130)
             check_stop()
 
         else:
             # Resume path: already have a child in flight
             log(f"resuming with in-flight child: {current_child_id}")
             if child_is_closed(current_child_id):
-                log(f"child {current_child_id} already closed — treating as landed")
-                boss_state["current_child_id"] = None
-                save_boss_state(state_dir, boss_state)
-                continue
+                # `closed` is a UI hide flag, not a success/failure signal.
+                # Inspect the finished marker and exit_code to determine outcome.
+                child_wdir = os.path.join(STATE_ROOT, current_child_id)
+                finished_path = os.path.join(child_wdir, "finished")
+                state_path = os.path.join(child_wdir, "state.json")
+                if os.path.isfile(finished_path) and os.path.isfile(state_path):
+                    try:
+                        child_state = load_json(state_path)
+                        child_succeeded = child_state.get("exit_code") == 0
+                    except Exception:
+                        child_succeeded = False
+                else:
+                    child_succeeded = False
+
+                if child_succeeded:
+                    # Already finished successfully and closed — treat as landed
+                    log(f"child {current_child_id} already finished and closed — treating as landed")
+                    boss_state["children"].append({
+                        "id": current_child_id,
+                        "outcome": "landed",
+                    })
+                    boss_state["current_child_id"] = None
+                    save_boss_state(state_dir, boss_state)
+                    continue
+                else:
+                    # Closed but not successfully finished — operator may have
+                    # manually hidden a failed child.  Halt for operator action.
+                    log(
+                        f"child {current_child_id} is closed but did not finish successfully"
+                        f" — operator action required"
+                    )
+                    boss_state["current_child_id"] = None
+                    save_boss_state(state_dir, boss_state)
+                    die(
+                        f"chain halted: child {current_child_id} was manually closed without"
+                        f" successfully finishing — inspect and resume or reassign"
+                    )
 
         # Step 2: inner loop — wait → land → (rescue → wait → land)* → bail
         was_rescued = False
@@ -443,9 +490,24 @@ def main(argv):
                     save_boss_state(state_dir, boss_state)
                     break  # inner loop done; outer loop continues to next handoff
                 else:
-                    log(f"landing failed for {current_child_id}")
+                    # The pipeline succeeded but land itself failed (e.g. merge
+                    # conflict, branch protection rejection, squash conflict).
+                    # Re-running the pipeline via rescue cannot clear this
+                    # blocker, so halt the chain for operator action.
+                    log(f"landing failed for {current_child_id} — operator action required")
+                    boss_state["children"].append({
+                        "id": current_child_id,
+                        "outcome": "land-failed",
+                    })
+                    boss_state["current_child_id"] = None
+                    save_boss_state(state_dir, boss_state)
+                    die(
+                        f"chain halted: child {current_child_id} pipeline succeeded but"
+                        f" land failed (merge conflict or branch protection?) —"
+                        f" resolve manually, then resume the boss"
+                    )
 
-            # Pipeline or land failure → rescue
+            # Pipeline failure → rescue
             set_stage(gr_id, "rescuing")
             if not rescue_child(current_child_id):
                 bail_reason = get_child_bail_reason(current_child_id)
@@ -454,7 +516,7 @@ def main(argv):
                     "id": current_child_id,
                     "outcome": f"bailed:{bail_reason}" if bail_reason else "bailed",
                 })
-                boss_state["current_child_id"] = current_child_id
+                boss_state["current_child_id"] = None
                 save_boss_state(state_dir, boss_state)
                 die(f"chain halted: child {current_child_id} failed and rescue was refused")
 

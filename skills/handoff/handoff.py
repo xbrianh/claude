@@ -55,27 +55,38 @@ def auto_name_out(plan_path: pathlib.Path) -> pathlib.Path:
         n += 1
 
 
-def collect_git_context(base_ref: Optional[str]) -> Tuple[str, str, str]:
-    """Return (branch_name, git_log, git_diff) since merge-base with base_ref."""
+def collect_git_context(base_ref: Optional[str], rev: Optional[str] = None) -> Tuple[str, str, str]:
+    """Return (branch_name, git_log, git_diff) since merge-base with base_ref.
+
+    If rev is given, inspect that ref instead of HEAD (useful when the caller
+    cannot check out the target branch, e.g. the boss gremlin inspecting the
+    target branch tip from its frozen worktree context).
+    """
     target = base_ref or "main"
+    inspect_rev = rev or "HEAD"
 
     # Validate target ref exists early so we get a clear error message
     result = run_git("rev-parse", "--verify", target, check=False)
     if result.returncode != 0:
         die(f"--base ref not found in repo: {target!r}")
 
-    result = run_git("rev-parse", "--abbrev-ref", "HEAD")
-    branch = result.stdout.strip()
+    if rev is not None:
+        result = run_git("rev-parse", "--verify", rev, check=False)
+        if result.returncode != 0:
+            die(f"--rev ref not found in repo: {rev!r}")
 
-    result = run_git("merge-base", "HEAD", target, check=False)
+    result = run_git("rev-parse", "--abbrev-ref", inspect_rev, check=False)
+    branch = result.stdout.strip() if result.returncode == 0 else inspect_rev
+
+    result = run_git("merge-base", inspect_rev, target, check=False)
     if result.returncode != 0:
-        die(f"could not compute merge-base between HEAD and {target!r}")
+        die(f"could not compute merge-base between {inspect_rev!r} and {target!r}")
     merge_base = result.stdout.strip()
 
-    result = run_git("log", f"{merge_base}..HEAD", "--oneline")
+    result = run_git("log", f"{merge_base}..{inspect_rev}", "--oneline")
     git_log = result.stdout.strip()
 
-    result = run_git("diff", f"{merge_base}..HEAD")
+    result = run_git("diff", f"{merge_base}..{inspect_rev}")
     git_diff = result.stdout
 
     return branch, git_log, git_diff
@@ -170,6 +181,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--model", dest="model", default="sonnet")
     parser.add_argument("--timeout", dest="timeout", type=int, default=None,
                         help="timeout in seconds for the inner claude agent (default: no timeout)")
+    parser.add_argument("--rev", dest="rev", default=None,
+                        help="inspect this ref instead of HEAD (e.g. a target branch name)")
     return parser.parse_args(argv)
 
 
@@ -206,7 +219,7 @@ def main(argv: List[str]) -> int:
     signal_path = out_path.parent / (out_path.stem + ".state.json")
 
     try:
-        branch, git_log, git_diff = collect_git_context(args.base)
+        branch, git_log, git_diff = collect_git_context(args.base, rev=args.rev)
     except SystemExit:
         raise
     except Exception as exc:
