@@ -111,24 +111,18 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     # launch.sh resume may pass an empty-string positional when a --plan
     # gremlin is resumed; treat that as "no positional supplied" rather than
-    # a literal empty-string instruction.
-    args.instructions = [s for s in args.instructions if s]
+    # a literal empty-string instruction. Narrowed to the resume path so the
+    # fresh-launch mutex (`--plan foo.md ""`) still fires on a literal empty
+    # string passed alongside --plan.
+    if args.resume_from:
+        args.instructions = [s for s in args.instructions if s]
     if args.plan_path:
         if args.instructions:
             die("--plan and positional instructions are mutually exclusive")
-        # Existing plan.md snapshot (resume path): don't re-validate the source
-        # file — it may have been deleted or edited since launch, and the
-        # snapshot in session_dir/plan.md is the durable record.
-        # Fresh launch: validate that the path is a readable, non-empty file.
-        # The snapshot check happens in main() against session_dir, so here
-        # we only do the fresh-launch validation. When resumed, main() skips
-        # re-copying, so a missing source file is tolerated there.
-        if not args.resume_from:
-            p = pathlib.Path(args.plan_path)
-            if not p.is_file():
-                die(f"--plan: file not found: {args.plan_path}")
-            if p.stat().st_size == 0:
-                die(f"--plan: file is empty: {args.plan_path}")
+        # Source-file validation is deferred to main() so it can check the
+        # session_dir/plan.md snapshot first: on resume the snapshot is the
+        # durable record and the source may have been deleted or edited;
+        # only a fresh launch (no snapshot) actually needs the source file.
     else:
         if not args.instructions:
             die(usage)
@@ -154,6 +148,23 @@ def main(argv: List[str]) -> int:
     review_code_c = session_dir / f"review-code-scope-{args.scope}.md"
 
     print(f"==> session: {session_dir}", flush=True)
+
+    # --plan staging happens up front (before the --resume-from precondition
+    # checks below) so `--plan <path> --resume-from implement` works: the
+    # `implement` precondition requires plan.md to exist, and if we staged
+    # --plan afterwards the precondition would fire first on fresh + resume
+    # combos. On resume we skip re-copying — session_dir/plan.md is the
+    # durable snapshot per the spec's rescue-determinism rule — and only
+    # require the source file on a fresh launch (no snapshot yet).
+    plan_copied_from_source = False
+    if args.plan_path and not plan_file.exists():
+        src = pathlib.Path(args.plan_path)
+        if not src.is_file():
+            die(f"--plan: file not found: {args.plan_path}")
+        if src.stat().st_size == 0:
+            die(f"--plan: file is empty: {args.plan_path}")
+        shutil.copyfile(src, plan_file)
+        plan_copied_from_source = True
 
     is_git = in_git_repo()
 
@@ -237,18 +248,16 @@ def main(argv: List[str]) -> int:
 
     # Stages run back-to-back; inserting sleeps >~5 min between them drops the Anthropic prompt cache TTL and loses inter-stage cache benefits.
     # ----- plan -----
-    # When --plan <path> is set, we short-circuit the plan stage: copy the
-    # user-supplied plan file into session_dir/plan.md and skip the planning
-    # agent entirely. An existing plan.md (resume path) is left alone — the
-    # snapshot captured at initial launch is authoritative, per the spec's
+    # When --plan <path> is set, the plan stage is a no-op: the source file
+    # was copied into session_dir/plan.md earlier in main() (before the
+    # --resume-from precondition check), or plan.md already existed on a
+    # resume and the snapshot is authoritative per the spec's
     # rescue-determinism rule.
     if args.plan_path:
-        if not plan_file.exists():
-            src = pathlib.Path(args.plan_path)
-            if not src.is_file() or src.stat().st_size == 0:
-                die(f"--plan: source file missing or empty at resume: {src}")
-            shutil.copyfile(src, plan_file)
-        print(f"==> [1/4] plan supplied via --plan -> {plan_file}", flush=True)
+        if plan_copied_from_source:
+            print(f"==> [1/4] plan supplied via --plan (copied) -> {plan_file}", flush=True)
+        else:
+            print(f"==> [1/4] plan reused from snapshot -> {plan_file}", flush=True)
     elif start_idx <= VALID_RESUME_STAGES.index("plan"):
         set_stage("plan")
         print(f"==> [1/4] planning (model: {args.plan_model}) -> {plan_file}", flush=True)

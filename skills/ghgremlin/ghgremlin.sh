@@ -209,7 +209,11 @@ if [[ -n "$PLAN_SOURCE" ]]; then
         ISSUE_URL="$_resolved_url"
         ISSUE_NUM="$_resolved_num"
       fi
-      printf '%s' "$ISSUE_BODY" > "$PLAN_MD"
+      # Use `%s\n` (not `%s`) to match the `cp` semantics of the file-source
+      # branch above, which preserves the source file verbatim including a
+      # trailing newline. Keeps plan.md's on-disk shape consistent across
+      # both plan-source paths.
+      printf '%s\n' "$ISSUE_BODY" > "$PLAN_MD"
       echo "==> [1/6] plan supplied via --plan (issue ${_target_repo}#${_issue_ref})"
     fi
     patch_state '.issue_url = $url | .issue_num = $num' \

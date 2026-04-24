@@ -74,15 +74,22 @@ gremlin's session as `plan.md` and fed to the implement stage. Four forms:
   without a `Closes` link (to avoid auto-closing an unrelated issue in the
   PR's target repo).
 - **Full URL `https://github.com/owner/repo/issues/42`** — same cross-repo
-  semantics.
+  semantics. `github.com` only; GitHub Enterprise hosts are not recognized
+  as URLs — use the `owner/repo#42` form instead (which works for any host
+  `gh` is configured to reach).
 
 Rules:
 
 - Mutually exclusive with the positional `<instructions>`. Pass exactly one.
 - Files must be non-empty; issues must exist and have a non-empty body.
-- Errors (missing file, empty file, unreachable issue, unrecognized shape,
-  both forms supplied, neither supplied) are surfaced before the state
-  directory is created or cleaned up if the plan source turns out bad.
+- Failure modes split by where they fire:
+  - **Clean (no state dir):** mutex violations (`--plan` + positional, or
+    neither) and missing / empty local file are caught in `launch.sh`
+    before the state directory is created.
+  - **Dirty (failed state dir left behind):** issue-ref errors (unreachable
+    issue, unrecognized shape, empty issue body) fire in `ghgremlin.sh`
+    after the state dir has already been created. Use `/gremlins rm <id>`
+    to clean up.
 
 ## Do not
 

@@ -200,9 +200,16 @@ if [[ -n "$RESUME_GR_ID" ]]; then
     # sidecar INSTRUCTIONS is just flag-echo garbage. Appending it as a
     # positional on resume would make the gremlin re-parse flag text as
     # prose — omit the trailing positional in that case.
+    # Note: this matches both the space-separated form (`--plan <value>`, our
+    # only caller shape today) and the `--plan=<value>` form, so a
+    # hand-crafted resume that packs them together still takes the no-trailing-
+    # positional branch.
     _has_plan=0
     for _pa in "${PIPELINE_ARGS[@]}"; do
-        [[ "$_pa" == "--plan" ]] && { _has_plan=1; break; }
+        if [[ "$_pa" == "--plan" || "$_pa" == --plan=* ]]; then
+            _has_plan=1
+            break
+        fi
     done
 
     (
@@ -317,6 +324,10 @@ done
 # both find the file. A relative --plan path would resolve relative to
 # $WORKDIR post-cd, not the original caller's cwd — breaking on first run.
 # Persisted pipeline_args picks up the normalized value via `set --` below.
+# Note: `cd "$(dirname …)" && pwd` follows symlinks, so the persisted path
+# is the resolved physical path. This is intentional — rescue is more
+# robust if the symlink is later moved or removed — but it means the
+# caller's original symlink path doesn't round-trip into state.json.
 _plan_abs=""
 if [[ -n "$_plan_arg" && -f "$_plan_arg" ]]; then
     _plan_abs=$(cd "$(dirname "$_plan_arg")" 2>/dev/null && printf '%s/%s' "$(pwd)" "$(basename "$_plan_arg")") || _plan_abs=""
@@ -325,6 +336,20 @@ if [[ -n "$_plan_arg" && -f "$_plan_arg" ]]; then
         # Rebuild $@ so the initial dispatch at the bottom of this script
         # uses the same normalized arg list as the persisted pipeline_args.
         set -- "${_args[@]}"
+    fi
+fi
+
+# Early validation for localgremlin --plan <path>: the arg is always a local
+# file path (localgremlin has no issue-ref form), so we can fail fast here
+# (before state dir creation) on missing/empty files instead of deferring to
+# localgremlin.py. ghgremlin's --plan accepts issue refs whose validity
+# depends on the network, so its validation stays inside ghgremlin.sh.
+if [[ "$KIND" == "localgremlin" && -n "$_plan_arg" ]]; then
+    if [[ ! -f "$_plan_arg" ]]; then
+        die "--plan: file not found: $_plan_arg"
+    fi
+    if [[ ! -s "$_plan_arg" ]]; then
+        die "--plan: file is empty: $_plan_arg"
     fi
 fi
 
@@ -403,10 +428,16 @@ SLUG=$(slugify "$SLUG_SOURCE")
 # launch.sh can't see the issue body, DESCRIPTION stays empty so ghgremlin.sh
 # can fill it in after resolving the issue (INSTR_RAW would be just the
 # flag echo "--plan 42" which is not a useful description).
+# The empty-description issue-ref branch is guarded to KIND=ghgremlin: only
+# ghgremlin has an issue-body fill-in step later in the pipeline, and its
+# --plan accepts non-file refs. localgremlin's --plan is always a file (and
+# the earlier early-validation block dies on a non-file value), so a
+# non-file _plan_arg reaching this block under localgremlin is structurally
+# impossible — but the guard makes the assumption explicit and future-proof.
 if [[ -z "$DESCRIPTION" ]]; then
     if [[ -n "$_plan_h1" ]]; then
         DESCRIPTION="${_plan_h1:0:60}"
-    elif [[ -n "$_plan_arg" ]]; then
+    elif [[ -n "$_plan_arg" && "$KIND" == "ghgremlin" ]]; then
         DESCRIPTION=""
     else
         DESCRIPTION="${INSTR_RAW:0:60}"

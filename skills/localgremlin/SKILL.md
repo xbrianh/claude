@@ -77,7 +77,8 @@ the plan stage. The file's contents are copied into the gremlin's session as
 - The gremlin's description defaults to the first `# heading` in the plan
   file unless `--description` is supplied explicitly.
 - Errors (file missing, file empty, both `--plan` and positional supplied,
-  neither supplied) are surfaced before the state directory is created.
+  neither supplied) are surfaced in `launch.sh` before the state directory
+  is created, so a bad invocation leaves no state-dir litter behind.
 
 ## Do not
 
