@@ -1,7 +1,7 @@
 ---
 name: gremlins
 description: On-demand status of background gremlins launched by /localgremlin and /ghgremlin. Reads every ~/.local/state/claude-gremlins/<id>/state.json on the machine and prints one line per active gremlin with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed gremlins, close finished ones, stop a running gremlin, rescue a dead/stalled one, or land a finished gremlin onto its target branch. Not a project filter by default — set --here to restrict to the current repo.
-argument-hint: [stop|rescue [--headless]|rm|close|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
+argument-hint: [stop|rescue [--headless]|rm|close|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh|boss] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
 allowed-tools: Bash(~/.claude/skills/gremlins/gremlins.py:*)
 ---
 

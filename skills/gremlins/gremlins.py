@@ -1176,6 +1176,9 @@ def _build_commit_message(wdir: str, state: dict, branch: str, merge_base: str, 
     except Exception as exc:
         print(f"warning: AI commit message synthesis failed ({exc}); falling back to plan.md extraction", flush=True)
         plan_path = os.path.join(wdir, "artifacts", "plan.md")
+        if not os.path.isfile(plan_path):
+            print(f"error: plan.md not found at {plan_path} — cannot build commit message")
+            raise
         return _compose_commit_message(plan_path)
 
 
@@ -1226,8 +1229,9 @@ def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         capture_output=True, text=True, cwd=cwd,
     )
     if int(r.stdout.strip() or "0") < 1:
-        print(f"error: {source_label} has no commits above merge-base")
-        return False
+        print(f"{current} is already up to date with {source_label}.")
+        _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
+        return True
 
     print(f"Squash-merging {source_label} onto {current}...")
     r = subprocess.run(["git", "merge", "--squash", source_ref], cwd=cwd)
@@ -1273,8 +1277,9 @@ def _ff_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         capture_output=True, text=True, cwd=cwd,
     )
     if int(r.stdout.strip() or "0") < 1:
-        print(f"error: {source_label} has no commits above {current}")
-        return False
+        print(f"{current} is already up to date with {source_label}.")
+        _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
+        return True
 
     print(f"Fast-forwarding {current} to {source_label}...")
     r = subprocess.run(["git", "merge", "--ff-only", source_ref], cwd=cwd)
