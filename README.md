@@ -15,7 +15,9 @@ skills/
   ghgremlin/          # /ghgremlin: run the full gremlin in the background via skills/_bg/launch.sh
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
-  localgremlin/       # /localgremlin: full local gremlin via skills/_bg/launch.sh; sibling lens-*.md files hold reviewer prompts
+  localgremlin/       # /localgremlin: full local gremlin via skills/_bg/launch.sh; sibling lens-*.md files hold reviewer prompts; _core.py holds the shared review/address stage bodies
+  localreview/        # /localreview: standalone triple-lens code review over local changes (foreground)
+  localaddress/       # /localaddress: standalone address-code stage over existing review files (foreground)
   gremlins/           # /gremlins: on-demand status of background gremlins; supports stop/rescue/rm/close/land subcommands
 agents/
   pragmatic-developer.md
@@ -50,7 +52,9 @@ The skills cluster into a GitHub-issue-driven gremlin and a local gremlin (`/loc
 - [`/ghgremlin`](skills/ghgremlin/SKILL.md) — run the full gremlin run end-to-end via [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh).
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
-- [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Accepts `--design` to invoke `/design` first.
+- [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Accepts `--design` to invoke `/design` first. Review-code and address-code stage bodies live in [`skills/localgremlin/_core.py`](skills/localgremlin/_core.py) and are shared with the standalone skills below.
+- [`/localreview`](skills/localreview/SKILL.md) — standalone triple-lens code review (holistic, detail, scope) over local changes, foreground. Writes `review-code-*.md` files to `--dir` (defaults to cwd).
+- [`/localaddress`](skills/localaddress/SKILL.md) — standalone address-code stage that reads `review-code-*.md` files from `--dir` and applies actionable findings. Foreground. In a git repo, creates one `Address review feedback` commit (no push).
 - [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>`, `rescue <id>`, `rm <id>`, `close <id>`, `land <id>` (squash-land a local gremlin or merge a gh PR). Flags include `--here`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
 
 `skills/ghgremlin/ghgremlin.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude in parallel with a scope reviewer) → `/ghaddress`, producing a merged-ready PR from a single instruction.
