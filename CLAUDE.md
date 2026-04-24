@@ -38,6 +38,7 @@ Both `/ghgremlin` and `/localgremlin` accept `--design` as a first flag to invok
 - [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (Phase A: inline `claude -p` diagnoses and fixes the failure in the foreground; Phase B: `launch.sh --resume` relaunches the pipeline at the failed stage in the background under the original gremlin id, with a `(rescue)` liveness marker), `rm <id>` (delete state directory, worktree directory, and branch), `close <id>` (mark finished gremlin closed), `land <id>` (squash-land a local gremlin or merge a gh PR and clean up). Use `--here` to filter to the current repo.
 - [`/localreview`](skills/localreview/SKILL.md) — foreground: run the triple-lens parallel code review over local changes, writing `review-code-*.md` files to `--dir` (cwd by default). No planning, no implementation, no background gremlin.
 - [`/localaddress`](skills/localaddress/SKILL.md) — foreground: read the three `review-code-*.md` files from `--dir` and address actionable findings. In a git repo, creates a single `Address review feedback` commit (no push).
+- [`/handoff`](skills/handoff/SKILL.md) — foreground: reads the current plan and landed diff, decides `next-plan` / `chain-done` / `bail`, and writes an updated plan plus a child plan for the next gremlin. Accepts `--plan <path> [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]`.
 
 ## Not tracked
 

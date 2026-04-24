@@ -9,9 +9,10 @@ die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
     cat >&2 <<'EOF'
-usage: launch.sh [--description <phrase>] [--parent <boss-id>] <kind> [pipeline-args...]
-       launch.sh --resume <gremlin-id>
+usage: launch.sh [--description <phrase>] [--parent <boss-id>] [--print-id] <kind> [pipeline-args...]
+       launch.sh --resume <gremlin-id> [--print-id]
        kind ∈ {ghgremlin, localgremlin}
+       --print-id: write only the gremlin ID to stdout; all other output goes to stderr
 EOF
     exit 1
 }
@@ -44,6 +45,7 @@ DESCRIPTION=""
 DESCRIPTION_EXPLICIT=0
 RESUME_GR_ID=""
 PARENT_ID=""
+PRINT_ID=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --description)
@@ -62,6 +64,7 @@ while [[ $# -gt 0 ]]; do
             PARENT_ID="$2"
             shift 2
             ;;
+        --print-id) PRINT_ID=1; shift ;;
         --) shift; break ;;
         -*) die "unknown flag: $1" ;;
         *)  break ;;
@@ -241,7 +244,8 @@ if [[ -n "$RESUME_GR_ID" ]]; then
             && mv "$STATE_TMP" "$STATE_FILE"
     fi
 
-    cat <<EOF
+    {
+        cat <<EOF
 resumed gremlin: $RESUME_GR_ID
 from stage:      $STAGE
 workdir:         $WORKDIR
@@ -252,6 +256,8 @@ pid:             ${PID:-unknown}
 The $RESUME_KIND gremlin is running in the background. You'll be notified in a
 future Claude session for this project when it finishes.
 EOF
+    } >&$( [[ $PRINT_ID -eq 1 ]] && echo 2 || echo 1 )
+    [[ $PRINT_ID -eq 1 ]] && printf '%s\n' "$RESUME_GR_ID"
     exit 0
 fi
 
@@ -565,7 +571,8 @@ if [[ -n "$PID" ]]; then
         && mv "$STATE_TMP" "$STATE_FILE"
 fi
 
-cat <<EOF
+{
+    cat <<EOF
 gremlin id:  $GR_ID
 workdir:     $WORKDIR
 log:         $STATE_DIR/log
@@ -575,3 +582,5 @@ pid:         ${PID:-unknown}
 The $KIND gremlin is running in the background. You'll be notified in a future
 Claude session for this project when it finishes.
 EOF
+} >&$( [[ $PRINT_ID -eq 1 ]] && echo 2 || echo 1 )
+[[ $PRINT_ID -eq 1 ]] && printf '%s\n' "$GR_ID"
