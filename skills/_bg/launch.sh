@@ -11,7 +11,7 @@ usage() {
     cat >&2 <<'EOF'
 usage: launch.sh [--description <phrase>] [--parent <boss-id>] [--print-id] <kind> [pipeline-args...]
        launch.sh --resume <gremlin-id> [--print-id]
-       kind ∈ {ghgremlin, localgremlin}
+       kind ∈ {ghgremlin, localgremlin, bossgremlin}
        --print-id: write only the gremlin ID to stdout; all other output goes to stderr
 EOF
     exit 1
@@ -118,7 +118,7 @@ if [[ -n "$RESUME_GR_ID" ]]; then
     PIPELINE_ARGS_JSON=$(jq -c '.pipeline_args // []' "$STATE_FILE")
 
     case "$RESUME_KIND" in
-        ghgremlin|localgremlin) ;;
+        ghgremlin|localgremlin|bossgremlin) ;;
         *) die "invalid kind in state.json: $RESUME_KIND" ;;
     esac
     [[ -n "$WORKDIR" && -d "$WORKDIR" ]] || die "worktree missing: $WORKDIR"
@@ -266,8 +266,8 @@ KIND="$1"
 shift
 
 case "$KIND" in
-    ghgremlin|localgremlin) ;;
-    *) die "invalid kind: $KIND (allowed: ghgremlin, localgremlin)" ;;
+    ghgremlin|localgremlin|bossgremlin) ;;
+    *) die "invalid kind: $KIND (allowed: ghgremlin, localgremlin, bossgremlin)" ;;
 esac
 
 command -v jq     >/dev/null 2>&1 || die "jq not found"
@@ -361,7 +361,7 @@ fi
 # (before state dir creation) on missing/empty files instead of deferring to
 # localgremlin.py. ghgremlin's --plan accepts issue refs whose validity
 # depends on the network, so its validation stays inside ghgremlin.sh.
-if [[ "$KIND" == "localgremlin" && -n "$_plan_arg" ]]; then
+if [[ ( "$KIND" == "localgremlin" || "$KIND" == "bossgremlin" ) && -n "$_plan_arg" ]]; then
     if [[ ! -f "$_plan_arg" ]]; then
         die "--plan: file not found: $_plan_arg"
     fi

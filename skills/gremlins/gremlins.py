@@ -194,6 +194,8 @@ def kind_short(kind: str) -> str:
         return "local"
     if kind == "ghgremlin":
         return "gh"
+    if kind == "bossgremlin":
+        return "boss"
     return kind or ""
 
 
@@ -296,11 +298,13 @@ def print_table(rows):
 GREMLIN_STAGES = {
     "localgremlin": ["plan", "implement", "review-code", "address-code"],
     "ghgremlin": ["plan", "implement", "commit-pr", "request-copilot", "ghreview", "wait-copilot", "ghaddress"],
+    "bossgremlin": ["handoff", "waiting", "landing", "rescuing"],
 }
 
 GREMLIN_SCRIPTS = {
     "localgremlin": "~/.claude/skills/localgremlin/localgremlin.py",
     "ghgremlin": "~/.claude/skills/ghgremlin/ghgremlin.sh",
+    "bossgremlin": "~/.claude/skills/bossgremlin/bossgremlin.py",
 }
 
 
@@ -1390,6 +1394,12 @@ def do_land(target: str, force: bool = False) -> bool:
         return _land_local(gr_id, sf, wdir, state)
     elif kind == "ghgremlin":
         return _land_gh(gr_id, sf, wdir, state, force=force)
+    elif kind == "bossgremlin":
+        print(
+            f"bossgremlin chains complete automatically — use "
+            f"'gremlins close {gr_id}' (or '/gremlins close {gr_id}') to hide it"
+        )
+        return False
     else:
         print(f"error: unknown gremlin kind {kind!r} — cannot land")
         return False
@@ -1405,7 +1415,7 @@ def collect_rows(here_root=None, kind_filter=None, since_secs=None,
     Collect and return a list of row dicts, sorted by started_at ascending.
 
     here_root         — if set, restrict to gremlins with this project_root.
-    kind_filter       — if set ('local' or 'gh'), restrict to that kind.
+    kind_filter       — if set ('local', 'gh', or 'boss'), restrict to that kind.
     since_secs        — if set, restrict to gremlins started within this many seconds.
     liveness_filter   — if set, a set of prefixes ('running', 'dead', 'stalled').
     include_closed    — if True, include closed gremlins (for drill-in / --recent).
@@ -1645,7 +1655,7 @@ def parse_args(argv=None):
         help="Show only stalled gremlins.",
     )
     parser.add_argument(
-        "--kind", choices=["local", "gh"], metavar="local|gh",
+        "--kind", choices=["local", "gh", "boss"], metavar="local|gh|boss",
         help="Filter to a specific gremlin kind.",
     )
     parser.add_argument(
