@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 # ---------------------------------------------------------------------------
@@ -416,46 +417,28 @@ def do_stop(target: str) -> bool:
     return True
 
 
-def build_rescue_prompt(state, wdir, log_tail, artifact_paths,
+def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
                         *, headless=False, marker_path=None):
     kind = state.get("kind", "localgremlin")
     stage = state.get("stage") or "unknown"
-    instructions = state.get("instructions") or "(not recorded)"
     description = state.get("description") or ""
-    workdir = state.get("workdir") or wdir
 
     stages = GREMLIN_STAGES.get(kind, [])
-    gremlin_script = GREMLIN_SCRIPTS.get(kind, f"~/.claude/skills/{kind}/{kind}.sh")
 
-    artifacts_section = ""
-    if artifact_paths:
-        artifacts_section = (
-            "Existing artifacts already produced (read these for context before acting):\n"
-            + "\n".join(f"  - {p}" for p in artifact_paths)
-            + "\n\n"
-        )
-
-    timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    rescue_note_path = os.path.join(wdir, "artifacts", f"rescue-{timestamp}.md")
     log_tail_safe = log_tail.replace("```", "` ` `")
 
     head = f"""You are diagnosing a failed background gremlin so it can resume.
 
-## Original task
+## Gremlin context
 
 Kind: {kind}
 Description: {description}
 Failed at stage: {stage}
-
-Instructions:
-{instructions}
-
-## Gremlin reference
-
-Gremlin script: {gremlin_script}
 Stage order for {kind}: {' → '.join(stages)}
 
-{artifacts_section}## Failure log (last ~200 lines)
+## Failure log (last ~200 lines)
+
+(Log tail also written to: {log_file_path})
 
 ```
 {log_tail_safe}
@@ -467,11 +450,11 @@ Stage order for {kind}: {' → '.join(stages)}
 ## What to do (headless mode — no human is watching)
 
 1. Diagnose the failure from the log above.
-2. Decide which of these applies and act accordingly:
-   - **fixable**: edit code or clean up partial state in this worktree (working directory: {workdir}) so rerunning the failed stage ({stage}) will succeed.
-   - **transient**: the failure was a flake (network, tool timeout, retriable infra). No code change needed; rerunning the same stage as-is should succeed.
-   - **unsalvageable**: the failure cannot be fixed without human input. Do NOT make speculative changes.
-3. Write a brief rescue note to `{rescue_note_path}` describing what failed and what (if anything) you did.
+2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, declare `unsalvageable`.
+3. Decide which of these applies:
+   - **fixed**: you edited `state.json` to resolve the failure; rerunning stage {stage} should now succeed.
+   - **transient**: the failure was a flake (network, tool timeout, retriable infra). No change needed; rerunning the same stage as-is should succeed.
+   - **unsalvageable**: the failure cannot be fixed by patching `state.json` alone. Do NOT make any other changes.
 4. Write a marker file to **exactly** this path:
 
        {marker_path}
@@ -483,7 +466,7 @@ Stage order for {kind}: {' → '.join(stages)}
    Example:
 
    ```json
-   {{"status": "fixed", "summary": "removed stale lockfile blocking the build"}}
+   {{"status": "fixed", "summary": "removed bad --model flag from pipeline_args in state.json"}}
    ```
 
 5. Stop. Do NOT re-run the failed stage or any remaining stages yourself — the wrapper reads the marker and (on `fixed`/`transient`) hands off to a background resume that relaunches the pipeline starting at {stage}. On `unsalvageable`, the wrapper writes a bail reason and the gremlin stays terminal.
@@ -492,19 +475,17 @@ Constraints for headless mode:
 - Do NOT prompt for input; there is no TTY.
 - Do NOT call `exit` or otherwise abort — finish normally so the wrapper can read the marker.
 - If you cannot write the marker file, the wrapper will treat that as an unsalvageable failure.
-
-Work directly in the current directory. Do not re-invoke the gremlin script.
+- Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
 """
 
     return head + f"""
 ## What to do
 
 1. Diagnose the failure from the log above.
-2. Fix the underlying issue in this worktree (working directory: {workdir}) so that rerunning the failed stage ({stage}) will succeed. This may mean editing code, cleaning up partial state, or staging missing artifacts.
-3. Write a brief rescue note to `{rescue_note_path}` describing what failed and what you fixed.
-4. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically. If you conclude the failure is unsalvageable, say so clearly in your final message and in the rescue note, and leave the worktree untouched; the operator watches Phase A output and will Ctrl-C / decline resume if they agree.
+2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, say so clearly in your final message and leave everything untouched; the operator must Ctrl-C during Phase A to prevent the automatic resume.
+3. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit successfully, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically.
 
-Work directly in the current directory. Do not re-invoke the gremlin script.
+Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
 """
 
 
@@ -714,13 +695,6 @@ def do_rescue(target: str, headless: bool = False) -> bool:
             log_tail = "(could not read log)"
 
     artifacts_dir = os.path.join(wdir, "artifacts")
-    artifact_paths = []
-    if os.path.isdir(artifacts_dir):
-        for fname in sorted(os.listdir(artifacts_dir)):
-            fpath = os.path.join(artifacts_dir, fname)
-            if os.path.isfile(fpath):
-                artifact_paths.append(fpath)
-
     marker_path = None
     if headless:
         # The marker file is the contract between the headless agent and
@@ -733,61 +707,79 @@ def do_rescue(target: str, headless: bool = False) -> bool:
         ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         marker_path = os.path.join(artifacts_dir, f"rescue-{ts}.done")
 
-    prompt = build_rescue_prompt(state, wdir, log_tail, artifact_paths,
-                                 headless=headless, marker_path=marker_path)
-
-    print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
-    print(f"Working directory: {workdir}")
-
-    if headless:
-        print(
-            f"Phase A (headless): running diagnosis agent "
-            f"(timeout: {HEADLESS_PHASE_A_TIMEOUT_SECS}s, marker: {marker_path})..."
-        )
-        status, err_msg = _run_headless_phase_a(workdir, prompt, marker_path)
-
-        if status == "timeout":
-            _write_bail(sf, wdir, "phase_a_timeout", err_msg)
-            print(f"Phase A timed out: {err_msg}")
-            return False
-        if status == "claude_exit":
-            _write_bail(sf, wdir, "phase_a_claude_error", err_msg)
-            print(f"Phase A claude error: {err_msg}")
-            return False
-        if status == "no_marker":
-            _write_bail(sf, wdir, "phase_a_no_marker", err_msg)
-            print(f"Phase A produced no marker file: {err_msg}")
-            return False
-        if status == "bad_marker":
-            _write_bail(sf, wdir, "phase_a_bad_marker", err_msg)
-            print(f"Phase A marker file invalid: {err_msg}")
-            return False
-        if status == "unsalvageable":
-            _write_bail(sf, wdir, "unsalvageable", err_msg)
-            print(f"Phase A: agent declared the failure unsalvageable ({err_msg})")
-            return False
-        # status == "fixed" or "transient" → proceed to Phase B. Both count
-        # as a rescue attempt; the launcher increments rescue_count when it
-        # actually relaunches.
-        print(f"Phase A complete (status: {status}); handing off to Phase B...")
-    else:
-        print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
-        print()
+    # Create a scratch dir so Phase A runs isolated from the worktree.
+    # The log tail is written there as a readable file; state.json is passed
+    # by absolute path as the only file the agent may edit.
+    # mkdtemp is inside the try so any subsequent exception triggers cleanup.
+    scratch_dir = None
+    try:
+        scratch_dir = tempfile.mkdtemp(prefix="gremlin-rescue-")
+        scratch_log = os.path.join(scratch_dir, "gremlin.log")
         try:
-            result = subprocess.run(["claude", "-p", prompt], cwd=workdir)
-        except FileNotFoundError:
-            print("error: 'claude' CLI not found in PATH")
-            return False
-        except KeyboardInterrupt:
-            print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
-            return False
+            with open(scratch_log, "w", encoding="utf-8") as fh:
+                fh.write(log_tail)
+        except OSError:
+            scratch_log = log_path  # fallback: reference the original log path
 
-        if result.returncode != 0:
+        prompt = build_rescue_prompt(state, log_tail, sf, scratch_log,
+                                     headless=headless, marker_path=marker_path)
+
+        print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
+        print(f"Gremlin workdir: {workdir}")
+        print(f"Agent scratch dir: {scratch_dir}")
+
+        if headless:
+            print(
+                f"Phase A (headless): running diagnosis agent "
+                f"(timeout: {HEADLESS_PHASE_A_TIMEOUT_SECS}s, marker: {marker_path})..."
+            )
+            status, err_msg = _run_headless_phase_a(scratch_dir, prompt, marker_path)
+
+            if status == "timeout":
+                _write_bail(sf, wdir, "phase_a_timeout", err_msg)
+                print(f"Phase A timed out: {err_msg}")
+                return False
+            if status == "claude_exit":
+                _write_bail(sf, wdir, "phase_a_claude_error", err_msg)
+                print(f"Phase A claude error: {err_msg}")
+                return False
+            if status == "no_marker":
+                _write_bail(sf, wdir, "phase_a_no_marker", err_msg)
+                print(f"Phase A produced no marker file: {err_msg}")
+                return False
+            if status == "bad_marker":
+                _write_bail(sf, wdir, "phase_a_bad_marker", err_msg)
+                print(f"Phase A marker file invalid: {err_msg}")
+                return False
+            if status == "unsalvageable":
+                _write_bail(sf, wdir, "unsalvageable", err_msg)
+                print(f"Phase A: agent declared the failure unsalvageable ({err_msg})")
+                return False
+            # status == "fixed" or "transient" → proceed to Phase B. Both count
+            # as a rescue attempt; the launcher increments rescue_count when it
+            # actually relaunches.
+            print(f"Phase A complete (status: {status}); handing off to Phase B...")
+        else:
+            print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
             print()
-            print(f"Rescue agent exited with code {result.returncode}.")
-            print("Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
-            print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
-            return False
+            try:
+                result = subprocess.run(["claude", "-p", prompt], cwd=scratch_dir)
+            except FileNotFoundError:
+                print("error: 'claude' CLI not found in PATH")
+                return False
+            except KeyboardInterrupt:
+                print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
+                return False
+
+            if result.returncode != 0:
+                print()
+                print(f"Rescue agent exited with code {result.returncode}.")
+                print("Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
+                print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
+                return False
+    finally:
+        if scratch_dir is not None:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
     # Phase B: hand off to launch.sh --resume so the remaining stages run in the
     # background under the same GR_ID. launch.sh patches state.json, clears the
