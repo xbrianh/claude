@@ -114,7 +114,8 @@ Git log since chain start:
 Git diff since chain start:
 ```diff
 {diff_body}
-```{diff_trunc}
+```
+{diff_trunc}
 
 ## Your task
 
@@ -161,7 +162,7 @@ Write all required files before finishing. Do not explain your reasoning in stdo
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    usage = "usage: handoff.py --plan <path> [--out <path>] [--base <ref>] [--model <model>]"
+    usage = "usage: handoff.py --plan <path> [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]"
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("--plan", dest="plan", required=True)
     parser.add_argument("--out", dest="out", default=None)
@@ -194,6 +195,10 @@ def main(argv: List[str]) -> int:
 
     if args.out:
         out_path = pathlib.Path(args.out).resolve()
+        if not out_path.parent.exists():
+            die(f"--out parent directory does not exist: {out_path.parent}")
+        if not out_path.parent.is_dir():
+            die(f"--out parent path is not a directory: {out_path.parent}")
     else:
         out_path = auto_name_out(plan_path)
 
@@ -247,12 +252,13 @@ def main(argv: List[str]) -> int:
     if exit_state == "next-plan":
         child_plan = state.get("child_plan")
         if not child_plan:
-            sys.stderr.write("warning: signal file exit_state is next-plan but child_plan is null\n")
-        elif not pathlib.Path(child_plan).exists():
+            sys.stderr.write("error: signal file exit_state is next-plan but child_plan is null\n")
+            return 1
+        if not pathlib.Path(child_plan).exists():
             sys.stderr.write(f"error: child plan path in signal file does not exist: {child_plan}\n")
             return 1
         print(f"    updated plan: {out_path}", flush=True)
-        print(f"    child plan:   {child_plan or '(missing)'}", flush=True)
+        print(f"    child plan:   {child_plan}", flush=True)
         print(f"    signal file:  {signal_path}", flush=True)
     elif exit_state == "chain-done":
         print(f"    updated plan: {out_path}", flush=True)

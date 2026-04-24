@@ -244,20 +244,7 @@ if [[ -n "$RESUME_GR_ID" ]]; then
             && mv "$STATE_TMP" "$STATE_FILE"
     fi
 
-    if [[ $PRINT_ID -eq 1 ]]; then
-        cat >&2 <<EOF
-resumed gremlin: $RESUME_GR_ID
-from stage:      $STAGE
-workdir:         $WORKDIR
-log:             $STATE_DIR/log
-state file:      $STATE_FILE
-pid:             ${PID:-unknown}
-
-The $RESUME_KIND gremlin is running in the background. You'll be notified in a
-future Claude session for this project when it finishes.
-EOF
-        printf '%s\n' "$RESUME_GR_ID"
-    else
+    {
         cat <<EOF
 resumed gremlin: $RESUME_GR_ID
 from stage:      $STAGE
@@ -269,7 +256,8 @@ pid:             ${PID:-unknown}
 The $RESUME_KIND gremlin is running in the background. You'll be notified in a
 future Claude session for this project when it finishes.
 EOF
-    fi
+    } >&$( [[ $PRINT_ID -eq 1 ]] && echo 2 || echo 1 )
+    [[ $PRINT_ID -eq 1 ]] && printf '%s\n' "$RESUME_GR_ID"
     exit 0
 fi
 
@@ -583,19 +571,7 @@ if [[ -n "$PID" ]]; then
         && mv "$STATE_TMP" "$STATE_FILE"
 fi
 
-if [[ $PRINT_ID -eq 1 ]]; then
-    cat >&2 <<EOF
-gremlin id:  $GR_ID
-workdir:     $WORKDIR
-log:         $STATE_DIR/log
-state file:  $STATE_FILE
-pid:         ${PID:-unknown}
-
-The $KIND gremlin is running in the background. You'll be notified in a future
-Claude session for this project when it finishes.
-EOF
-    printf '%s\n' "$GR_ID"
-else
+{
     cat <<EOF
 gremlin id:  $GR_ID
 workdir:     $WORKDIR
@@ -606,4 +582,5 @@ pid:         ${PID:-unknown}
 The $KIND gremlin is running in the background. You'll be notified in a future
 Claude session for this project when it finishes.
 EOF
-fi
+} >&$( [[ $PRINT_ID -eq 1 ]] && echo 2 || echo 1 )
+[[ $PRINT_ID -eq 1 ]] && printf '%s\n' "$GR_ID"

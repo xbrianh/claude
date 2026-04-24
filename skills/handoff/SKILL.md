@@ -1,7 +1,7 @@
 ---
 name: handoff
 description: Reads the current plan document and the diff accumulated on the branch, decides whether the chain is complete or a next step is needed, and writes an updated plan plus (on next-plan) a child plan suitable for launch.sh --plan. Foreground, not backgrounded.
-argument-hint: --plan <path> [--out <path>] [--base <ref>] [--model <model>]
+argument-hint: --plan <path> [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]
 allowed-tools: Bash(~/.claude/skills/handoff/handoff.py:*)
 ---
 
@@ -42,5 +42,6 @@ Flags:
 - `--out <path>` — path for the updated plan output. Auto-named from `--plan` if omitted (e.g. `plan.md` → `plan-001.md`, `plan-001.md` → `plan-002.md`).
 - `--base <ref>` — git ref to use as the chain-start point for diff/log collection. Defaults to `main`.
 - `--model <model>` — model for the inner agent. Defaults to `sonnet`.
+- `--timeout <secs>` — timeout in seconds for the inner agent. No timeout by default.
 
 After the script exits, report the exit state, updated plan path, and child plan path (if applicable) to the user.
