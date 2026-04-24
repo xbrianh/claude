@@ -260,6 +260,10 @@ def build_row(gr_id, sf, wdir, state, live):
     desc_trim = desc[:60]
     age = humanize_age(started_at)
     sid = display_id(gr_id)
+    parent_id = state.get("parent_id") or ""
+    if parent_id:
+        boss_marker = f" [boss:{display_id(parent_id)}]"
+        sid = (sid + boss_marker)[:47]
 
     return {
         "started_at": started_at,

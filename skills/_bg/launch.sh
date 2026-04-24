@@ -9,7 +9,8 @@ die() { echo "error: $*" >&2; exit 1; }
 
 usage() {
     cat >&2 <<'EOF'
-usage: launch.sh [--description <phrase>] <kind> [pipeline-args...]
+usage: launch.sh [--description <phrase>] [--parent <boss-id>] <kind> [pipeline-args...]
+       launch.sh --resume <gremlin-id>
        kind ∈ {ghgremlin, localgremlin}
 EOF
     exit 1
@@ -42,6 +43,7 @@ slugify() {
 DESCRIPTION=""
 DESCRIPTION_EXPLICIT=0
 RESUME_GR_ID=""
+PARENT_ID=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --description)
@@ -55,11 +57,18 @@ while [[ $# -gt 0 ]]; do
             RESUME_GR_ID="$2"
             shift 2
             ;;
+        --parent)
+            [[ $# -ge 2 ]] || usage
+            PARENT_ID="$2"
+            shift 2
+            ;;
         --) shift; break ;;
         -*) die "unknown flag: $1" ;;
         *)  break ;;
     esac
 done
+
+[[ -z "$PARENT_ID" || -z "$RESUME_GR_ID" ]] || die "--parent and --resume are mutually exclusive"
 
 # --resume branch: reuse an existing gremlin's state dir, worktree, and branch,
 # and relaunch the pipeline with --resume-from <failed-stage> so it skips
@@ -154,6 +163,8 @@ if [[ -n "$RESUME_GR_ID" ]]; then
     # old class is still present); stale .bail_reason / .bail_detail would
     # mislabel a successfully-finished gremlin as `dead:bailed:<old>` in
     # the liveness classifier, which prefers bail_reason over exit_code=0.
+    # parent_id is intentionally not del()'ed: it is written only at creation
+    # time and must survive across resumes to preserve boss linkage.
     jq --arg    status             "running" \
        --arg    stage              "$STAGE" \
        --arg    rescued_at         "$NOW_ISO" \
@@ -520,12 +531,14 @@ jq -n \
     --arg     started_at           "$NOW_ISO" \
     --arg     instructions         "$INSTR_SUMMARY" \
     --arg     description          "$DESCRIPTION" \
+    --arg     parent_id            "$PARENT_ID" \
     --argjson description_explicit "$DESC_EXPLICIT_JSON" \
     --argjson pipeline_args        "$PIPELINE_ARGS_JSON" \
     '{id: $id, kind: $kind, project_root: $project_root, workdir: $workdir,
       setup_kind: $setup_kind, branch: $branch, status: $status,
       started_at: $started_at, instructions: $instructions,
       description: $description, description_explicit: $description_explicit,
+      parent_id: $parent_id,
       pipeline_args: $pipeline_args, stage: "starting", pid: null}' \
     > "$STATE_TMP" || die "failed to write initial state"
 mv "$STATE_TMP" "$STATE_FILE"

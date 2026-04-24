@@ -18,7 +18,7 @@ Run the script and print its output verbatim to the user — do not paraphrase o
 The script produces a small table. Each row is one gremlin:
 
 - `KIND` — `local` (from `/localgremlin`) or `gh` (from `/ghgremlin`).
-- `ID` — short (6-hex) gremlin identifier. Use it with `close <id>` to mark a dead gremlin as closed (which hides it from future runs of this command).
+- `ID` — short (6-hex) gremlin identifier. Use it with `close <id>` to mark a dead gremlin as closed (which hides it from future runs of this command). When a gremlin has a `parent_id` (i.e. it was launched by a bossgremlin), its ID column is suffixed with ` [boss:<id>]` where `<id>` is the short (6-hex) form of the owning gremlin's id.
 - `STAGE` — the gremlin's current stage name (e.g. `plan`, `implement`, `review-code`). For parallel reviewers, a parenthesized sub-stage shows each reviewer's state (e.g. `review-code (opus=done,sonnet=running)`).
 - `LIVENESS` — `running`, `stalled:<reason>`, `dead:<reason>`, or `dead:bailed:<bail-reason>` (set when `/gremlins rescue --headless` declined to proceed; see `rescue` below). An upstream stage writing `bail_class` (via `set-bail.sh`) halts the pipeline but surfaces here as `dead:exit <N>` — drill in with `/gremlins <id>` to see the `bail:` block explaining which class fired and why.
 - `AGE` — time since launch.
