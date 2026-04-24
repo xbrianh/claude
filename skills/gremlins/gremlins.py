@@ -901,8 +901,9 @@ def _fast_forward_main(cwd):
 
 
 def _cleanup_gremlin(gr_id: str, sf: str, wdir: str, state: dict, cwd, *,
-                     delete_branch: bool = True, check_cwd: bool = False) -> bool:
-    """Touch closed marker, remove worktree, optionally delete branch, remove state dir.
+                     delete_branch: bool = True, check_cwd: bool = False,
+                     remove_state_dir: bool = True) -> bool:
+    """Touch closed marker, remove worktree, optionally delete branch, optionally remove state dir.
 
     Returns False only when check_cwd=True and we're inside the worktree; all
     other steps are best-effort (warnings printed on failure).
@@ -948,11 +949,12 @@ def _cleanup_gremlin(gr_id: str, sf: str, wdir: str, state: dict, cwd, *,
             elif "not found" not in r.stderr:
                 print(f"warning: could not delete branch {branch}: {r.stderr.strip()}")
 
-    try:
-        shutil.rmtree(wdir)
-        print(f"removed state directory {wdir}")
-    except OSError as e:
-        print(f"warning: could not remove state directory {wdir}: {e}")
+    if remove_state_dir:
+        try:
+            shutil.rmtree(wdir)
+            print(f"removed state directory {wdir}")
+        except OSError as e:
+            print(f"warning: could not remove state directory {wdir}: {e}")
 
     return True
 
@@ -1258,7 +1260,7 @@ def _land_local(gr_id: str, sf: str, wdir: str, state: dict) -> bool:
         return False
 
     print(f"Landed {branch} onto {current}.")
-    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=True)
+    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=True, remove_state_dir=False)
     return True
 
 
@@ -1297,13 +1299,13 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
     if pr_state == "MERGED":
         print("PR already merged.")
         _fast_forward_main(cwd)
-        _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False)
+        _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False, remove_state_dir=False)
         return True
 
     if pr_state == "CLOSED":
         if force:
             print("PR is closed (not merged) — force flag set, cleaning up without merge.")
-            _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False)
+            _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False, remove_state_dir=False)
             return True
         print(f"PR is closed (not merged): {pr_url}")
         print("Use --force to skip merge and clean up only.")
@@ -1356,7 +1358,7 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
         print("PR merged.")
 
     _fast_forward_main(cwd)
-    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False)
+    _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=False, remove_state_dir=False)
     return True
 
 
