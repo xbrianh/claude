@@ -263,7 +263,7 @@ def build_row(gr_id, sf, wdir, state, live):
     age = humanize_age(started_at)
     sid = display_id(gr_id)
     parent_id = state.get("parent_id") or ""
-    boss_disp = display_id(parent_id) if parent_id else ""
+    boss_disp = display_id(parent_id)[:20] if parent_id else ""
 
     return {
         "started_at": started_at,
