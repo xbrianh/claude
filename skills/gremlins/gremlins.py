@@ -417,7 +417,7 @@ def do_stop(target: str) -> bool:
     return True
 
 
-def build_rescue_prompt(state, wdir, log_tail, state_file_path, log_file_path,
+def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
                         *, headless=False, marker_path=None):
     kind = state.get("kind", "localgremlin")
     stage = state.get("stage") or "unknown"
@@ -438,7 +438,7 @@ Stage order for {kind}: {' → '.join(stages)}
 
 ## Failure log (last ~200 lines)
 
-(Full log also available at: {log_file_path})
+(Log tail also written to: {log_file_path})
 
 ```
 {log_tail_safe}
@@ -482,8 +482,8 @@ Constraints for headless mode:
 ## What to do
 
 1. Diagnose the failure from the log above.
-2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, say so clearly in your final message and leave everything untouched; the operator watching Phase A will decide whether to proceed.
-3. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically.
+2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, say so clearly in your final message and leave everything untouched; the operator must Ctrl-C during Phase A to prevent the automatic resume.
+3. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit successfully, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically.
 
 Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
 """
@@ -710,21 +710,24 @@ def do_rescue(target: str, headless: bool = False) -> bool:
     # Create a scratch dir so Phase A runs isolated from the worktree.
     # The log tail is written there as a readable file; state.json is passed
     # by absolute path as the only file the agent may edit.
-    scratch_dir = tempfile.mkdtemp(prefix="gremlin-rescue-")
-    scratch_log = os.path.join(scratch_dir, "gremlin.log")
+    # mkdtemp is inside the try so any subsequent exception triggers cleanup.
+    scratch_dir = None
     try:
-        with open(scratch_log, "w", encoding="utf-8") as fh:
-            fh.write(log_tail)
-    except OSError:
-        scratch_log = log_path  # fallback: reference the original log path
+        scratch_dir = tempfile.mkdtemp(prefix="gremlin-rescue-")
+        scratch_log = os.path.join(scratch_dir, "gremlin.log")
+        try:
+            with open(scratch_log, "w", encoding="utf-8") as fh:
+                fh.write(log_tail)
+        except OSError:
+            scratch_log = log_path  # fallback: reference the original log path
 
-    prompt = build_rescue_prompt(state, wdir, log_tail, sf, scratch_log,
-                                 headless=headless, marker_path=marker_path)
+        prompt = build_rescue_prompt(state, log_tail, sf, scratch_log,
+                                     headless=headless, marker_path=marker_path)
 
-    print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
-    print(f"Working directory: {workdir}")
+        print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
+        print(f"Gremlin workdir: {workdir}")
+        print(f"Agent scratch dir: {scratch_dir}")
 
-    try:
         if headless:
             print(
                 f"Phase A (headless): running diagnosis agent "
@@ -775,7 +778,8 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
                 return False
     finally:
-        shutil.rmtree(scratch_dir, ignore_errors=True)
+        if scratch_dir is not None:
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
     # Phase B: hand off to launch.sh --resume so the remaining stages run in the
     # background under the same GR_ID. launch.sh patches state.json, clears the
