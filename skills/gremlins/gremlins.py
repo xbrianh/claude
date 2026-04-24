@@ -194,6 +194,8 @@ def kind_short(kind: str) -> str:
         return "local"
     if kind == "ghgremlin":
         return "gh"
+    if kind == "bossgremlin":
+        return "boss"
     return kind or ""
 
 
@@ -296,11 +298,13 @@ def print_table(rows):
 GREMLIN_STAGES = {
     "localgremlin": ["plan", "implement", "review-code", "address-code"],
     "ghgremlin": ["plan", "implement", "commit-pr", "request-copilot", "ghreview", "wait-copilot", "ghaddress"],
+    "bossgremlin": ["handoff", "waiting", "landing", "rescuing"],
 }
 
 GREMLIN_SCRIPTS = {
     "localgremlin": "~/.claude/skills/localgremlin/localgremlin.py",
     "ghgremlin": "~/.claude/skills/ghgremlin/ghgremlin.sh",
+    "bossgremlin": "~/.claude/skills/bossgremlin/bossgremlin.py",
 }
 
 
@@ -1390,6 +1394,9 @@ def do_land(target: str, force: bool = False) -> bool:
         return _land_local(gr_id, sf, wdir, state)
     elif kind == "ghgremlin":
         return _land_gh(gr_id, sf, wdir, state, force=force)
+    elif kind == "bossgremlin":
+        print(f"bossgremlin chains complete automatically — use '/gremlins close {gr_id}' to hide it")
+        return False
     else:
         print(f"error: unknown gremlin kind {kind!r} — cannot land")
         return False
