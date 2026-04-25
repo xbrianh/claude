@@ -112,13 +112,15 @@ def build_prompt(
 
     spec_section = ""
     if spec_text is not None:
+        spec_body = spec_text[:50000]
+        spec_trunc = f"\n(spec truncated to 50000 chars; {len(spec_text)} chars total)" if len(spec_text) > 50000 else ""
         spec_section = f"""## Overarching goal (north star)
 
 This is the original chain spec. It does not change between handoffs and is read-only context for understanding what the chain as a whole is working toward. Use it to judge whether the rolling input plan below is on track and to scope the next step coherently. Do not echo it into the updated plan — it stays in `--spec`.
 
 ~~~~
-{spec_text}
-~~~~
+{spec_body}
+~~~~{spec_trunc}
 
 """
 
@@ -232,21 +234,28 @@ def main(argv: List[str]) -> int:
     except OSError as exc:
         die(f"failed to read --plan {plan_path}: {exc}")
 
+    # Spec is best-effort context, not a hard chain anchor: if it's missing,
+    # moved, or unreadable, fall back to rendering without the north-star
+    # section rather than halting the whole boss chain. The rolling plan and
+    # landed diff alone are still enough for a coherent next-step decision
+    # (which is exactly what the standalone /handoff invocation does without
+    # --spec). Warn so the operator can notice and fix the path if intended.
     spec_text: Optional[str] = None
     if args.spec is not None:
         spec_path = pathlib.Path(args.spec).resolve()
         if not spec_path.exists():
-            die(f"--spec does not exist: {spec_path}")
-        if not spec_path.is_file():
-            die(f"--spec is not a file: {spec_path}")
-        if spec_path.stat().st_size == 0:
-            die(f"--spec is empty: {spec_path}")
-        try:
-            spec_text = spec_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            die(f"--spec is not valid UTF-8: {spec_path}")
-        except OSError as exc:
-            die(f"failed to read --spec {spec_path}: {exc}")
+            sys.stderr.write(f"warning: --spec does not exist, continuing without north-star context: {spec_path}\n")
+        elif not spec_path.is_file():
+            sys.stderr.write(f"warning: --spec is not a file, continuing without north-star context: {spec_path}\n")
+        elif spec_path.stat().st_size == 0:
+            sys.stderr.write(f"warning: --spec is empty, continuing without north-star context: {spec_path}\n")
+        else:
+            try:
+                spec_text = spec_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                sys.stderr.write(f"warning: --spec is not valid UTF-8, continuing without north-star context: {spec_path}\n")
+            except OSError as exc:
+                sys.stderr.write(f"warning: failed to read --spec, continuing without north-star context: {spec_path}: {exc}\n")
 
     if args.out:
         out_path = pathlib.Path(args.out).resolve()
