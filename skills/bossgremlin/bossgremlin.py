@@ -168,6 +168,7 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
     signal_path = os.path.join(state_dir, f"handoff-{n:03d}.state.json")
     current_plan = boss_state["current_plan"]
+    spec_path = boss_state.get("spec_path", "")
     base_ref = boss_state["chain_base_ref"]
     chain_kind = boss_state.get("chain_kind")
     target_branch = boss_state.get("target_branch", "")
@@ -202,10 +203,12 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     else:
         die(f"unknown chain_kind: {chain_kind!r}")
 
-    log(f"handoff {n}: plan={current_plan}, base={base_ref[:12]}, rev={rev_label}, cwd={handoff_cwd}")
+    log(f"handoff {n}: plan={current_plan}, spec={spec_path}, base={base_ref[:12]}, rev={rev_label}, cwd={handoff_cwd}")
+    spec_args = ["--spec", spec_path] if spec_path else []
     cmd = [
         handoff_script,
         "--plan", current_plan,
+        *spec_args,
         "--out", out_path,
         "--base", base_ref,
         "--model", model,

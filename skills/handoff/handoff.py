@@ -104,14 +104,27 @@ def build_prompt(
     out_path: pathlib.Path,
     child_plan_path: pathlib.Path,
     signal_path: pathlib.Path,
+    spec_text: Optional[str] = None,
 ) -> str:
     diff_body = git_diff[:50000] if git_diff else "(empty — no changes yet)"
     diff_trunc = f"\n(diff truncated to 50000 chars; {len(git_diff)} chars total)" if len(git_diff) > 50000 else ""
     log_body = git_log if git_log else "(no commits yet — branch just started)"
 
+    spec_section = ""
+    if spec_text is not None:
+        spec_section = f"""## Overarching goal (north star)
+
+This is the original chain spec. It does not change between handoffs and is read-only context for understanding what the chain as a whole is working toward. Use it to judge whether the rolling input plan below is on track and to scope the next step coherently. Do not echo it into the updated plan — it stays in `--spec`.
+
+~~~~
+{spec_text}
+~~~~
+
+"""
+
     return f"""You are a chain-manager agent. Inspect the plan document and the work that has landed on the current branch, then decide whether the chain is complete or a next step is needed.
 
-## Input plan
+{spec_section}## Input plan
 
 ~~~~
 {plan_text}
@@ -184,9 +197,11 @@ Write all required files before finishing. Do not explain your reasoning in stdo
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    usage = "usage: handoff.py --plan <path> [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]"
+    usage = "usage: handoff.py --plan <path> [--spec <path>] [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]"
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("--plan", dest="plan", required=True)
+    parser.add_argument("--spec", dest="spec", default=None,
+                        help="overarching chain spec used as read-only north-star context")
     parser.add_argument("--out", dest="out", default=None)
     parser.add_argument("--base", dest="base", default=None)
     parser.add_argument("--model", dest="model", default="sonnet")
@@ -217,6 +232,22 @@ def main(argv: List[str]) -> int:
     except OSError as exc:
         die(f"failed to read --plan {plan_path}: {exc}")
 
+    spec_text: Optional[str] = None
+    if args.spec is not None:
+        spec_path = pathlib.Path(args.spec).resolve()
+        if not spec_path.exists():
+            die(f"--spec does not exist: {spec_path}")
+        if not spec_path.is_file():
+            die(f"--spec is not a file: {spec_path}")
+        if spec_path.stat().st_size == 0:
+            die(f"--spec is empty: {spec_path}")
+        try:
+            spec_text = spec_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            die(f"--spec is not valid UTF-8: {spec_path}")
+        except OSError as exc:
+            die(f"failed to read --spec {spec_path}: {exc}")
+
     if args.out:
         out_path = pathlib.Path(args.out).resolve()
         if not out_path.parent.exists():
@@ -244,6 +275,7 @@ def main(argv: List[str]) -> int:
         out_path=out_path,
         child_plan_path=child_plan_path,
         signal_path=signal_path,
+        spec_text=spec_text,
     )
 
     cmd = ["claude", "-p", "--model", args.model, *CLAUDE_FLAGS, prompt]
