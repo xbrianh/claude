@@ -243,13 +243,13 @@ $ISSUE_BODY") || die "--plan: title-generation agent failed"
       else
         die "--plan: not a readable file or recognized issue reference: $PLAN_SOURCE"
       fi
-      _issue_json=$(gh issue view "$_issue_ref" --repo "$_target_repo" --json number,url,body,repository 2>&1) \
+      _issue_json=$(gh issue view "$_issue_ref" --repo "$_target_repo" --json number,url,body 2>&1) \
         || die "--plan: could not resolve issue $PLAN_SOURCE: $_issue_json"
       ISSUE_BODY=$(jq -r '.body // ""' <<<"$_issue_json")
       [[ -n "$ISSUE_BODY" ]] || die "--plan: issue $PLAN_SOURCE has an empty body"
       _resolved_url=$(jq -r '.url // ""' <<<"$_issue_json")
       _resolved_num=$(jq -r '.number // ""' <<<"$_issue_json")
-      _resolved_nwo=$(jq -r '.repository.nameWithOwner // empty' <<<"$_issue_json")
+      _resolved_nwo="$_target_repo"
       # Only set ISSUE_URL/ISSUE_NUM (which drive the `Closes #N` link) when
       # the resolved issue's repo matches the PR's target repo. Cross-repo
       # issue sources get the body as plan content but no auto-close link.
