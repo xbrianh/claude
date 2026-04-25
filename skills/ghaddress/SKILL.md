@@ -34,11 +34,15 @@ $ARGUMENTS[1:]
    a. Understand what the reviewer is asking for.
    b. Read the relevant code to understand the current state.
    c. Make the fix or change requested.
-3. After making all code changes, stage, commit, and push:
+
+   OOS comments are deferred to step 4 and the *Out-of-scope triage* section below — do not act on them in this step.
+3. After making all in-scope code changes, stage, commit, and push:
    a. `git add` the changed files (by name, not `-A`).
    b. `git commit` with a message summarizing what was addressed.
    c. `git push` to the PR branch.
-4. Only after the push succeeds, reply to each comment thread. Skip comments that have already been resolved.
+
+   If there were no in-scope changes (every comment was OOS or already-resolved), skip 3a–3c and proceed directly to step 4 — `git commit` would fail with "nothing to commit" and gate out the OOS triage, which is the case where the new behavior matters most.
+4. Reply to each comment thread (after the push succeeds, if step 3 ran). Skip comments that have already been resolved.
    - For in-scope comments you addressed: reply briefly acknowledging the fix.
    - For questions or acknowledgements that need no code change: reply briefly.
    - For OOS comments: run the OOS triage in the next section before replying.
@@ -70,21 +74,22 @@ For each comment you marked OOS, decide whether it looks like a real defect or n
 
 Use `gh issue create` with:
 
+- **Repo**: always pass `--repo <owner>/<repo>` explicitly, derived from the same `gh pr view` data already fetched (e.g., `gh pr view <number> --json baseRepository`). This skill's frontmatter is `context: fork`, and a fork checkout configured with a downstream `origin` would otherwise silently file the issue in the wrong tracker — the failure mode is silent.
 - **Title**: a short distillation of the comment (no special prefix). Aim for a sentence fragment that names the defect, not the comment ID.
 - **Body**: must stand on its own — a reader should not need to chase the PR to understand the issue. Include:
   - A short summary of the defect in your own words.
-  - The reviewer's comment, quoted or summarized, so the original framing is preserved.
-  - `Ref #<pr-number>` so GitHub cross-links the PR.
+  - The reviewer's comment, quoted or summarized, so the original framing is preserved. **Before quoting, scan the comment text for secrets or sensitive data (credentials, API keys, tokens, internal URLs, customer data). If any are present, redact them in the issue body — replace with `[redacted]` — or if redaction isn't safe/clean, skip filing the issue and bail with `set-bail.sh "$GR_ID" secrets ...` instead. Issues are public and permanent; do not promote secrets from a review comment into a new issue.**
+  - A PR cross-link. Use `Ref #<pr-number>` when filing in the same repo as the PR (the common case). Use `Ref <owner>/<repo>#<pr-number>` if you ever file cross-repo, since plain `#<n>` only autolinks within the same repo.
   - A permalink to the originating review comment (the comment's `html_url` from the API response).
 
 Example invocation (pass body via heredoc to preserve formatting):
 
 ```
-gh issue create --title "<short distillation>" --body "$(cat <<'EOF'
+gh issue create --repo <owner>/<repo> --title "<short distillation>" --body "$(cat <<'EOF'
 <summary>
 
 Reviewer comment:
-> <quoted or summarized comment>
+> <quoted or summarized comment, with any secrets redacted>
 
 Ref #<pr-number>
 <permalink to review comment>
@@ -104,7 +109,7 @@ Capture the issue number/URL from the command's output for the reply.
 Issue-creation failure is not a reason to stop addressing the rest of the PR. Do **not** write a bail marker.
 
 - Log the failure prominently in the run output (a clear `ERROR: failed to file issue for comment <id>: <error>` line, and include it in the final summary).
-- Fall back to a dismissal-style reply on the PR thread that names what the issue *would* have said (intended title and a one-line summary), so the comment is not silently dropped.
+- Fall back to a reply on the PR thread that **clearly marks itself as a failed filing attempt** so a future human triager can tell it apart from an intentional noise dismissal. Open with `Tried to file as "<intended title>" but \`gh issue create\` failed: <error>. Please file manually if this is a real defect.` followed by the one-line summary that would have been the issue body's lead. Do not phrase it as a generic dismissal — the PR thread is the durable surface a human reviewer will see, and indistinguishable phrasing erases the audit trail.
 - Continue with the remaining comments.
 
 ## Bail markers (only when running under a gremlin)
@@ -124,5 +129,7 @@ Use the helper:
   ```
   ~/.claude/skills/_bg/set-bail.sh "$GR_ID" other "<one-line reason>"
   ```
+
+Note: out-of-scope comments are **not** a bail reason — they go through the *Out-of-scope triage* section above (file an issue or post a dismissal/failure-marker reply). A `gh issue create` failure is also not a bail reason; fall back per that section.
 
 In both cases, also state in your final summary that you bailed and why. If you successfully addressed every actionable comment, do not write a bail marker — just exit normally.
