@@ -225,6 +225,7 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
     signal_path = os.path.join(state_dir, f"handoff-{n:03d}.state.json")
     current_plan = boss_state["current_plan"]
+    spec_path = boss_state["spec_path"]
     base_ref = boss_state["chain_base_ref"]
     chain_kind = boss_state.get("chain_kind")
     target_branch = boss_state.get("target_branch", "")
@@ -250,10 +251,20 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     else:
         die(f"unknown chain_kind: {chain_kind!r}")
 
-    log(f"handoff {n}: plan={current_plan}, base={base_ref[:12]}, rev={rev_label}, cwd={handoff_cwd}")
+    # Only forward --spec once the rolling plan has diverged from the spec.
+    # On handoff #1, init_boss_state seeds current_plan = spec_path, so
+    # passing --spec would render the same document twice in the prompt
+    # (once as north-star, once as the input plan). Skipping --spec there
+    # avoids the duplication; the north-star section first appears on the
+    # handoff that runs against an actual rolling plan (#2+).
+    forward_spec = bool(spec_path) and spec_path != current_plan
+    spec_log = spec_path if forward_spec else "(none)"
+    log(f"handoff {n}: plan={current_plan}, spec={spec_log}, base={base_ref[:12]}, rev={rev_label}, cwd={handoff_cwd}")
+    spec_args = ["--spec", spec_path] if forward_spec else []
     cmd = [
         handoff_script,
         "--plan", current_plan,
+        *spec_args,
         "--out", out_path,
         "--base", base_ref,
         "--model", model,
