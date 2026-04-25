@@ -32,6 +32,7 @@ STATE_ROOT = os.path.join(
 
 POLL_INTERVAL = 5  # seconds between finished-marker polls
 HANDOFF_TIMEOUT = int(os.environ.get("BOSSGREMLIN_HANDOFF_TIMEOUT", "3600"))
+HANDOFF_FETCH_TIMEOUT = int(os.environ.get("BOSSGREMLIN_HANDOFF_FETCH_TIMEOUT", "60"))
 
 _current_proc = None
 _stop_requested = False
@@ -182,11 +183,17 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
             die("gh chain has no target branch — cannot resolve remote ref for handoff")
         # Refresh the remote-tracking ref so we see PRs that landed on the
         # remote (including merges done via the GitHub UI or another machine,
-        # which never trigger _fast_forward_main locally).
-        fetch = subprocess.run(
-            ["git", "fetch", "origin", target_branch],
-            capture_output=True, text=True, cwd=project_root,
-        )
+        # which never trigger _fast_forward_main locally). Bound the fetch so
+        # an unreachable origin can't stall the chain indefinitely between
+        # handoffs.
+        try:
+            fetch = subprocess.run(
+                ["git", "fetch", "origin", target_branch],
+                capture_output=True, text=True, cwd=project_root,
+                timeout=HANDOFF_FETCH_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            die(f"git fetch origin {target_branch} timed out after {HANDOFF_FETCH_TIMEOUT}s")
         if fetch.returncode != 0:
             die(f"git fetch origin {target_branch} failed: {fetch.stderr.strip()}")
         handoff_cwd = project_root
