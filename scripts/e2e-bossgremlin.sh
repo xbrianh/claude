@@ -28,7 +28,15 @@ MAX_WAIT=${E2E_TIMEOUT:-7200}
     echo "[e2e] FAIL: working tree is not clean; commit, stash, or discard changes before running" >&2; exit 1
 }
 
-git -C "$REPO_ROOT" fetch origin
+git -C "$REPO_ROOT" fetch --quiet origin || {
+    echo "[e2e] FAIL: git fetch origin failed" >&2; exit 1
+}
+
+# Refresh origin/HEAD: `git fetch` does not update it, so a renamed upstream
+# default branch would otherwise leave us branching off a stale local ref.
+git -C "$REPO_ROOT" remote set-head origin --auto >/dev/null || {
+    echo "[e2e] FAIL: git remote set-head origin --auto failed" >&2; exit 1
+}
 
 DEFAULT_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo "")
 DEFAULT_BRANCH=${DEFAULT_BRANCH#origin/}
@@ -37,8 +45,8 @@ DEFAULT_BRANCH=${DEFAULT_BRANCH#origin/}
 }
 
 SANDBOX_BRANCH="bossgremlin-e2e/$(date +%Y%m%d-%H%M%S)"
-git -C "$REPO_ROOT" checkout -b "$SANDBOX_BRANCH" "$DEFAULT_BRANCH"
-echo "[e2e] sandbox branch: $SANDBOX_BRANCH (from $DEFAULT_BRANCH)"
+git -C "$REPO_ROOT" checkout -b "$SANDBOX_BRANCH" "origin/$DEFAULT_BRANCH"
+echo "[e2e] sandbox branch: $SANDBOX_BRANCH (from origin/$DEFAULT_BRANCH)"
 
 cleanup() {
     [[ -n "${BOSS_ID:-}" && -n "${STATE_DIR:-}" ]] && {
