@@ -77,6 +77,10 @@ def collect_git_context(base_ref: Optional[str], rev: Optional[str] = None) -> T
 
     result = run_git("rev-parse", "--abbrev-ref", inspect_rev, check=False)
     branch = result.stdout.strip() if result.returncode == 0 else inspect_rev
+    if branch == "HEAD":
+        # Detached HEAD: surface the SHA so the prompt doesn't read "Branch: HEAD".
+        sha = run_git("rev-parse", inspect_rev, check=False).stdout.strip()
+        branch = f"(detached at {sha[:12]})" if sha else "(detached)"
 
     result = run_git("merge-base", inspect_rev, target, check=False)
     if result.returncode != 0:
