@@ -2,22 +2,22 @@
 
 ## Context
 
-The three gremlin skills — `/localgremlin`, `/ghgremlin`, and `/bossgremlin` — each run a
-multi-stage pipeline that is described only at a high level in their SKILL.md files. The
-current documentation covers where artifacts land and what arguments to pass, but does not
-enumerate the discrete pipeline stages or describe what each stage produces. This gap makes
+The gremlin pipeline skills — `/localgremlin`, `/ghgremlin`, `/bossgremlin`, and `/handoff`
+— each run a multi-stage workflow that is described only at a high level in their SKILL.md
+files. The current documentation covers where artifacts land and what arguments to pass, but
+does not enumerate the discrete stages or describe what each stage produces. This gap makes
 it hard to interpret the `/gremlins` stage-column output, understand which artifacts to
 inspect after a partial run, or reason about what happened when a stage fails mid-chain.
 
 ## Goal
 
-Add a `## Stages` subsection to each of the three gremlin SKILL.md files that enumerates
-the stages each gremlin runs and describes what each stage produces. The subsections should
-be accurate, concise, and consistent in style across all three files.
+Add a `## Stages` subsection to each of the four SKILL.md files that enumerates the stages
+each skill runs and describes what each stage produces. The subsections should be accurate,
+concise, and consistent in style across all four files.
 
 ## Tasks
 
-**Implement one SKILL.md file per child gremlin. Do not bundle all three into a single child.**
+**Implement one SKILL.md file per child gremlin. Do not bundle multiple tasks into a single child.**
 
 ### Task 1 — `skills/localgremlin/SKILL.md`
 
@@ -71,8 +71,26 @@ in order.
 Position the section after the workflow overview bullet list (items 1–4) and before
 `## Arguments`.
 
+### Task 4 — `skills/handoff/SKILL.md`
+
+Add a `## Stages` section describing the six steps the handoff script executes:
+
+1. **read-plan** — reads the input plan from `--plan`; identifies what work remains.
+2. **collect-context** — collects the git log and diff since the branch diverged from
+   `--base`; used to determine what has already landed.
+3. **decide** — runs the inner `claude -p` agent to compare landed work against the plan
+   and determine the exit state (`next-plan`, `chain-done`, or `bail`).
+4. **write-updated-plan** — writes the updated rolling plan to `--out` (remaining work
+   only; completed items are pruned); produces `handoff-NNN.md`.
+5. **write-child-plan** — on `next-plan` exit state only, writes the child plan for the
+   next gremlin; produces `handoff-NNN-child.md`.
+6. **write-signal** — writes the machine-readable signal file; produces
+   `handoff-NNN.state.json` with `exit_state`, `child_plan` path, and optional `reason`.
+
+Position the section after the `## Exit states` section and before `## Arguments`.
+
 ## Non-goals
 
 - Do not change any other content in the SKILL.md files.
-- Do not add stages documentation to any files other than the three listed above.
+- Do not add stages documentation to any files other than the four listed above.
 - Do not restructure or reformat sections that are not being modified.

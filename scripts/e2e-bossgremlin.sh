@@ -191,9 +191,9 @@ if [[ "$CHAIN_EXIT_STATE" != "chain-done" ]]; then
     FAILURES+=("last handoff exited '$CHAIN_EXIT_STATE' (expected chain-done)")
 fi
 
-# C: at least 2 children ran
-if [[ "$CHILD_COUNT" -lt 2 ]]; then
-    FAILURES+=("only $CHILD_COUNT children ran (expected >= 2)")
+# C: at least 3 children ran (spec has 4 tasks, one per child)
+if [[ "$CHILD_COUNT" -lt 3 ]]; then
+    FAILURES+=("only $CHILD_COUNT children ran (expected >= 3)")
 fi
 
 # D: all children have a passing outcome
@@ -225,6 +225,189 @@ if [[ -n "$ORPHAN_IDS" ]]; then
     FAILURES+=("orphaned running/stalled children: $ORPHAN_IDS")
 fi
 
+# G: LLM judge — plan reduction property (skipped if fewer than 3 child plans)
+JUDGE_VERDICT="skipped"
+JUDGE_PAIRS_JSON="[]"
+JUDGE_MODEL_USED="${JUDGE_MODEL:-claude-sonnet-4-6}"
+
+if [[ "$CHILD_COUNT" -ge 3 && -f "$STATE_DIR/boss_state.json" ]]; then
+    echo "[e2e] running LLM judge (model=${JUDGE_MODEL:-claude-sonnet-4-6}, timeout=${JUDGE_TIMEOUT:-120}s)..."
+    JUDGE_TMP=$(mktemp)
+    STATE_DIR="$STATE_DIR" REPO_ROOT="$REPO_ROOT" SPEC="$SPEC" \
+        JUDGE_MODEL="${JUDGE_MODEL:-claude-sonnet-4-6}" \
+        JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-120}" \
+        python3 - > "$JUDGE_TMP" 2>/dev/null <<'JUDGE_PY' || true
+import json, os, re, subprocess, sys
+
+def emit(verdict, pairs=None, error=''):
+    model = os.environ.get('JUDGE_MODEL', '')
+    print(json.dumps({'verdict': verdict, 'pairs': pairs or [], 'model': model, 'error': error}))
+
+try:
+    state_dir = os.environ['STATE_DIR']
+    repo_root = os.environ['REPO_ROOT']
+    spec_path = os.environ['SPEC']
+    model = os.environ.get('JUDGE_MODEL', 'claude-sonnet-4-6')
+    timeout = int(os.environ.get('JUDGE_TIMEOUT', '120'))
+
+    with open(os.path.join(state_dir, 'boss_state.json')) as f:
+        bs = json.load(f)
+    chain_base_ref = bs.get('chain_base_ref', '')
+
+    with open(spec_path) as f:
+        spec_content = f.read().strip()
+
+    # Collect child plans in order (handoff-NNN-child.md)
+    child_plans = []
+    i = 1
+    while True:
+        path = os.path.join(state_dir, f'handoff-{i:03d}-child.md')
+        if not os.path.exists(path):
+            break
+        with open(path) as f:
+            child_plans.append(f.read().strip())
+        i += 1
+
+    if len(child_plans) < 2:
+        emit('skipped', error='fewer than 2 child plans')
+        sys.exit(0)
+
+    # Collect per-child diffs from squash commits on sandbox since chain_base_ref
+    diffs = []
+    if chain_base_ref:
+        try:
+            out = subprocess.check_output(
+                ['git', '-C', repo_root, 'log', '--reverse', '--format=%H',
+                 f'{chain_base_ref}..HEAD'],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            for sha in [c for c in out.splitlines() if c.strip()]:
+                try:
+                    diff = subprocess.check_output(
+                        ['git', '-C', repo_root, 'show', '--stat', '--patch', sha],
+                        text=True, stderr=subprocess.DEVNULL
+                    )
+                    diffs.append(diff[:8000])
+                except Exception:
+                    diffs.append('(diff unavailable)')
+        except Exception:
+            pass  # non-fatal; judge proceeds without diffs
+
+    # Build prompt
+    sections = [f'## Overarching Spec\n\n{spec_content}']
+    for idx, plan in enumerate(child_plans):
+        sections.append(f'## Child Plan {idx + 1}\n\n{plan}')
+    for idx, diff in enumerate(diffs):
+        sections.append(f'## Landed Diff {idx + 1}\n\n```\n{diff}\n```')
+
+    num_pairs = len(child_plans) - 1
+    pairs_list = ', '.join(f'{j}→{j+1}' for j in range(1, num_pairs + 1))
+    sections.append(f"""## Task
+
+You are a chain-coherence judge. Evaluate the reduction property of this plan chain.
+
+For each consecutive pair ({pairs_list}), determine whether plan_{{i+1}}'s scope is a \
+strict subset of the work remaining after plan_i landed:
+- No plan repeats work already landed by a prior child
+- No plan expands scope beyond what the spec originally committed to
+- The set of remaining work shrinks monotonically across the chain
+
+Respond with ONLY a valid JSON object — no markdown fences, no text before or after:
+{{"verdict":"pass","pairs":[{{"index":"1→2","pass":true,"rationale":"one sentence"}}]}}
+
+verdict is "pass" if ALL pairs pass; "fail" if ANY pair fails.
+pairs has one entry per adjacent pair: index (e.g. "1→2"), pass (bool), rationale (one sentence).""")
+
+    prompt = '\n\n'.join(sections)
+
+    try:
+        proc = subprocess.run(
+            ['claude', '-p', '--model', model],
+            input=prompt, capture_output=True, text=True, timeout=timeout
+        )
+        raw = proc.stdout.strip()
+        if not raw:
+            emit('error', error=f'claude returned empty output (exit {proc.returncode}): {proc.stderr[:200]}')
+            sys.exit(0)
+    except subprocess.TimeoutExpired:
+        emit('error', error=f'judge timed out after {timeout}s')
+        sys.exit(0)
+    except FileNotFoundError:
+        emit('error', error='claude CLI not found in PATH')
+        sys.exit(0)
+
+    # Extract JSON from response (model may include prose before/after)
+    try:
+        result = json.loads(raw)
+    except Exception:
+        m = re.search(r'\{.*?\}', raw, re.DOTALL)
+        raw_json = m.group(0) if m else raw
+        result = json.loads(raw_json)
+    try:
+        verdict = result.get('verdict', 'error')
+        if verdict not in ('pass', 'fail'):
+            verdict = 'error'
+        emit(verdict, pairs=result.get('pairs', []))
+    except Exception as e:
+        emit('error', error=f'response not valid JSON: {e!r}; raw={raw[:300]!r}')
+
+except Exception as e:
+    emit('error', error=f'unhandled exception: {e!r}')
+JUDGE_PY
+    JUDGE_OUT=$(cat "$JUDGE_TMP" 2>/dev/null) || JUDGE_OUT=""
+    rm -f "$JUDGE_TMP"
+    [[ -n "$JUDGE_OUT" ]] || JUDGE_OUT='{"verdict":"error","pairs":[],"model":"","error":"judge produced no output"}'
+
+    JUDGE_VERDICT=$(python3 -c "
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get('verdict', 'error'))
+except Exception:
+    print('error')
+" "$JUDGE_OUT" 2>/dev/null) || JUDGE_VERDICT="error"
+
+    JUDGE_PAIRS_JSON=$(python3 -c "
+import json, sys
+try:
+    print(json.dumps(json.loads(sys.argv[1]).get('pairs', [])))
+except Exception:
+    print('[]')
+" "$JUDGE_OUT" 2>/dev/null) || JUDGE_PAIRS_JSON="[]"
+
+    JUDGE_MODEL_USED=$(python3 -c "
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get('model', ''))
+except Exception:
+    print('')
+" "$JUDGE_OUT" 2>/dev/null) || JUDGE_MODEL_USED=""
+
+    case "$JUDGE_VERDICT" in
+        fail)
+            FAILING_PAIRS=$(python3 -c "
+import json, sys
+try:
+    pairs = json.loads(sys.argv[1])
+    bad = [p.get('index', '?') for p in pairs if not p.get('pass', True)]
+    print(', '.join(bad) if bad else 'unknown')
+except Exception:
+    print('unknown')
+" "$JUDGE_PAIRS_JSON" 2>/dev/null) || FAILING_PAIRS="unknown"
+            FAILURES+=("plan chain fails reduction property (failing pairs: $FAILING_PAIRS)")
+            ;;
+        error)
+            JUDGE_ERR=$(python3 -c "
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get('error', 'unknown error'))
+except Exception:
+    print('unknown error')
+" "$JUDGE_OUT" 2>/dev/null) || JUDGE_ERR="unknown error"
+            FAILURES+=("LLM judge error: $JUDGE_ERR")
+            ;;
+    esac
+fi
+
 # ── Output ──────────────────────────────────────────────────────────────────────
 
 ELAPSED=$(( $(date +%s) - START_TS ))
@@ -247,7 +430,8 @@ print(json.dumps(sys.argv[1:]))
 " "${FAILURES[@]+"${FAILURES[@]}"}")
 
 # Emit final-line JSON summary (must be last stdout line)
-export BOSS_ID STATE_DIR SANDBOX_BRANCH PASS_FAIL CHAIN_EXIT_STATE ELAPSED FAILURE_REASONS_JSON
+export BOSS_ID STATE_DIR SANDBOX_BRANCH PASS_FAIL CHAIN_EXIT_STATE ELAPSED \
+    FAILURE_REASONS_JSON JUDGE_VERDICT JUDGE_PAIRS_JSON JUDGE_MODEL_USED
 python3 -c "
 import json, os
 
@@ -265,6 +449,11 @@ except Exception:
     child_outcomes = {}
     chain_exit = os.environ.get('CHAIN_EXIT_STATE', '')
 
+try:
+    judge_pairs = json.loads(os.environ.get('JUDGE_PAIRS_JSON', '[]'))
+except Exception:
+    judge_pairs = []
+
 print(json.dumps({
     'outcome': os.environ['PASS_FAIL'],
     'boss_id': os.environ['BOSS_ID'],
@@ -275,6 +464,9 @@ print(json.dumps({
     'chain_exit_state': chain_exit,
     'failure_reasons': json.loads(os.environ['FAILURE_REASONS_JSON']),
     'elapsed_seconds': int(os.environ['ELAPSED']),
+    'judge_verdict': os.environ.get('JUDGE_VERDICT', 'skipped'),
+    'judge_pairs': judge_pairs,
+    'judge_model': os.environ.get('JUDGE_MODEL_USED', ''),
 }, separators=(',', ':')))
 " || echo "{\"outcome\":\"$PASS_FAIL\",\"boss_id\":\"$BOSS_ID\",\"sandbox_branch\":\"$SANDBOX_BRANCH\",\"error\":\"json_construction_failed\",\"elapsed_seconds\":$ELAPSED}"
 
