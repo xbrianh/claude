@@ -122,6 +122,42 @@ def get_current_branch(project_root: str) -> str:
     return "" if branch == "HEAD" else branch
 
 
+def get_default_branch(project_root: str) -> str:
+    """Resolve the repo's default branch via gh CLI. Calls die() on failure."""
+    r = subprocess.run(
+        ["gh", "repo", "view", "--json", "defaultBranchRef",
+         "-q", ".defaultBranchRef.name"],
+        capture_output=True, text=True, cwd=project_root,
+    )
+    if r.returncode != 0:
+        die(f"gh repo view failed in {project_root}: {r.stderr.strip()}")
+    name = r.stdout.strip()
+    if not name:
+        die(f"gh repo view returned empty default branch in {project_root}")
+    return name
+
+
+def get_remote_branch_sha(project_root: str, branch: str) -> str:
+    """Fetch origin/<branch> and return its SHA. Calls die() on failure."""
+    try:
+        fetch = subprocess.run(
+            ["git", "fetch", "origin", branch],
+            capture_output=True, text=True, cwd=project_root,
+            timeout=HANDOFF_FETCH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        die(f"git fetch origin {branch} timed out after {HANDOFF_FETCH_TIMEOUT}s at chain start")
+    if fetch.returncode != 0:
+        die(f"git fetch origin {branch} failed at chain start: {fetch.stderr.strip()}")
+    r = subprocess.run(
+        ["git", "rev-parse", f"origin/{branch}"],
+        capture_output=True, text=True, cwd=project_root,
+    )
+    if r.returncode != 0:
+        die(f"git rev-parse origin/{branch} failed: {r.stderr.strip()}")
+    return r.stdout.strip()
+
+
 def init_boss_state(spec_path: str, chain_kind: str, chain_base_ref: str,
                     target_branch: str, state_dir: str) -> dict:
     boss_state = {
@@ -392,9 +428,17 @@ def main(argv):
     boss_state_file = os.path.join(state_dir, "boss_state.json")
     if not os.path.isfile(boss_state_file):
         log(f"chain start: kind={chain_kind}, spec={spec_path}")
-        chain_base_ref = get_head_ref(project_root)
-        target_branch = get_current_branch(project_root)
-        log(f"base ref: {chain_base_ref[:12]}, target branch: {target_branch or '(detached)'}")
+        if chain_kind == "gh":
+            # gh children open PRs from the repo's default branch and land
+            # there, regardless of where the user happens to be. Anchor the
+            # chain to origin/<default-branch> so handoff diffs land cleanly.
+            target_branch = get_default_branch(project_root)
+            chain_base_ref = get_remote_branch_sha(project_root, target_branch)
+            log(f"base ref: {chain_base_ref[:12]} (origin/{target_branch}), target branch: {target_branch}")
+        else:
+            chain_base_ref = get_head_ref(project_root)
+            target_branch = get_current_branch(project_root)
+            log(f"base ref: {chain_base_ref[:12]}, target branch: {target_branch or '(detached)'}")
         boss_state = init_boss_state(
             spec_path=spec_path,
             chain_kind=chain_kind,
