@@ -31,8 +31,6 @@ The `localgremlin` skill runs plan → implement → three parallel reviewers (h
 
 The review-code and address-code stage bodies live in [`skills/localgremlin/_core.py`](skills/localgremlin/_core.py) alongside the orchestrator, so the standalone `/localreview` and `/localaddress` skills execute the same code as the gremlin's review and address stages.
 
-Both `/ghgremlin` and `/localgremlin` accept `--design` as a first flag to invoke `/design` before the gremlin, running an interactive spec conversation and handing off automatically when the user is ready.
-
 ## Additional skills
 
 - [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of all background gremlins on this machine. Key subcommands: `stop <id>` (SIGTERM), `rescue <id>` (Phase A: inline `claude -p` diagnoses and fixes the failure in the foreground; Phase B: `launch.sh --resume` relaunches the pipeline at the failed stage in the background under the original gremlin id, with a `(rescue)` liveness marker), `rm <id>` (delete state directory, worktree directory, and branch), `close <id>` (mark finished gremlin closed), `land <id>` (squash-land a local gremlin or merge a gh PR and clean up). Use `--here` to filter to the current repo.
