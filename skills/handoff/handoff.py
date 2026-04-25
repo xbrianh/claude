@@ -149,7 +149,7 @@ Git diff since chain start:
      - Under `## Open questions`, carry forward unresolved entries; drop entries tied to completed tasks.
      - If a task is only partly landed, keep it (rewritten if needed to reflect what remains).
    - **`chain-done`**: minimal output. A short note that the chain is complete is enough — no leftover task list, no carried-over context. The signal file carries the structured outcome.
-   - **`bail`**: record the bail reason prominently at the top, then list the still-remaining tasks. Completed tasks are still dropped.
+   - **`bail`**: same pruning rules as `next-plan` (only remaining tasks, surrounding sections trimmed accordingly, unresolved `## Open questions` carried forward), with a bail-reason banner added prominently at the top.
 
 5. If exit state is **`next-plan`**, write a **child plan** to: `{child_plan_path}`
    - Use the standard localgremlin plan structure exactly:
