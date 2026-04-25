@@ -32,7 +32,11 @@ STATE_ROOT = os.path.join(
 
 POLL_INTERVAL = 5  # seconds between finished-marker polls
 HANDOFF_TIMEOUT = int(os.environ.get("BOSSGREMLIN_HANDOFF_TIMEOUT", "3600"))
+# Bounds every interaction with `origin` (chain-start fetch of the default
+# branch and per-handoff fetch of the target branch). Named for the historical
+# per-handoff use; kept under the same env var for backwards compatibility.
 HANDOFF_FETCH_TIMEOUT = int(os.environ.get("BOSSGREMLIN_HANDOFF_FETCH_TIMEOUT", "60"))
+GH_VIEW_TIMEOUT = 30  # seconds; bounds `gh repo view` at chain start
 
 _current_proc = None
 _stop_requested = False
@@ -122,6 +126,59 @@ def get_current_branch(project_root: str) -> str:
     return "" if branch == "HEAD" else branch
 
 
+def get_default_branch(project_root: str) -> str:
+    """Resolve the repo's default branch via gh CLI. Calls die() on failure."""
+    try:
+        r = subprocess.run(
+            ["gh", "repo", "view", "--json", "defaultBranchRef",
+             "-q", ".defaultBranchRef.name"],
+            capture_output=True, text=True, cwd=project_root,
+            timeout=GH_VIEW_TIMEOUT,
+        )
+    except FileNotFoundError:
+        die("gh CLI not found on PATH — required to resolve default branch for gh chain")
+    except subprocess.TimeoutExpired:
+        die(f"gh repo view timed out after {GH_VIEW_TIMEOUT}s in {project_root}")
+    if r.returncode != 0:
+        die(f"gh repo view failed in {project_root}: {r.stderr.strip()}")
+    name = r.stdout.strip()
+    if not name:
+        die(f"gh repo view returned empty default branch in {project_root}")
+    return name
+
+
+def fetch_origin_branch(project_root: str, branch: str, *, context: str) -> None:
+    """Fetch origin/<branch> with a bounded timeout. Calls die() on failure.
+
+    Uses an explicit refspec so a branch name starting with `-` cannot be
+    parsed by `git fetch` as an option. `context` is interpolated into error
+    messages (e.g. "at chain start" vs "before handoff").
+    """
+    refspec = f"refs/heads/{branch}:refs/remotes/origin/{branch}"
+    try:
+        fetch = subprocess.run(
+            ["git", "fetch", "origin", refspec],
+            capture_output=True, text=True, cwd=project_root,
+            timeout=HANDOFF_FETCH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        die(f"git fetch origin {refspec} timed out after {HANDOFF_FETCH_TIMEOUT}s {context}")
+    if fetch.returncode != 0:
+        die(f"git fetch origin {refspec} failed {context}: {fetch.stderr.strip()}")
+
+
+def get_remote_branch_sha(project_root: str, branch: str) -> str:
+    """Fetch origin/<branch> and return its SHA. Calls die() on failure."""
+    fetch_origin_branch(project_root, branch, context="at chain start")
+    r = subprocess.run(
+        ["git", "rev-parse", f"refs/remotes/origin/{branch}"],
+        capture_output=True, text=True, cwd=project_root,
+    )
+    if r.returncode != 0:
+        die(f"git rev-parse refs/remotes/origin/{branch} failed: {r.stderr.strip()}")
+    return r.stdout.strip()
+
+
 def init_boss_state(spec_path: str, chain_kind: str, chain_base_ref: str,
                     target_branch: str, state_dir: str) -> dict:
     boss_state = {
@@ -186,16 +243,7 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
         # which never trigger _fast_forward_main locally). Bound the fetch so
         # an unreachable origin can't stall the chain indefinitely between
         # handoffs.
-        try:
-            fetch = subprocess.run(
-                ["git", "fetch", "origin", target_branch],
-                capture_output=True, text=True, cwd=project_root,
-                timeout=HANDOFF_FETCH_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            die(f"git fetch origin {target_branch} timed out after {HANDOFF_FETCH_TIMEOUT}s")
-        if fetch.returncode != 0:
-            die(f"git fetch origin {target_branch} failed: {fetch.stderr.strip()}")
+        fetch_origin_branch(project_root, target_branch, context="before handoff")
         handoff_cwd = project_root
         rev_label = f"origin/{target_branch}"
         rev_args = ["--rev", rev_label]
@@ -392,9 +440,17 @@ def main(argv):
     boss_state_file = os.path.join(state_dir, "boss_state.json")
     if not os.path.isfile(boss_state_file):
         log(f"chain start: kind={chain_kind}, spec={spec_path}")
-        chain_base_ref = get_head_ref(project_root)
-        target_branch = get_current_branch(project_root)
-        log(f"base ref: {chain_base_ref[:12]}, target branch: {target_branch or '(detached)'}")
+        if chain_kind == "gh":
+            # gh children open PRs from the repo's default branch and land
+            # there, regardless of where the user happens to be. Anchor the
+            # chain to origin/<default-branch> so handoff diffs land cleanly.
+            target_branch = get_default_branch(project_root)
+            chain_base_ref = get_remote_branch_sha(project_root, target_branch)
+            log(f"base ref: {chain_base_ref[:12]} (origin/{target_branch}), target branch: {target_branch}")
+        else:
+            chain_base_ref = get_head_ref(project_root)
+            target_branch = get_current_branch(project_root)
+            log(f"base ref: {chain_base_ref[:12]}, target branch: {target_branch or '(detached)'}")
         boss_state = init_boss_state(
             spec_path=spec_path,
             chain_kind=chain_kind,
