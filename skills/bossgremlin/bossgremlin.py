@@ -32,6 +32,7 @@ STATE_ROOT = os.path.join(
 
 POLL_INTERVAL = 5  # seconds between finished-marker polls
 HANDOFF_TIMEOUT = int(os.environ.get("BOSSGREMLIN_HANDOFF_TIMEOUT", "3600"))
+HANDOFF_FETCH_TIMEOUT = int(os.environ.get("BOSSGREMLIN_HANDOFF_FETCH_TIMEOUT", "60"))
 
 _current_proc = None
 _stop_requested = False
@@ -147,11 +148,16 @@ def save_boss_state(state_dir: str, boss_state: dict) -> None:
 
 
 def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
-                project_root: str, model: str, target_branch: str) -> tuple:
+                project_root: str, boss_workdir: str, model: str) -> tuple:
     """Run handoff agent. Returns (exit_state, signal dict).
 
     Updates boss_state in place (handoff_count, current_plan, handoff_records).
     Calls die() on infrastructure failure.
+
+    Children of a local chain squash-land into the boss's own workdir HEAD,
+    while children of a gh chain push to origin/<target_branch>. Pick the
+    right cwd/rev so handoff sees the actually-landed work, not a stale ref
+    in the user's repo that may never advance during the chain.
     """
     set_stage(gr_id, "handoff")
     handoff_script = os.path.expanduser("~/.claude/skills/handoff/handoff.py")
@@ -163,8 +169,40 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     signal_path = os.path.join(state_dir, f"handoff-{n:03d}.state.json")
     current_plan = boss_state["current_plan"]
     base_ref = boss_state["chain_base_ref"]
+    chain_kind = boss_state.get("chain_kind")
+    target_branch = boss_state.get("target_branch", "")
 
-    log(f"handoff {n}: plan={current_plan}, base={base_ref[:12]}, rev={target_branch or 'HEAD'}")
+    rev_args: list = []
+    if chain_kind == "local":
+        if not boss_workdir or not os.path.isdir(boss_workdir):
+            die(f"boss workdir not usable for local chain handoff: {boss_workdir!r}")
+        handoff_cwd = boss_workdir
+        rev_label = "HEAD"
+    elif chain_kind == "gh":
+        if not target_branch:
+            die("gh chain has no target branch — cannot resolve remote ref for handoff")
+        # Refresh the remote-tracking ref so we see PRs that landed on the
+        # remote (including merges done via the GitHub UI or another machine,
+        # which never trigger _fast_forward_main locally). Bound the fetch so
+        # an unreachable origin can't stall the chain indefinitely between
+        # handoffs.
+        try:
+            fetch = subprocess.run(
+                ["git", "fetch", "origin", target_branch],
+                capture_output=True, text=True, cwd=project_root,
+                timeout=HANDOFF_FETCH_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            die(f"git fetch origin {target_branch} timed out after {HANDOFF_FETCH_TIMEOUT}s")
+        if fetch.returncode != 0:
+            die(f"git fetch origin {target_branch} failed: {fetch.stderr.strip()}")
+        handoff_cwd = project_root
+        rev_label = f"origin/{target_branch}"
+        rev_args = ["--rev", rev_label]
+    else:
+        die(f"unknown chain_kind: {chain_kind!r}")
+
+    log(f"handoff {n}: plan={current_plan}, base={base_ref[:12]}, rev={rev_label}, cwd={handoff_cwd}")
     cmd = [
         handoff_script,
         "--plan", current_plan,
@@ -172,13 +210,9 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
         "--base", base_ref,
         "--model", model,
         "--timeout", str(HANDOFF_TIMEOUT),
+        *rev_args,
     ]
-    if target_branch:
-        # Run in the real repo root so git can resolve the target branch, and
-        # pass --rev so handoff inspects landed work on that branch rather than
-        # whatever HEAD the caller happens to have checked out.
-        cmd += ["--rev", target_branch]
-    rc = run_proc(cmd, cwd=project_root)
+    rc = run_proc(cmd, cwd=handoff_cwd)
     check_stop()
 
     if rc != 0:
@@ -349,6 +383,7 @@ def main(argv):
     project_root = gremlin_state.get("project_root", "")
     if not project_root or not os.path.isdir(project_root):
         die(f"project_root not usable: {project_root!r}")
+    boss_workdir = gremlin_state.get("workdir", "")
 
     spec_path = str(pathlib.Path(args.plan).resolve())
     chain_kind = args.chain_kind
@@ -383,8 +418,8 @@ def main(argv):
                 state_dir=state_dir,
                 boss_state=boss_state,
                 project_root=project_root,
+                boss_workdir=boss_workdir,
                 model=args.model,
-                target_branch=boss_state.get("target_branch", ""),
             )
             save_boss_state(state_dir, boss_state)
             check_stop()
