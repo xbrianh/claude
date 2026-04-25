@@ -141,10 +141,15 @@ Git diff since chain start:
    - **`next-plan`**: some tasks remain unimplemented; the next gremlin should tackle them.
    - **`bail`**: something prevents safe continuation (broken state, incoherent plan, security issue, etc.).
 
-4. Write an **updated plan document** to: `{out_path}`
-   - Free-form markdown. A human reading it must be able to see what is done and what remains.
-   - Mark completed tasks (e.g. `[x]`) and leave remaining tasks as `[ ]`.
-   - If `bail`, record the bail reason prominently at the top.
+4. Write an **updated plan document** (the "rolling plan") to: `{out_path}`
+
+   The rolling plan describes only **remaining** work. Completed tasks are removed entirely — no `[x]` markers, no struck-through entries, no "completed" appendix. The chain of versioned plan files plus git history is the audit trail; the rolling plan does not repeat it. Do not propagate the overarching goal of the chain forward into the rolling plan — that lives upstream, in the original spec.
+
+   - **`next-plan`**: include only the tasks that are not yet implemented (still `[ ]`). Prune the surrounding sections (`## Context`, `## Approach`, `## Open questions`, etc.) to match: drop sections whose reason for existing was a now-completed task; keep or trim the rest so the document stays a coherent description of the remaining work.
+     - Under `## Open questions`, carry forward unresolved entries; drop entries tied to completed tasks.
+     - If a task is only partly landed, keep it (rewritten if needed to reflect what remains).
+   - **`chain-done`**: minimal output. A short note that the chain is complete is enough — no leftover task list, no carried-over context. The signal file carries the structured outcome.
+   - **`bail`**: record the bail reason prominently at the top, then list the still-remaining tasks. Completed tasks are still dropped.
 
 5. If exit state is **`next-plan`**, write a **child plan** to: `{child_plan_path}`
    - Use the standard localgremlin plan structure exactly:
@@ -165,7 +170,7 @@ Git diff since chain start:
      ## Open questions
      <risks or open questions, or "(none)" if there are none>
      ```
-   - The child plan must be self-contained — a fresh gremlin with only this file must know exactly what to implement.
+   - The child plan must be self-contained — a fresh gremlin with only this file must know exactly what to implement. Do not propagate the overarching goal of the chain into the child plan; scope it to the next chunk.
 
 6. Write the **signal marker** to: `{signal_path}`
    - Valid JSON, exactly this structure:

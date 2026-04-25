@@ -39,7 +39,7 @@ Flags:
 ## Where artifacts go
 
 - `~/.local/state/claude-gremlins/<boss-id>/boss_state.json` — ordered list of child ids with outcomes, per-handoff records (timestamps, plan paths, exit states), chain base ref.
-- `~/.local/state/claude-gremlins/<boss-id>/handoff-001.md`, `handoff-002.md`, … — updated plan documents produced by each handoff invocation, showing which tasks are done.
+- `~/.local/state/claude-gremlins/<boss-id>/handoff-001.md`, `handoff-002.md`, … — rolling plan documents produced by each handoff invocation, each containing only the work still remaining at that point. The sequence of files is the audit trail of progression.
 - `~/.local/state/claude-gremlins/<boss-id>/handoff-001-child.md`, … — child plans passed to each child gremlin.
 - `~/.local/state/claude-gremlins/<boss-id>/handoff-001.state.json`, … — handoff signal files recording exit_state and reason.
 - `~/.local/state/claude-gremlins/<boss-id>/log` — boss lifecycle events (handoff invoked, child started, child landed, rescue attempts). Does not contain plan/diff/review content.
