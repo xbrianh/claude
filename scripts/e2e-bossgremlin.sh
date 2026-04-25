@@ -24,9 +24,21 @@ LAUNCH_SH="$HOME/.claude/skills/_bg/launch.sh"
 ORIG_BRANCH=$(git -C "$REPO_ROOT" symbolic-ref --short HEAD 2>/dev/null || echo "")
 MAX_WAIT=${E2E_TIMEOUT:-7200}
 
+[[ -z "$(git -C "$REPO_ROOT" status --porcelain)" ]] || {
+    echo "[e2e] FAIL: working tree is not clean; commit, stash, or discard changes before running" >&2; exit 1
+}
+
+git -C "$REPO_ROOT" fetch origin
+
+DEFAULT_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo "")
+DEFAULT_BRANCH=${DEFAULT_BRANCH#origin/}
+[[ -n "$DEFAULT_BRANCH" && "$DEFAULT_BRANCH" != "HEAD" ]] || {
+    echo "[e2e] FAIL: could not resolve default branch from origin/HEAD" >&2; exit 1
+}
+
 SANDBOX_BRANCH="bossgremlin-e2e/$(date +%Y%m%d-%H%M%S)"
-git -C "$REPO_ROOT" checkout -b "$SANDBOX_BRANCH" main
-echo "[e2e] sandbox branch: $SANDBOX_BRANCH"
+git -C "$REPO_ROOT" checkout -b "$SANDBOX_BRANCH" "$DEFAULT_BRANCH"
+echo "[e2e] sandbox branch: $SANDBOX_BRANCH (from $DEFAULT_BRANCH)"
 
 cleanup() {
     [[ -n "${BOSS_ID:-}" && -n "${STATE_DIR:-}" ]] && {
@@ -61,7 +73,8 @@ BOSS_ID=$(
     echo "[e2e] FAIL: launcher printed no ID" >&2; exit 1
 }
 
-STATE_DIR="$HOME/.local/state/claude-gremlins/$BOSS_ID"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}"
+STATE_DIR="$STATE_ROOT/claude-gremlins/$BOSS_ID"
 echo "[e2e] boss launched: $BOSS_ID"
 
 # ── Poll ────────────────────────────────────────────────────────────────────────
@@ -187,10 +200,10 @@ if [[ -n "$DIRTY" ]]; then
 fi
 
 # F: no orphaned running/stalled children from this run
-ORPHAN_IDS=$(python3 -c "
+ORPHAN_IDS=$(STATE_ROOT="$STATE_ROOT" python3 -c "
 import json, os, glob
 orphans = []
-for path in glob.glob(os.path.expanduser('~/.local/state/claude-gremlins/*/state.json')):
+for path in glob.glob(os.path.join(os.environ['STATE_ROOT'], 'claude-gremlins/*/state.json')):
     try:
         with open(path) as f:
             s = json.load(f)
