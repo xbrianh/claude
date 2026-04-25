@@ -1,7 +1,7 @@
 ---
 name: localgremlin
 description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Plan and code reviews land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); the code review uses two different models in parallel. The launcher returns immediately; you'll be notified when the gremlin finishes.
-argument-hint: [--design] [-a <model>] [-b <model>] [-c <model>] [--plan <path> | <instructions>]
+argument-hint: [-a <model>] [-b <model>] [-c <model>] [--plan <path> | <instructions>]
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
 
@@ -18,7 +18,7 @@ A `SessionStart` / `UserPromptSubmit` hook notifies a future Claude session for 
 
 Plan and code-review artifacts live outside the product branch — they are scaffolding, not product. Point the user at:
 
-- `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/spec.md` — the finalized design spec (only if launched with `--design`).
+- `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/spec.md` — the spec file, if one was passed as the first positional argument.
 - `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/plan.md` — the implementation plan.
 - `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/review-code-holistic-<model>.md`, `review-code-detail-<model>.md`, and `review-code-scope-<model>.md` — the three parallel code reviews.
 - `~/.local/state/claude-gremlins/<gremlin-id>/log` — combined stdout/stderr of the gremlin.
@@ -36,16 +36,6 @@ $ARGUMENTS
 Forward them verbatim to the launcher. Quote the instructions string so shell word-splitting doesn't break it.
 
 ## What to do
-
-If `$ARGUMENTS` begins with `--design` (it must be the first token), strip that flag and invoke the design skill instead of the launcher:
-
-```
-Skill(skill="design", args="--target localgremlin <remaining-args>")
-```
-
-Do not proceed to the launcher invocation. The design skill will run an interactive design conversation and, when the user is ready, will invoke the launcher automatically.
-
----
 
 Before invoking the launcher, compose a short (≤60 characters) human-readable phrase that summarizes the task — this becomes the gremlin's `description` in status views (`/gremlins`, session-summary hook). Examples:
 
