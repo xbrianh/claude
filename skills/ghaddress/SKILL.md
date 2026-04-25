@@ -119,7 +119,7 @@ Use the helper:
   ~/.claude/skills/_bg/set-bail.sh "$GR_ID" secrets "<one-line reason>"
   ```
 
-- For any other reason you decline to proceed (ambiguous reviewer ask, conflicting comments, scope outside this PR, etc.):
+- For any other reason you decline to proceed (ambiguous reviewer ask, conflicting comments, etc.):
 
   ```
   ~/.claude/skills/_bg/set-bail.sh "$GR_ID" other "<one-line reason>"
