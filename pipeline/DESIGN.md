@@ -32,18 +32,42 @@ package is source code that the skills _depend on_, not a skill itself,
 so it doesn't belong inside `skills/`.
 
 Constraint imposed by the sync mechanism: at runtime, gremlins run from
-worktrees of arbitrary repos and import via `python -m pipeline.cli`,
-which needs `pipeline/` on `sys.path`. The agreed sticking point is
-`PYTHONPATH=$HOME/.claude` — already implicitly present today because
-`launch.sh` resolves stage scripts under `$HOME/.claude/skills/<kind>/`.
-For that to find `pipeline/`, the package must be mirrored to
-`~/.claude/pipeline/`. **Phase 5** extends `scripts/sync.sh` `DIR_PAIRS`
-with `pipeline:$CLAUDE_DIR/pipeline` so `pipeline/` syncs alongside
-`skills/`, `agents/`, `commands/`.
+worktrees of arbitrary repos and will eventually dispatch via
+`python -m pipeline.cli`, which needs `pipeline/` on `sys.path`. Today,
+`launch.sh` executes the per-kind script directly (resolving it under
+`$HOME/.claude/skills/<kind>/`) and does **not** set `PYTHONPATH`; the
+existing Python gremlins work because they import sibling modules
+(`from _core import …`) from the script's own directory. Once dispatch
+flips to `python -m pipeline.cli`, the package must be importable from
+`~/.claude` — which means (a) the package must be mirrored to
+`~/.claude/pipeline/`, and (b) the launcher must put `~/.claude` on
+`sys.path` (e.g. `PYTHONPATH=$HOME/.claude`, equivalent launcher setup,
+or packaging/installing). The sync update covers (a); see the launch
+contract below for (b).
 
-Until Phase 5 lands, the orchestrators continue to dispatch the way they
-do today; phases 1–4 either ship in a single-PR pair with the sync
-update (preferred) or stage the dispatch flip behind a feature check.
+The package name `pipeline` is generic enough that any unrelated Python
+invocation in a child process inheriting `PYTHONPATH=$HOME/.claude`
+would resolve `import pipeline` against this repo's package, potentially
+shadowing pip-installed/local packages of the same name. The proposed
+launcher shape (`PYTHONPATH=… nohup bash -c '...'` in the
+"launch.sh --resume contract" section below) deliberately scopes the
+env to the one bash invocation — env precedes the command with no
+`export` — so the shadowing risk is contained to the gremlin's own
+subprocess tree. If we later want to close the door
+on shadowing entirely, a more namespaced top-level name like
+`claude_pipeline` is the escape hatch.
+
+**Phase 5** extends `scripts/sync.sh` `DIR_PAIRS` with
+`pipeline:$CLAUDE_DIR/pipeline` so `pipeline/` syncs alongside
+`skills/`, `agents/`, `commands/`. Sequencing note: each of phases 1, 3,
+4 flips a kind's dispatch to `python -m pipeline.cli`, which only
+resolves once `pipeline/` is mirrored to `~/.claude/pipeline/`. The
+sync update is therefore a *prerequisite* for Phase 1's dispatch flip,
+not a follow-up — in practice phases 1–4 either co-ship with the sync
+update in the same PR (preferred) or stage the dispatch flip behind a
+feature check until the sync update lands. The "Phase 5" label is
+purely the section number in this doc; treat it as Phase 0.5 / 1a for
+ordering purposes.
 
 ## Module layout
 
@@ -118,10 +142,15 @@ and assert on the recorded calls without any subprocess spawn.
 ## ClaudeClient interface
 
 Derived from actual usage in `_core.run_claude` (`skills/localgremlin/_core.py:263`)
-and the four `claude -p` invocation sites in `ghgremlin.sh`
-(plan stage at `skills/ghgremlin/ghgremlin.sh:381-384`, title-generation
-at `:209-212`, implement at `:434-444`, commit-pr at `:578-579`,
-ghreview/scope at `:609-632`, ghaddress at `:664`).
+and the six logical `claude -p` invocation sites in `ghgremlin.sh`
+(title-generation at `skills/ghgremlin/ghgremlin.sh:209-212`, plan stage
+at `:381/:383`, implement at `:434-444`, commit-pr at `:578-579`,
+parallel `/ghreview` + scope reviewer at `:609/:615`, `/ghaddress` at
+`:664`). The plan and review pairs are each one logical site — plan's
+`if [[ -n "$PLAN_OUT_FILE" ]]` if/else collapses to one call, and
+ghreview/scope are spawned as a parallel pair from the same stage —
+which is why `grep -n 'claude -p' ghgremlin.sh` returns eight literal
+matches across these six logical sites.
 
 Patterns the interface must support:
 
@@ -240,7 +269,16 @@ The fake (`pipeline/clients/fake.py`):
   on.
 - Replays canned events from a fixture file in `tests/fixtures/` based
   on the call's `label` (e.g. `label="plan"` → replay
-  `fixtures/stream_plan.jsonl`).
+  `fixtures/stream_plan.jsonl`). Resume tests that re-enter the same
+  stage twice within one process (e.g. an `implement`-then-resume-into-
+  `implement` scenario, or runner-precondition tests that crash and
+  retry a stage) must use **distinct labels per phase** — e.g.
+  `label="implement"` for the first call and `label="implement_resume"`
+  for the second — so the fake selects the right fixture for each
+  call. The fake's lookup is one-shot per label; we deliberately avoid
+  a `(label, call_index)` keying scheme to keep the fixture map flat
+  and the test failure mode loud (a missing fixture raises rather than
+  silently replaying the previous one).
 - Writes the canned events to `raw_path` if given, so any post-stage
   code that reads that file (the implement stage's empty-output check,
   the address stage's review-file glob) sees realistic on-disk shape.
@@ -307,16 +345,22 @@ must remain byte-identical: `plan`, `implement`, `review-code`,
 `address-code` for local; `plan`, `implement`, `commit-pr`,
 `request-copilot`, `ghreview`, `wait-copilot`, `ghaddress` for gh.
 Boss has no `--resume-from` semantics on its own argv (it ignores the
-flag and resumes from `boss_state.json` instead, per
-`bossgremlin.py:469-471`); `pipeline.cli boss` must accept and ignore
-the flag for launcher-compatibility.
+flag and resumes from `boss_state.json` instead — documented in the
+module-level usage docstring at `bossgremlin.py:12` and declared as a
+swallowed argparse flag at `:469-471`, with no `args.resume_from`
+reference anywhere in the file); `pipeline.cli boss` must accept and
+ignore the flag for launcher-compatibility.
 
 **Per-phase rollout.** Each of phases 1, 3, 4 changes the dispatch for
 exactly one kind and leaves the others unchanged. The `for ext in py
 sh` loop becomes a per-kind case statement that points the migrated
 kinds at `pipeline.cli` and the not-yet-migrated kinds at the old
 script paths. After Phase 4 the loop is gone and all three kinds use
-`pipeline.cli`.
+`pipeline.cli`. The dispatch flip in each of phases 1/3/4 requires the
+`scripts/sync.sh` extension (the "Phase 5" sync update, see "Where it
+lives" above) to have already landed — or to co-ship in the same PR —
+because `python -m pipeline.cli` only resolves once `~/.claude/pipeline/`
+exists.
 
 ## Rescue marker-protocol surface
 
