@@ -147,26 +147,51 @@ Git diff since chain start:
 ```
 {diff_trunc}
 
+## Implementation vs operator boundary
+
+A child gremlin operates **inside a detached-HEAD worktree, against a single feature branch, ending in one squash-merged PR**. Anything that requires being outside that scope — the user's live config, another worktree, multiple branches, post-merge actions, sibling gremlin launches — is an **operator task**, owned by the human between phase landings.
+
+Classify a task as **operator** if executing it inside a child gremlin's worktree would be impossible, destructive, or undefined. Concrete signals:
+
+- **Mutates `~/.claude/` or other live user state directly**: `scripts/sync.sh push`, `scripts/sync.sh pull`, hand-edits under `~/.claude/`, copying files into `~/.claude/`. (The child has unmerged code in its worktree; mirroring that into `~/.claude/` would suddenly run unmerged code on the user's machine.)
+- **Launches another gremlin**: `/localgremlin`, `/ghgremlin`, `/bossgremlin`, or a smoke-run / end-to-end run that boils down to invoking one. Recursive gremlin launch from a detached worktree is undefined behavior.
+- **Pushes to a remote outside the PR flow**: `git push origin main`, force-pushes, manual `gh pr merge`, direct merges. The child's only remote interaction is opening (and updating) one PR.
+- **Operator commands**: `/gremlins land`, `/gremlins rescue`, `/gremlins stop`, `/gremlins close`, `/gremlins rm`. These are human controls, not workflow steps.
+- **Post-merge verification**: "verify the merged PR's CI is green", "confirm the production deploy", "watch the release dashboard". The child finishes before its PR merges.
+
+Classify as **implementation** if it is a code/doc/config change that lands in the child's PR. Examples that *look* operator-adjacent but are implementation:
+
+- "Update `CLAUDE.md` to mention `pipeline/`" — edits a tracked repo file. The fact that `CLAUDE.md` is mirrored to `~/.claude/CLAUDE.md` by `sync.sh` is irrelevant: the child edits the in-repo file, the human runs `sync.sh push` later.
+- "Extend `scripts/sync.sh` `DIR_PAIRS` with `pipeline:...`" — edits a tracked script. Implementation.
+- "Add `pipeline/DESIGN.md`" — creates a tracked file. Implementation.
+- "Run `scripts/sync.sh push --dry-run` and confirm output is clean" — operator. The dry-run reads live `~/.claude/` state and isn't a code change. (A dry-run *check encoded as a unit test* against fixture data would be implementation; a real `--dry-run` invocation against the user's live tree is not.)
+
+The distinction is **what the task changes** (tracked repo files = implementation) vs **what the task reads or mutates outside the worktree** (live user config, sibling processes, remotes outside the PR = operator). When in doubt, ask: "Could a fresh gremlin with no access to my home directory do this?" If no, operator.
+
+If the spec author wrote operator-flavoured language inline with implementation work, **rewrite or drop it; do not copy it verbatim into the child plan**. Operator tasks land only in the rolling plan's `## Operator follow-ups` section, where the human operator picks them up between phase landings.
+
 ## Your task
 
 1. Read the plan. Identify every task listed under `## Tasks`.
 2. Compare each task against the landed diff and git log to determine whether it has been implemented.
-3. Decide the exit state:
-   - **`chain-done`**: all tasks in the plan are implemented and landed.
-   - **`next-plan`**: some tasks remain unimplemented; the next gremlin should tackle them.
-   - **`bail`**: something prevents safe continuation (broken state, incoherent plan, security issue, etc.).
+3. Classify every still-open task as **implementation** or **operator** using the boundary above. Operator tasks never land in a child plan.
+4. Decide the exit state:
+   - **`chain-done`**: all *implementation* tasks in the plan are implemented and landed. (Operator tasks do not block `chain-done` — they are surfaced separately for the human operator.)
+   - **`next-plan`**: at least one *implementation* task remains; the next gremlin should tackle it.
+   - **`bail`**: something prevents safe continuation (broken state, incoherent plan, security issue, etc.). Also bail when the remaining work is essentially all operator tasks and there is no coherent code-only chunk to hand a child — a chain whose remaining phase is operator-driven should halt for the human, not spawn a doomed child. As a rough heuristic, if more than ~2 of the remaining tasks are operator-classified relative to the implementation tasks, prefer `bail` with a reason that names the operator-only nature of the remaining work.
 
-4. Write an **updated plan document** (the "rolling plan") to: `{out_path}`
+5. Write an **updated plan document** (the "rolling plan") to: `{out_path}`
 
    The rolling plan describes only **remaining** work. Completed tasks are removed entirely — no `[x]` markers, no struck-through entries, no "completed" appendix. The chain of versioned plan files plus git history is the audit trail; the rolling plan does not repeat it. Do not propagate the overarching goal of the chain forward into the rolling plan — that lives upstream, in the original spec.
 
    - **`next-plan`**: include only the tasks that are not yet implemented (still `[ ]`). Prune the surrounding sections (`## Context`, `## Approach`, `## Open questions`, etc.) to match: drop sections whose reason for existing was a now-completed task; keep or trim the rest so the document stays a coherent description of the remaining work.
      - Under `## Open questions`, carry forward unresolved entries; drop entries tied to completed tasks.
      - If a task is only partly landed, keep it (rewritten if needed to reflect what remains).
-   - **`chain-done`**: minimal output. A short note that the chain is complete is enough — no leftover task list, no carried-over context. The signal file carries the structured outcome.
-   - **`bail`**: same pruning rules as `next-plan` (only remaining tasks, surrounding sections trimmed accordingly, unresolved `## Open questions` carried forward), with a bail-reason banner added prominently at the top.
+     - Add an `## Operator follow-ups` section listing every task you classified as operator-level (still pending). These are not handed to a child gremlin — they wait for the human between phase landings. Carry forward operator follow-ups from the previous rolling plan if they have not been done; drop ones that have. If there are no pending operator tasks, omit the section.
+   - **`chain-done`**: minimal output. A short note that the chain is complete is enough — no leftover task list, no carried-over context. If any operator follow-ups remain pending, list them under `## Operator follow-ups` so the human sees them in the final rolling plan; otherwise omit. The signal file carries the structured outcome.
+   - **`bail`**: same pruning rules as `next-plan` (only remaining tasks, surrounding sections trimmed accordingly, unresolved `## Open questions` carried forward, `## Operator follow-ups` if any), with a bail-reason banner added prominently at the top.
 
-5. If exit state is **`next-plan`**, write a **child plan** to: `{child_plan_path}`
+6. If exit state is **`next-plan`**, write a **child plan** to: `{child_plan_path}`
    - Use the standard localgremlin plan structure exactly:
 
      ```
@@ -180,14 +205,15 @@ Git diff since chain start:
 
      ## Tasks
      - [ ] Task N: ...
-     <only the tasks that are not yet done>
+     <only the implementation tasks that are not yet done — never operator tasks>
 
      ## Open questions
      <risks or open questions, or "(none)" if there are none>
      ```
    - The child plan must be self-contained — a fresh gremlin with only this file must know exactly what to implement. Do not propagate the overarching goal of the chain into the child plan; scope it to the next chunk.
+   - **No operator tasks in the child plan, ever.** Before writing the child plan, re-read your own draft `## Tasks` list and ask, for each item: "Is this something a code-only gremlin in a detached worktree can do, ending in one PR?" If any task fails that test, revise — rewrite it as the underlying code change if there is one, or move it to `## Operator follow-ups` in the rolling plan and drop it from the child plan.
 
-6. Write the **signal marker** to: `{signal_path}`
+7. Write the **signal marker** to: `{signal_path}`
    - Valid JSON, exactly this structure:
      ```json
      {{"exit_state": "next-plan|chain-done|bail", "child_plan": "<absolute path or null>", "reason": "<bail reason or null>"}}
