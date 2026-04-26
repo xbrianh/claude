@@ -505,12 +505,25 @@ Implement the plan above by making the code changes in this repo. You may commit
     # a previous run may have died after `git switch -c` but before commit-pr's
     # `git branch -m` rename, leaving an orphan branch with a different PID
     # suffix in this repo's refs/heads/. We're now off any such branch (the
-    # switch above moved HEAD to $HANDOFF_BRANCH), so deleting them is safe.
-    # `git branch -D` refuses to delete branches checked out by another
-    # worktree, so a concurrent gremlin's hand-off branch is protected.
+    # switch above moved HEAD to $HANDOFF_BRANCH), so deleting already-merged
+    # ones is safe. `git branch -d` refuses to delete divergent branches, so
+    # unique implementation commits from a prior failed run are preserved
+    # (logged as a warning so an operator can recover them); it also refuses
+    # to delete branches checked out by another worktree, so a concurrent
+    # gremlin's hand-off branch is protected. The explicit "$HANDOFF_BRANCH"
+    # skip below is redundant (git would refuse to delete the currently
+    # checked-out branch anyway) but kept for intent clarity.
     while IFS= read -r _stale; do
       [[ -z "$_stale" || "$_stale" == "$HANDOFF_BRANCH" ]] && continue
-      git branch -D "$_stale" >/dev/null 2>&1 || true
+      if git merge-base --is-ancestor "$_stale" HEAD 2>/dev/null; then
+        # Already-merged: safe to delete. Surface unexpected git errors
+        # (FS/permission, etc.) on stderr instead of swallowing them, but
+        # don't fail the run — the worktree-checked-out refusal is expected
+        # and prints its own diagnostic.
+        git branch -d "$_stale" >/dev/null || true
+      else
+        echo "warning: leaving divergent hand-off branch $_stale in place (unique commits would be lost)" >&2
+      fi
     done < <(git for-each-ref --format='%(refname:short)' \
                  'refs/heads/ghgremlin-impl-handoff-*')
     _commit_count=$(git rev-list --count "$PRE_HEAD..HEAD")
