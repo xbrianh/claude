@@ -54,6 +54,15 @@ The boss appears in `/gremlins` like any other gremlin (KIND=boss). Its stage co
 - `/gremlins stop <boss-id>` — sends SIGTERM to the boss; it stops the current child (or handoff) and exits. The chain is halted; children that already landed stay landed.
 - `/gremlins rescue <boss-id>` — resumes a dead or stalled boss. The boss re-reads `boss_state.json` and continues from where it stopped.
 
+## When a child bails
+
+If a child fails and headless rescue declines to proceed, the boss halts the chain and records the child's `bail_reason` in `boss_state.json["children"][...]`. Two reasons in particular signal different operator actions:
+
+- **`structural`** — the rescue agent recognized a real bug in the pipeline source (under `~/.claude/skills/`) or in a sibling artifact (e.g. a malformed child plan under the boss's own state dir) that *can* be salvaged, but only by a human editing the pipeline / plan. The boss log surfaces this with a `STRUCTURAL` line plus the agent's diagnosis. Look at the named file, fix it (in the source repo for pipeline changes — for this config repo that's `scripts/sync.sh push` to mirror back into `~/.claude/`), then `/gremlins rescue <boss-id>` to resume — the boss restarts at the next handoff (the failed child is recorded as bailed and `current_child_id` is cleared, so the resume runs a fresh handoff rather than retrying the failed phase; in practice the handoff usually re-plans into a new child for the same work because the diff has not moved).
+- **`unsalvageable`** — the run is dead and giving up: corrupted state, missing worktree, conflicting git state. The boss log says `UNSALVAGEABLE`. The chain is finished; no resume will recover it.
+
+Both halt the chain, but `structural` is a "fix and resume" signal and `unsalvageable` is a "write it off" signal.
+
 ## Do not
 
 - Do not tail the log or block waiting for the chain to finish.
