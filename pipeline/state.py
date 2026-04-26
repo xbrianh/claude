@@ -115,3 +115,53 @@ def emit_bail(bail_class: str, bail_detail: str = "") -> None:
         )
     except Exception:
         pass
+
+
+def resolve_state_file() -> "Optional[pathlib.Path]":
+    """Return path to state.json for the current GR_ID, or None when no GR_ID is set."""
+    gr_id = os.environ.get("GR_ID", "")
+    if not gr_id or not GR_ID_RE.match(gr_id):
+        return None
+    state_root = pathlib.Path(
+        os.environ.get("XDG_STATE_HOME")
+        or os.path.join(os.path.expanduser("~"), ".local", "state")
+    ) / "claude-gremlins"
+    return state_root / gr_id / "state.json"
+
+
+def patch_state(**fields) -> None:
+    """Merge keyword fields into state.json atomically.
+
+    No-op when GR_ID is unset, when state.json doesn't exist, or when the
+    write fails — stage bookkeeping must not crash a running gremlin.
+    """
+    sf = resolve_state_file()
+    if sf is None or not sf.exists():
+        return
+    try:
+        data = json.loads(sf.read_text(encoding="utf-8"))
+        data.update(fields)
+        tmp = sf.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.rename(sf)
+    except Exception:
+        pass
+
+
+def check_bail(label: str = "stage") -> None:
+    """Raise RuntimeError if a bail_class was written to state.json by the
+    just-completed stage.  No-op without GR_ID or when state.json is absent."""
+    sf = resolve_state_file()
+    if sf is None or not sf.exists():
+        return
+    try:
+        data = json.loads(sf.read_text(encoding="utf-8"))
+        bail_class = data.get("bail_class", "")
+        if bail_class:
+            raise RuntimeError(
+                f"{label} bailed: bail_class={bail_class} (see state.json bail_detail)"
+            )
+    except RuntimeError:
+        raise
+    except Exception:
+        pass

@@ -1,23 +1,51 @@
-"""Local implement stage.
+"""Implement stage for both local and gh pipelines.
 
-Captures pre-impl HEAD/sentinel state, renders
-``pipeline/prompts/implement_local.md`` with the core-principles excerpt,
-the plan text, and the commit-instruction blob, runs ``claude -p``, then
-enforces the spec invariant that an empty implementation must never flow
-into code review.
+For ``kind='local'``: renders ``implement_local.md``, runs claude, enforces the
+empty-implementation invariant (spec: an empty impl must never flow into review).
+
+For ``kind='gh'``: renders ``implement_gh.md``, runs claude with
+``capture_events=True`` (so the caller gets the session_id for commit-pr's
+``--resume``), then runs the impl-handoff branch lifecycle from
+``pipeline/git.py``.  Returns an ``ImplStageResult`` with session_id, the
+pre-impl state snapshot, and the classified outcome.  Raises on
+``DivergentHead`` or ``EmptyImpl``.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import pathlib
 import subprocess
 from typing import Optional
 
-from ..clients.claude import ClaudeClient
-from ..git import git_head
+from ..clients.claude import ClaudeClient, CompletedRun
+from ..git import (
+    DirtyOnly,
+    DivergentHead,
+    EmptyImpl,
+    HeadAdvanced,
+    ImplOutcome,
+    PreImplState,
+    classify_impl_outcome,
+    create_handoff_branch,
+    git_head,
+    record_pre_impl_state,
+    reset_pre_branch,
+    sweep_stale_handoff_branches,
+)
 
-PROMPT_TEMPLATE_PATH = pathlib.Path(__file__).resolve().parent.parent / "prompts" / "implement_local.md"
+PROMPT_LOCAL_PATH = pathlib.Path(__file__).resolve().parent.parent / "prompts" / "implement_local.md"
+PROMPT_GH_PATH = pathlib.Path(__file__).resolve().parent.parent / "prompts" / "implement_gh.md"
+
+
+@dataclasses.dataclass
+class ImplStageResult:
+    """Returned by ``run_implement_stage`` when ``kind='gh'``."""
+    session_id: Optional[str]
+    pre_state: PreImplState
+    outcome: ImplOutcome
+    handoff_branch: str  # empty string when outcome is DirtyOnly (no branch created)
 
 
 def changes_outside_git(sentinel: pathlib.Path, session_dir: pathlib.Path) -> bool:
@@ -53,13 +81,35 @@ def changes_outside_git(sentinel: pathlib.Path, session_dir: pathlib.Path) -> bo
 def run_implement_stage(
     *,
     client: ClaudeClient,
-    impl_model: str,
-    plan_file: pathlib.Path,
+    impl_model: Optional[str],
     plan_text: str,
     core_principles: str,
     session_dir: pathlib.Path,
     is_git: bool,
-) -> None:
+    kind: str = "local",
+    # local-only (kept for API compatibility, not used in function body)
+    plan_file: Optional[pathlib.Path] = None,
+    # gh-only
+    issue_num: str = "",
+    cwd: Optional[str] = None,
+) -> Optional[ImplStageResult]:
+    """Run the implement stage.
+
+    Returns ``None`` for ``kind='local'``.  Returns ``ImplStageResult`` for
+    ``kind='gh'`` so the orchestrator can thread the session_id into commit-pr.
+    """
+    if kind == "gh":
+        return _run_implement_gh(
+            client=client,
+            impl_model=impl_model,
+            plan_text=plan_text,
+            core_principles=core_principles,
+            session_dir=session_dir,
+            issue_num=issue_num,
+            cwd=cwd,
+        )
+
+    # --- local path ---
     pre_head = ""
     pre_sentinel: Optional[pathlib.Path] = None
     if is_git:
@@ -68,9 +118,6 @@ def run_implement_stage(
         pre_sentinel = session_dir / ".pre-impl"
         pre_sentinel.touch()
 
-    # The commit message references `plan.md` (basename) rather than the
-    # absolute session-dir path, which is user-specific and would end up in
-    # git history otherwise.
     impl_commit_instr = "."
     if is_git:
         impl_commit_instr = (
@@ -82,7 +129,7 @@ def run_implement_stage(
             "notes-to-self. Do not push."
         )
 
-    template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+    template = PROMPT_LOCAL_PATH.read_text(encoding="utf-8")
     prompt = template.format(
         core_principles=core_principles,
         plan_text=plan_text,
@@ -95,7 +142,6 @@ def run_implement_stage(
         raw_path=session_dir / "stream-implement.jsonl",
     )
 
-    # Spec invariant: an empty implementation must never flow into code review.
     if is_git:
         post_head = git_head()
         porcelain = subprocess.run(
@@ -108,3 +154,80 @@ def run_implement_stage(
         assert pre_sentinel is not None
         if not changes_outside_git(pre_sentinel, session_dir):
             raise RuntimeError("implementation stage produced no changes; aborting")
+
+    return None
+
+
+def _run_implement_gh(
+    *,
+    client: ClaudeClient,
+    impl_model: Optional[str],
+    plan_text: str,
+    core_principles: str,
+    session_dir: pathlib.Path,
+    issue_num: str,
+    cwd: Optional[str],
+) -> ImplStageResult:
+    """gh-specific implement: run claude, then orchestrate the handoff branch lifecycle."""
+    if issue_num:
+        plan_source_label = "from the GitHub issue"
+        plan_location_note = (
+            "The plan lives in the GitHub issue and reviews go to PR comments; "
+            "the only changes in this working tree should be product code."
+        )
+    else:
+        plan_source_label = "below"
+        plan_location_note = (
+            "Reviews go to PR comments; the only changes in this working tree "
+            "should be product code."
+        )
+
+    template = PROMPT_GH_PATH.read_text(encoding="utf-8")
+    prompt = template.format(
+        core_principles=core_principles,
+        plan_source_label=plan_source_label,
+        issue_body=plan_text,
+        plan_location_note=plan_location_note,
+    )
+
+    pre_state = record_pre_impl_state(cwd=cwd)
+
+    completed: CompletedRun = client.run(
+        prompt,
+        label="implement",
+        model=impl_model,
+        raw_path=session_dir / "stream-implement.jsonl",
+        capture_events=True,
+    )
+
+    outcome = classify_impl_outcome(pre_state, cwd=cwd)
+
+    if isinstance(outcome, EmptyImpl):
+        raise RuntimeError("implementation step produced no changes; refusing to open empty PR")
+    if isinstance(outcome, DivergentHead):
+        raise RuntimeError(
+            f"implementation changed HEAD from {outcome.pre_head} to {outcome.post_head} "
+            "without advancing from the starting commit; refusing to treat this as "
+            "committed work to hand off"
+        )
+
+    handoff_branch = ""
+    if isinstance(outcome, HeadAdvanced):
+        handoff_branch = create_handoff_branch(pre_state, cwd=cwd)
+        reset_pre_branch(pre_state, cwd=cwd)
+        sweep_stale_handoff_branches(handoff_branch, cwd=cwd)
+        import sys
+        commit_count = outcome.commit_count
+        pre_branch_note = f" and reset {pre_state.branch}" if pre_state.branch else ""
+        sys.stdout.write(
+            f"    implement committed during run; moved {commit_count} commit(s) "
+            f"onto {handoff_branch}{pre_branch_note}\n"
+        )
+        sys.stdout.flush()
+
+    return ImplStageResult(
+        session_id=completed.session_id,
+        pre_state=pre_state,
+        outcome=outcome,
+        handoff_branch=handoff_branch,
+    )
