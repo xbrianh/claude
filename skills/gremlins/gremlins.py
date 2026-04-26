@@ -473,10 +473,10 @@ Stage order for {kind}: {' → '.join(stages)}
 5. Stop. Do NOT re-run the failed stage or any remaining stages yourself — the wrapper reads the marker and (on `fixed`/`transient`) hands off to a background resume that relaunches the pipeline starting at {stage}. On `unsalvageable`, the wrapper writes a bail reason and the gremlin stays terminal.
 
 Constraints:
-- Do NOT prompt for input; there is no TTY.
+- Do NOT prompt for input. (Headless runs have no TTY at all; interactive runs share the operator's terminal but the agent must still complete autonomously without asking the operator to type.)
 - Do NOT call `exit` or otherwise abort — finish normally so the wrapper can read the marker.
 - If you do not write the marker file, the wrapper will treat that as a hard error and bail with `phase_a_no_marker`.
-- Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
+- Your working directory is a scratch space. The only files outside it you may touch are `state.json` at `{state_file_path}` and the marker file at `{marker_path}` — both are required parts of the protocol.
 """
 
 
@@ -556,12 +556,27 @@ def _read_rescue_marker(marker_path: str):
         return "bad_marker", "marker file is not a JSON object"
 
     status = marker.get("status")
-    summary = marker.get("summary") or ""
+    raw_summary = marker.get("summary")
+    # Enforce the documented "one-line string" contract: a non-string summary
+    # (object, list, number, etc.) is a protocol violation, not just an empty
+    # message. Treat it as bad_marker so bail_detail stays string-typed for
+    # downstream consumers.
+    if raw_summary is None:
+        summary = ""
+    elif isinstance(raw_summary, str):
+        summary = raw_summary
+    else:
+        return "bad_marker", (
+            f"marker 'summary' field has non-string type "
+            f"{type(raw_summary).__name__}"
+        )
     if status not in ("fixed", "transient", "unsalvageable"):
         return "bad_marker", f"marker has invalid status: {status!r}"
 
-    if status == "unsalvageable":
-        return status, summary or "agent declared failure unsalvageable"
+    # Caller decides on a fallback message when summary is empty — returning
+    # the placeholder here causes double-printing at the unsalvageable call
+    # sites (e.g. "agent declared the failure unsalvageable (agent declared
+    # failure unsalvageable)").
     return status, summary
 
 
@@ -705,14 +720,50 @@ def do_rescue(target: str, headless: bool = False) -> bool:
     # Marker file is the contract between the agent and this wrapper for
     # both interactive and headless modes. Pre-create the artifacts dir so
     # the agent doesn't need to mkdir it themselves — one less thing to
-    # get wrong.
+    # get wrong. If we can't make/use it, bail with a wrapper-specific
+    # reason rather than letting Phase A run and inevitably trip
+    # phase_a_no_marker (which would incorrectly attribute the failure to
+    # the agent).
     artifacts_dir = os.path.join(wdir, "artifacts")
+    artifacts_dir_error = None
     try:
         os.makedirs(artifacts_dir, exist_ok=True)
+    except OSError as exc:
+        artifacts_dir_error = exc
+    if (
+        not os.path.isdir(artifacts_dir)
+        or not os.access(artifacts_dir, os.W_OK | os.X_OK)
+    ):
+        reason = "wrapper_artifacts_dir_unavailable"
+        if artifacts_dir_error is not None:
+            detail = (
+                f"could not prepare artifacts dir {artifacts_dir!r}: "
+                f"{artifacts_dir_error}"
+            )
+        elif not os.path.isdir(artifacts_dir):
+            detail = f"artifacts dir {artifacts_dir!r} does not exist after setup"
+        else:
+            detail = f"artifacts dir {artifacts_dir!r} is not writable"
+        if headless:
+            _write_bail(sf, wdir, reason, detail)
+            print(f"headless rescue refused: {reason}: {detail}")
+        else:
+            print(f"rescue refused: {reason}: {detail}")
+        return False
+    # Include microseconds and PID so two rescue attempts in the same UTC
+    # second (e.g. operator hits Ctrl-C and immediately reruns) don't collide
+    # on the same marker_path — without uniqueness, the new run could read a
+    # stale marker from the prior attempt and treat it as the new agent's
+    # output.
+    ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S_%fZ")
+    marker_path = os.path.join(artifacts_dir, f"rescue-{ts}-{os.getpid()}.done")
+    # Best-effort unlink: even though the timestamp is unique per run, removing
+    # any pre-existing marker at this path is cheap insurance against weird
+    # filesystem clock edge cases.
+    try:
+        os.unlink(marker_path)
     except OSError:
         pass
-    ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    marker_path = os.path.join(artifacts_dir, f"rescue-{ts}.done")
 
     # Create a scratch dir so Phase A runs isolated from the worktree.
     # The log tail is written there as a readable file; state.json is passed
@@ -759,14 +810,17 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 return False
             if status == "unsalvageable":
                 _write_bail(sf, wdir, "unsalvageable", err_msg)
-                print(f"Phase A: agent declared the failure unsalvageable ({err_msg})")
+                if err_msg:
+                    print(f"Phase A: agent declared the failure unsalvageable ({err_msg})")
+                else:
+                    print("Phase A: agent declared the failure unsalvageable.")
                 return False
             # status == "fixed" or "transient" → proceed to Phase B. Both count
             # as a rescue attempt; the launcher increments rescue_count when it
             # actually relaunches.
             print(f"Phase A complete (status: {status}); handing off to Phase B...")
         else:
-            print(f"Phase A: running diagnosis agent inline — Ctrl-C to abort.")
+            print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
             print(f"Marker: {marker_path}")
             print()
             try:
@@ -796,7 +850,16 @@ def do_rescue(target: str, headless: bool = False) -> bool:
             status, msg = _read_rescue_marker(marker_path)
             if status == "unsalvageable":
                 _write_bail(sf, wdir, "unsalvageable", msg)
-                print(f"Phase A: agent declared the failure unsalvageable ({msg})")
+                if msg:
+                    print(f"Phase A: agent declared the failure unsalvageable ({msg})")
+                else:
+                    print("Phase A: agent declared the failure unsalvageable.")
+                # The bail is recorded but interactive callers can still rerun
+                # /gremlins rescue (do_rescue's preflight only refuses
+                # running/finished/stalled), so make that explicit — the
+                # `dead:bailed:unsalvageable` liveness can otherwise look
+                # terminal at a glance.
+                print("Gremlin marked dead:bailed:unsalvageable — rerun /gremlins rescue if you want to try again.")
                 return False
             if status == "no_marker":
                 _write_bail(sf, wdir, "phase_a_no_marker", msg)
