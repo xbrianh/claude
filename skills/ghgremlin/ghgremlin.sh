@@ -417,7 +417,10 @@ CORE_PRINCIPLES=$(awk '/^## Core Principles/{found=1; next} found && /^## /{foun
 
 if run_stage implement; then
   # Record state before 2a so we can verify the model actually did work.
+  # PRE_BRANCH is empty on detached HEAD (the launch.sh worktree default);
+  # the post-stage adapter below treats that as "no branch to reset".
   PRE_HEAD=$(git rev-parse HEAD)
+  PRE_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || true)
 
   set_stage implement
   echo "==> [2a/6] implementing plan"
@@ -437,18 +440,47 @@ The following is the implementation plan ${_plan_source_label}:
 
 ${ISSUE_BODY}
 
-Implement the plan above by making the code changes in this repo. Do not commit or push yet. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. ${_plan_location_note}" \
+Implement the plan above by making the code changes in this repo. You may commit checkpoints as you go (recommended for multi-step plans — a later stage handles branching and PR creation regardless), but do not push to any remote. Do NOT create any meta/scaffolding files in the repo — no \`.claude-workflow/\` directory, no \`plan.md\`, no review docs, no notes-to-self. ${_plan_location_note}" \
     | progress_tee)
   IMPL_SESSION=$(extract_session_id "$IMPL_OUT")
 
-  # Guard: 2a should have produced uncommitted changes and should NOT have
-  # advanced HEAD. If either invariant is broken, bail out now rather than
-  # letting 2b open an empty PR or silently drop work.
-  if [[ "$(git rev-parse HEAD)" != "$PRE_HEAD" ]]; then
-    die "implementation step advanced HEAD (expected uncommitted changes only); refusing to continue"
+  # Tolerant adapter: implement may have committed checkpoints (a normal
+  # coding-agent pattern on multi-step plans) or left work uncommitted. Both
+  # are recoverable. Empty state is still a hard error — there's nothing to PR.
+  POST_HEAD=$(git rev-parse HEAD)
+  IMPL_HEAD_ADVANCED=0
+  if [[ "$POST_HEAD" != "$PRE_HEAD" ]]; then
+    IMPL_HEAD_ADVANCED=1
   fi
-  if [[ -z "$(git status --porcelain)" ]]; then
+  if [[ "$IMPL_HEAD_ADVANCED" == "0" && -z "$(git status --porcelain)" ]]; then
     die "implementation step produced no changes; refusing to open empty PR"
+  fi
+
+  # When implement committed, move those commits onto a hand-off branch so
+  # commit-pr can push them under the canonical issue branch name without
+  # double-committing. If the gremlin started on a named branch (rather than
+  # the launch.sh detached-worktree default), reset that branch back to
+  # PRE_HEAD so the implementation commits don't leak onto the chain's
+  # start ref.
+  #
+  # Manual repro for this path: in a worktree, run `claude -p "$prompt"` with
+  # a prompt instructing the agent to make a commit, then re-enter this
+  # script at the implement-stage tail; HEAD-advanced should produce a
+  # hand-off branch and a clean original-ref reset, not a die().
+  HANDOFF_BRANCH=""
+  if [[ "$IMPL_HEAD_ADVANCED" == "1" ]]; then
+    HANDOFF_BRANCH="ghgremlin-impl-handoff-$$"
+    if git show-ref --verify --quiet "refs/heads/$HANDOFF_BRANCH"; then
+      die "hand-off branch $HANDOFF_BRANCH already exists; refusing to clobber"
+    fi
+    git switch -c "$HANDOFF_BRANCH" >/dev/null 2>&1 \
+      || die "could not create hand-off branch $HANDOFF_BRANCH"
+    if [[ -n "$PRE_BRANCH" ]]; then
+      git branch -f "$PRE_BRANCH" "$PRE_HEAD" \
+        || die "could not reset $PRE_BRANCH back to $PRE_HEAD"
+    fi
+    _commit_count=$(git rev-list --count "$PRE_HEAD..HEAD")
+    echo "    implement committed during run; moved ${_commit_count} commit(s) onto $HANDOFF_BRANCH${PRE_BRANCH:+ and reset $PRE_BRANCH}"
   fi
 fi
 
@@ -460,10 +492,24 @@ if run_stage commit-pr; then
   # name derives from the plan description and no Closes link is emitted —
   # the PR would otherwise auto-close an issue in a different repo.
   if [[ -n "$ISSUE_NUM" ]]; then
-    _pr_prompt="Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'. Name the branch 'issue-${ISSUE_NUM}-<short-slug>', end the commit message with 'Closes #${ISSUE_NUM}', and include 'Closes #${ISSUE_NUM}' in the PR body. Print ONLY the PR URL on the final line of your response."
+    _branch_clause="Name the branch 'issue-${ISSUE_NUM}-<short-slug>'."
+    _closes_clause="End the commit message with 'Closes #${ISSUE_NUM}' and include 'Closes #${ISSUE_NUM}' in the PR body."
   else
-    _pr_prompt="Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'. Name the branch with a short descriptive slug derived from the plan title. Do NOT include any 'Closes #N' or 'Fixes #N' link in the commit message or PR body. Print ONLY the PR URL on the final line of your response."
+    _branch_clause="Name the branch with a short descriptive slug derived from the plan title."
+    _closes_clause="Do NOT include any 'Closes #N' or 'Fixes #N' link in the commit message or PR body."
   fi
+
+  # Two action shapes depending on what implement left behind. The hand-off
+  # branch only exists when implement committed during its run; otherwise
+  # we fall through to the original "create branch + commit + push" prompt.
+  if [[ "${IMPL_HEAD_ADVANCED:-0}" == "1" ]]; then
+    _commits_count=$(git rev-list --count "$PRE_HEAD..HEAD")
+    _action_clause="The implementation work is already committed on the current branch ('$HANDOFF_BRANCH'), with ${_commits_count} commit(s) above $PRE_HEAD. Rename the current branch with 'git branch -m <new-name>', push it with 'git push -u origin <new-name>', and open a PR with 'gh pr create'. Do NOT make additional commits unless required to add the 'Closes #N' line — if needed, amend the most recent commit with 'git commit --amend'."
+  else
+    _action_clause="Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'."
+  fi
+
+  _pr_prompt="$_action_clause $_branch_clause $_closes_clause Print ONLY the PR URL on the final line of your response."
   # The --resume "$IMPL_SESSION" pairing means commit-pr only runs in the same
   # pipeline invocation as its implement stage. Resumes that start here are
   # rewound to implement above.
