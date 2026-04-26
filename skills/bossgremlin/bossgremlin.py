@@ -191,6 +191,11 @@ def init_boss_state(spec_path: str, chain_kind: str, chain_base_ref: str,
         "current_child_id": None,
         "children": [],
         "handoff_records": [],
+        # Latest operator_followups list reported by handoff. Each handoff
+        # rewrites this with the conservative carry-forward set the handoff
+        # agent produced, so by chain-done it holds the final list of
+        # operator tasks the human still owes between phase landings.
+        "operator_followups": [],
     }
     save_json(os.path.join(state_dir, "boss_state.json"), boss_state)
     return boss_state
@@ -289,6 +294,15 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     if exit_state not in ("next-plan", "chain-done", "bail"):
         die(f"handoff signal file has unrecognized exit_state: {exit_state!r}")
 
+    # Coerce operator_followups to a list of strings. Old handoff signals
+    # predating the field land here as None or absent; treat that as no
+    # followups so a chain that started under an older handoff still reads.
+    raw_followups = sig.get("operator_followups")
+    if isinstance(raw_followups, list):
+        followups = [str(item) for item in raw_followups if str(item).strip()]
+    else:
+        followups = []
+
     now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     boss_state["handoff_records"].append({
         "timestamp": now,
@@ -299,12 +313,18 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
         "exit_state": exit_state,
         "child_plan": sig.get("child_plan"),
         "bail_reason": sig.get("reason"),
+        "operator_followups": followups,
     })
     boss_state["handoff_count"] = n
+    boss_state["operator_followups"] = followups
     if os.path.isfile(out_path):
         boss_state["current_plan"] = out_path
 
     log(f"handoff {n} result: {exit_state}")
+    if followups:
+        log(f"  operator follow-ups carried by handoff {n}: {len(followups)}")
+        for item in followups:
+            log(f"    - {item}")
     return exit_state, sig
 
 
@@ -493,6 +513,16 @@ def main(argv):
 
             if exit_state == "chain-done":
                 log("chain complete")
+                followups = boss_state.get("operator_followups") or []
+                if followups:
+                    log(
+                        f"operator follow-ups ({len(followups)}) — owed by the "
+                        f"human between phase landings:"
+                    )
+                    for item in followups:
+                        log(f"  - {item}")
+                else:
+                    log("operator follow-ups: (none)")
                 set_stage(gr_id, "done")
                 save_boss_state(state_dir, boss_state)
                 sys.exit(0)

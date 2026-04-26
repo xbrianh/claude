@@ -172,24 +172,24 @@ If the spec author wrote operator-flavoured language inline with implementation 
 
 ## Your task
 
-1. Read the plan. Identify every task listed under `## Tasks`.
-2. Compare each task against the landed diff and git log to determine whether it has been implemented.
+1. Read the plan. Identify every task listed under `## Tasks`, plus every pending entry under `## Operator follow-ups` if the input plan has that section (a previous handoff may have written it). Both sets feed step 3's classification.
+2. Compare each `## Tasks` entry against the landed diff and git log to determine whether it has been implemented. Operator follow-ups generally leave no signal in the worktree's diff (they happen outside the worktree by design), so do not infer their completion from git history.
 3. Classify every still-open task as **implementation** or **operator** using the boundary above. Operator tasks never land in a child plan.
 4. Decide the exit state:
-   - **`chain-done`**: all *implementation* tasks in the plan are implemented and landed. (Operator tasks do not block `chain-done` — they are surfaced separately for the human operator.)
+   - **`chain-done`**: all *implementation* tasks in the plan are implemented and landed. Operator tasks do **not** block `chain-done` — they are surfaced separately for the human operator via the `operator_followups` field in the signal file (and the `## Operator follow-ups` section in the rolling plan, if any pending). A chain whose remaining work is operator-only therefore exits as `chain-done`.
    - **`next-plan`**: at least one *implementation* task remains; the next gremlin should tackle it.
-   - **`bail`**: something prevents safe continuation (broken state, incoherent plan, security issue, etc.). Also bail when the remaining work is essentially all operator tasks and there is no coherent code-only chunk to hand a child — a chain whose remaining phase is operator-driven should halt for the human, not spawn a doomed child. As a rough heuristic, if more than ~2 of the remaining tasks are operator-classified relative to the implementation tasks, prefer `bail` with a reason that names the operator-only nature of the remaining work.
+   - **`bail`**: something prevents safe continuation (broken state, incoherent plan, security issue, etc.). Reserved for genuine blockers. Operator-only remaining work is **not** a bail reason — it is `chain-done`.
 
 5. Write an **updated plan document** (the "rolling plan") to: `{out_path}`
 
    The rolling plan describes only **remaining** work. Completed tasks are removed entirely — no `[x]` markers, no struck-through entries, no "completed" appendix. The chain of versioned plan files plus git history is the audit trail; the rolling plan does not repeat it. Do not propagate the overarching goal of the chain forward into the rolling plan — that lives upstream, in the original spec.
 
-   - **`next-plan`**: include only the tasks that are not yet implemented (still `[ ]`). Prune the surrounding sections (`## Context`, `## Approach`, `## Open questions`, etc.) to match: drop sections whose reason for existing was a now-completed task; keep or trim the rest so the document stays a coherent description of the remaining work.
+   - **`next-plan`**: include only the implementation tasks that are not yet implemented (still `[ ]`). Prune the surrounding sections (`## Context`, `## Approach`, `## Open questions`, etc.) to match: drop sections whose reason for existing was a now-completed task; keep or trim the rest so the document stays a coherent description of the remaining work.
      - Under `## Open questions`, carry forward unresolved entries; drop entries tied to completed tasks.
      - If a task is only partly landed, keep it (rewritten if needed to reflect what remains).
-     - Add an `## Operator follow-ups` section listing every task you classified as operator-level (still pending). These are not handed to a child gremlin — they wait for the human between phase landings. Carry forward operator follow-ups from the previous rolling plan if they have not been done; drop ones that have. If there are no pending operator tasks, omit the section.
-   - **`chain-done`**: minimal output. A short note that the chain is complete is enough — no leftover task list, no carried-over context. If any operator follow-ups remain pending, list them under `## Operator follow-ups` so the human sees them in the final rolling plan; otherwise omit. The signal file carries the structured outcome.
-   - **`bail`**: same pruning rules as `next-plan` (only remaining tasks, surrounding sections trimmed accordingly, unresolved `## Open questions` carried forward, `## Operator follow-ups` if any), with a bail-reason banner added prominently at the top.
+     - Add an `## Operator follow-ups` section listing every pending operator task. Treat the input plan's `## Operator follow-ups` section as authoritative for prior follow-ups: carry forward every item that still appears there. Only drop an entry if the input plan or git history makes its completion unambiguous (e.g. the human/operator removed it from the input plan, or a commit message explicitly states the operator step was done). Do **not** infer completion from git diff/log or implementation progress alone — operator tasks happen outside the worktree, so the safe behavior is conservative carry-forward. Add any new operator-classified items found in this pass alongside the carried-forward entries. If after all that there are no pending operator tasks, omit the section.
+   - **`chain-done`**: minimal output. A short note that the chain is complete is enough — no leftover task list, no carried-over context. If any pending operator follow-ups remain (under the carry-forward rule above), list them under `## Operator follow-ups` so the human sees them in the final rolling plan; otherwise omit. The signal file carries the structured outcome (including `operator_followups`).
+   - **`bail`**: same pruning rules as `next-plan` (only remaining implementation tasks, surrounding sections trimmed accordingly, unresolved `## Open questions` carried forward, `## Operator follow-ups` carried forward under the conservative rule above), with a bail-reason banner added prominently at the top.
 
 6. If exit state is **`next-plan`**, write a **child plan** to: `{child_plan_path}`
    - Use the standard localgremlin plan structure exactly:
@@ -216,10 +216,11 @@ If the spec author wrote operator-flavoured language inline with implementation 
 7. Write the **signal marker** to: `{signal_path}`
    - Valid JSON, exactly this structure:
      ```json
-     {{"exit_state": "next-plan|chain-done|bail", "child_plan": "<absolute path or null>", "reason": "<bail reason or null>"}}
+     {{"exit_state": "next-plan|chain-done|bail", "child_plan": "<absolute path or null>", "reason": "<bail reason or null>", "operator_followups": ["<task>", ...]}}
      ```
    - `child_plan`: `{child_plan_path}` (as a string) if exit state is `next-plan`, otherwise `null`.
    - `reason`: a short human-readable explanation if exit state is `bail`, otherwise `null`.
+   - `operator_followups`: an array of one-line strings describing every pending operator task, mirroring the rolling plan's `## Operator follow-ups` section. Empty array `[]` if there are none. Required on every exit state — including `chain-done`, where this is how the boss orchestrator learns about operator tasks the human still owes after the rolling plan has been pruned to a "chain complete" note.
 
 Write all required files before finishing. Do not explain your reasoning in stdout — the files are the output."""
 
@@ -359,6 +360,12 @@ def main(argv: List[str]) -> int:
         print(f"    bail reason:  {reason}", flush=True)
         print(f"    updated plan: {out_path}", flush=True)
         print(f"    signal file:  {signal_path}", flush=True)
+
+    followups = state.get("operator_followups") or []
+    if isinstance(followups, list) and followups:
+        print(f"    operator follow-ups ({len(followups)}):", flush=True)
+        for item in followups:
+            print(f"      - {item}", flush=True)
 
     return 0
 

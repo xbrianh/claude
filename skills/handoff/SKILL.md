@@ -21,10 +21,19 @@ This skill runs **in the foreground** — it blocks until the inner agent finish
 ## Exit states
 
 - **`next-plan`**: implementation work remains; a child plan has been written for the next gremlin.
-- **`chain-done`**: all implementation tasks are landed; the chain is complete. Pending operator tasks do not block this state — they surface in the final rolling plan's `## Operator follow-ups` section.
-- **`bail`**: something prevents safe continuation; reason is in the signal file and updated plan. Includes the case where remaining work is dominated by operator tasks with no coherent code-only chunk to hand a child.
+- **`chain-done`**: all implementation tasks are landed; the chain is complete. Pending operator tasks do **not** block this state and are **not** an alternative bail reason — they are surfaced via the signal file's `operator_followups` array (and the final rolling plan's `## Operator follow-ups` section, if any pending). A chain whose remaining work is operator-only exits as `chain-done`.
+- **`bail`**: something prevents safe continuation; reason is in the signal file and updated plan. Reserved for genuine blockers (broken state, incoherent plan, security issue, etc.) — operator-only remaining work is not one of them.
 
 Script exit code 0 on any recognized outcome; 1 on infrastructure failure (read the signal file to distinguish outcomes).
+
+## Signal file
+
+The signal file written to `<out-stem>.state.json` always contains:
+
+- `exit_state` — `"next-plan"`, `"chain-done"`, or `"bail"`.
+- `child_plan` — absolute path to the child plan when `next-plan`; `null` otherwise.
+- `reason` — short string when `bail`; `null` otherwise.
+- `operator_followups` — array of one-line strings, one per pending operator task. Empty array (`[]`) when there are none. Populated on every exit state, including `chain-done`, so the boss orchestrator can persist the final operator-task list even when the rolling plan has been pruned to a "chain complete" note.
 
 ## Implementation vs operator tasks
 
