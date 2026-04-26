@@ -88,13 +88,14 @@ if [[ -n "$RESUME_GR_ID" ]]; then
     STATE_FILE="$STATE_DIR/state.json"
     [[ -d "$STATE_DIR" && -f "$STATE_FILE" ]] || die "no state at $STATE_DIR"
 
-    RESUME_KIND=$(jq   -r '.kind         // ""' "$STATE_FILE")
-    WORKDIR=$(jq       -r '.workdir      // ""' "$STATE_FILE")
-    BRANCH=$(jq        -r '.branch       // ""' "$STATE_FILE")
-    STAGE=$(jq         -r '.stage        // ""' "$STATE_FILE")
-    STATUS=$(jq        -r '.status       // ""' "$STATE_FILE")
-    OLD_PID=$(jq       -r '.pid          // ""' "$STATE_FILE")
-    EXIT_CODE=$(jq     -r '.exit_code    // ""' "$STATE_FILE")
+    RESUME_KIND=$(jq        -r '.kind          // ""' "$STATE_FILE")
+    WORKDIR=$(jq            -r '.workdir       // ""' "$STATE_FILE")
+    BRANCH=$(jq             -r '.branch        // ""' "$STATE_FILE")
+    WORKTREE_BASE_DISPLAY=$(jq -r '.worktree_base // ""' "$STATE_FILE")
+    STAGE=$(jq              -r '.stage         // ""' "$STATE_FILE")
+    STATUS=$(jq             -r '.status        // ""' "$STATE_FILE")
+    OLD_PID=$(jq            -r '.pid           // ""' "$STATE_FILE")
+    EXIT_CODE=$(jq          -r '.exit_code     // ""' "$STATE_FILE")
 
     # Full instructions are persisted to a sidecar file (not state.json) because
     # state.json's .instructions is a display-truncated summary (INSTR_SUMMARY
@@ -248,7 +249,8 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         cat <<EOF
 resumed gremlin: $RESUME_GR_ID
 from stage:      $STAGE
-workdir:         $WORKDIR
+workdir:         $WORKDIR${WORKTREE_BASE_DISPLAY:+
+base:            $WORKTREE_BASE_DISPLAY}
 log:             $STATE_DIR/log
 state file:      $STATE_FILE
 pid:             ${PID:-unknown}
@@ -500,23 +502,21 @@ if [[ $IS_GIT -eq 1 ]]; then
         git -C "$PROJECT_ROOT" worktree add -b "$BRANCH" "$WORKDIR" HEAD >/dev/null \
             || die "git worktree add -b failed"
     elif [[ "$KIND" == "ghgremlin" ]]; then
-        # Network call at launch time — slower on a flaky connection, but the
-        # alternative (silently basing on a stale origin/<default>) is worse
-        # than a slow launch on a bad connection. die rather than fall back
-        # to HEAD: opening a PR against the wrong base is expensive.
+        # Resolve the default branch via gh (matches bossgremlin.py's
+        # get_default_branch — single source of truth for "what does origin
+        # consider its default?"). gh is already a hard dependency of
+        # ghgremlin (see line 276 above), so no new dependency.
+        _default=$(gh repo view --json defaultBranchRef \
+            -q .defaultBranchRef.name 2>/dev/null || true)
+        [[ -n "$_default" ]] || die "could not resolve origin's default branch via gh repo view"
+        # Explicit refspec so single-branch / narrow-refspec clones still
+        # fetch the resolved default branch (a bare `git fetch origin` would
+        # honor the configured refspec and could skip it). die rather than
+        # fall back to HEAD: opening a PR against the wrong base is more
+        # expensive than failing the launch on a bad network.
         git -C "$PROJECT_ROOT" fetch origin --quiet \
-            || die "git fetch origin failed"
-        # symbolic-ref refs/remotes/origin/HEAD is the cheap path. Some
-        # clones lack it (e.g. cloned with --no-checkout, or origin/HEAD
-        # was never set); fall back to `git remote show origin` which
-        # asks the server for the HEAD branch directly.
-        _default=$(git -C "$PROJECT_ROOT" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null \
-            | sed 's@^refs/remotes/origin/@@' || true)
-        if [[ -z "$_default" ]]; then
-            _default=$(git -C "$PROJECT_ROOT" remote show origin 2>/dev/null \
-                | sed -n 's/^  HEAD branch: //p' || true)
-        fi
-        [[ -n "$_default" ]] || die "could not resolve origin's default branch"
+            "refs/heads/$_default:refs/remotes/origin/$_default" \
+            || die "git fetch origin $_default failed (could not fetch default branch)"
         SETUP_KIND="worktree"
         WORKTREE_BASE_DISPLAY="origin/$_default"
         git -C "$PROJECT_ROOT" worktree add --detach "$WORKDIR" "$WORKTREE_BASE_DISPLAY" >/dev/null \
@@ -566,6 +566,7 @@ jq -n \
     --arg     workdir              "$WORKDIR" \
     --arg     setup_kind           "$SETUP_KIND" \
     --arg     branch               "$BRANCH" \
+    --arg     worktree_base        "$WORKTREE_BASE_DISPLAY" \
     --arg     status               "running" \
     --arg     started_at           "$NOW_ISO" \
     --arg     instructions         "$INSTR_SUMMARY" \
@@ -574,7 +575,8 @@ jq -n \
     --argjson description_explicit "$DESC_EXPLICIT_JSON" \
     --argjson pipeline_args        "$PIPELINE_ARGS_JSON" \
     '{id: $id, kind: $kind, project_root: $project_root, workdir: $workdir,
-      setup_kind: $setup_kind, branch: $branch, status: $status,
+      setup_kind: $setup_kind, branch: $branch, worktree_base: $worktree_base,
+      status: $status,
       started_at: $started_at, instructions: $instructions,
       description: $description, description_explicit: $description_explicit,
       parent_id: $parent_id,
