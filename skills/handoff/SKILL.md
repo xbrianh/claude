@@ -44,13 +44,13 @@ A child gremlin runs inside a **detached-HEAD worktree, against a single feature
 
 Operator signals the agent looks for:
 
-- Mutates `~/.claude/` or other live user state (`scripts/sync.sh push`/`pull`, hand-edits under `~/.claude/`).
+- Mutates `~/.claude/` or other live user state (hand-edits under `~/.claude/`, or running a script that mirrors the worktree into shared machine state).
 - Launches another gremlin (`/localgremlin`, `/ghgremlin`, `/bossgremlin`, end-to-end smoke runs).
 - Pushes outside the PR flow (`git push origin main`, force-pushes, manual merges).
 - `/gremlins` operator commands (`land`, `rescue`, `stop`, `close`, `rm`).
 - Post-merge verification (PR CI green checks, deploy confirmation, dashboard watching).
 
-Edits to tracked repo files like `CLAUDE.md`, `scripts/sync.sh`, or `pipeline/DESIGN.md` are **implementation**, even if those files are mirrored to `~/.claude/` by `sync.sh` — the child edits the in-repo file, the human runs the sync later.
+Edits to tracked repo files are **implementation**, even when those files are later mirrored to live machine state by an operator step — the child edits the in-repo file, the human runs the mirror later.
 
 Spec authors should label genuinely operator-level acceptance criteria explicitly (e.g. "Operator verification:" prefix, or a separate `## Operator acceptance` section) so the agent classifies correctly. The filter is robust to inline mixing, but explicit labels reduce ambiguity.
 
