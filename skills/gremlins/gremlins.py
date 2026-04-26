@@ -1090,20 +1090,30 @@ def _resolve_landing_cwd(state: dict) -> str:
     if not parent_id:
         return own_root
 
-    seen = set()
+    # Pre-seed cycle protection with the starting state's id so a pathological
+    # cycle that loops back through the starting gremlin trips on first revisit.
+    seen = {state.get("id") or ""}
     current = state
     while True:
         pid = current.get("parent_id") or ""
-        if not pid or pid in seen:
-            break
+        if not pid:
+            # Clean termination: reached the topmost ancestor. Note: if its
+            # project_root is empty/missing (e.g. corrupted boss state.json),
+            # the own_root fallback may still be detached — strictly no worse
+            # than the original failure mode.
+            return current.get("project_root") or own_root
+        if pid in seen:
+            # Cycle in parent chain — fall back to own_root rather than
+            # returning a possibly-detached intermediate ancestor.
+            return own_root
         seen.add(pid)
         parent_sf = os.path.join(STATE_ROOT, pid, "state.json")
         parent_state = load_state(parent_sf)
         if not parent_state:
-            break
+            # Unreadable parent state — fall back to own_root rather than
+            # returning a possibly-detached intermediate ancestor.
+            return own_root
         current = parent_state
-
-    return current.get("project_root") or own_root
 
 
 def _fast_forward_main(cwd):
@@ -1693,15 +1703,24 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
                 capture_output=True, text=True, cwd=cwd,
             )
             verified_merged = False
+            verify_err = ""
             if v.returncode == 0:
                 try:
                     verified_merged = json.loads(v.stdout).get("state") == "MERGED"
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    verify_err = f"could not parse gh pr view response: {e}"
+            else:
+                verify_err = v.stderr.strip() or v.stdout.strip()
             if verified_merged:
                 print(f"warning: gh pr merge exited non-zero ({err}) but PR is MERGED on GitHub — proceeding with cleanup.")
             else:
-                print(f"error: gh pr merge failed: {err}")
+                if verify_err:
+                    # Verification was inconclusive (gh pr view failed or returned
+                    # unparseable output) — operator should check PR state manually
+                    # before reaching for `rescue` or re-running `land`.
+                    print(f"error: gh pr merge failed: {err}; verification inconclusive: {verify_err}")
+                else:
+                    print(f"error: gh pr merge failed: {err}")
                 return False
     else:
         print("PR merged.")
