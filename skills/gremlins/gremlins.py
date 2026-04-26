@@ -1076,6 +1076,36 @@ def expected_branch(state: dict, gr_id: str):
     return None
 
 
+def _resolve_landing_cwd(state: dict) -> str:
+    """Return a project_root suitable as cwd for `gh pr merge --delete-branch`.
+
+    For boss-launched children, state.project_root is the boss's worktree, which
+    is on a detached HEAD. After --delete-branch, gh tries to switch off the
+    deleted branch and fails with "could not determine current branch: failed
+    to run git: not on any branch". Walk parent_id up to the topmost ancestor
+    (the user's actual repo, on a real branch) to avoid that.
+    """
+    own_root = state.get("project_root") or ""
+    parent_id = state.get("parent_id") or ""
+    if not parent_id:
+        return own_root
+
+    seen = set()
+    current = state
+    while True:
+        pid = current.get("parent_id") or ""
+        if not pid or pid in seen:
+            break
+        seen.add(pid)
+        parent_sf = os.path.join(STATE_ROOT, pid, "state.json")
+        parent_state = load_state(parent_sf)
+        if not parent_state:
+            break
+        current = parent_state
+
+    return current.get("project_root") or own_root
+
+
 def _fast_forward_main(cwd):
     """Attempt to fast-forward local main to origin/main after a gh PR merge."""
     r = subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, cwd=cwd)
@@ -1574,7 +1604,7 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
         print("This gremlin may have been launched before pr_url tracking was added to ghgremlin.sh.")
         return False
 
-    project_root = state.get("project_root") or ""
+    project_root = _resolve_landing_cwd(state)
     cwd = project_root if project_root and os.path.isdir(project_root) else None
 
     print(f"Checking PR: {pr_url}")
@@ -1654,8 +1684,25 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
         if "already merged" in r.stdout.lower() or "already merged" in r.stderr.lower():
             print("PR was already merged.")
         else:
-            print(f"error: gh pr merge failed: {r.stderr.strip() or r.stdout.strip()}")
-            return False
+            # gh may exit non-zero on post-merge cleanup (e.g. --delete-branch
+            # tries to switch off the deleted branch and fails on a detached
+            # HEAD cwd) even though the PR did merge. Re-verify before bailing.
+            err = r.stderr.strip() or r.stdout.strip()
+            v = subprocess.run(
+                ["gh", "pr", "view", pr_url, "--json", "state"],
+                capture_output=True, text=True, cwd=cwd,
+            )
+            verified_merged = False
+            if v.returncode == 0:
+                try:
+                    verified_merged = json.loads(v.stdout).get("state") == "MERGED"
+                except json.JSONDecodeError:
+                    pass
+            if verified_merged:
+                print(f"warning: gh pr merge exited non-zero ({err}) but PR is MERGED on GitHub — proceeding with cleanup.")
+            else:
+                print(f"error: gh pr merge failed: {err}")
+                return False
     else:
         print("PR merged.")
 
