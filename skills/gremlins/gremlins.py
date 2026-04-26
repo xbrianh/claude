@@ -418,7 +418,11 @@ def do_stop(target: str) -> bool:
 
 
 def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
-                        *, headless=False, marker_path=None):
+                        marker_path: str):
+    """Build the Phase A prompt. The marker contract is the same in interactive
+    and headless modes — the agent never knows the difference and the wrapper
+    reads the marker to decide whether to invoke Phase B.
+    """
     kind = state.get("kind", "localgremlin")
     stage = state.get("stage") or "unknown"
     description = state.get("description") or ""
@@ -427,7 +431,7 @@ def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
 
     log_tail_safe = log_tail.replace("```", "` ` `")
 
-    head = f"""You are diagnosing a failed background gremlin so it can resume.
+    return f"""You are diagnosing a failed background gremlin so it can resume.
 
 ## Gremlin context
 
@@ -443,11 +447,8 @@ Stage order for {kind}: {' → '.join(stages)}
 ```
 {log_tail_safe}
 ```
-"""
 
-    if headless:
-        return head + f"""
-## What to do (headless mode — no human is watching)
+## What to do
 
 1. Diagnose the failure from the log above.
 2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, declare `unsalvageable`.
@@ -471,21 +472,11 @@ Stage order for {kind}: {' → '.join(stages)}
 
 5. Stop. Do NOT re-run the failed stage or any remaining stages yourself — the wrapper reads the marker and (on `fixed`/`transient`) hands off to a background resume that relaunches the pipeline starting at {stage}. On `unsalvageable`, the wrapper writes a bail reason and the gremlin stays terminal.
 
-Constraints for headless mode:
+Constraints:
 - Do NOT prompt for input; there is no TTY.
 - Do NOT call `exit` or otherwise abort — finish normally so the wrapper can read the marker.
-- If you cannot write the marker file, the wrapper will treat that as an unsalvageable failure.
+- If you do not write the marker file, the wrapper will treat that as a hard error and bail with `phase_a_no_marker`.
 - Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
-"""
-
-    return head + f"""
-## What to do
-
-1. Diagnose the failure from the log above.
-2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, say so clearly in your final message and leave everything untouched; the operator must Ctrl-C during Phase A to prevent the automatic resume.
-3. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit successfully, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically.
-
-Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
 """
 
 
@@ -543,6 +534,37 @@ def _write_bail(sf: str, wdir: str, bail_reason: str, bail_detail: str = "") -> 
         pass
 
 
+def _read_rescue_marker(marker_path: str):
+    """Read and validate the Phase A marker file. Returns (status, msg).
+
+    status ∈ {"fixed", "transient", "unsalvageable"} → agent verdict
+    status ∈ {"no_marker", "bad_marker"} → protocol violation by the agent
+
+    msg carries the agent's summary on success-shaped statuses (including
+    "unsalvageable") and a wrapper-generated diagnostic on the failure ones.
+    """
+    if not os.path.isfile(marker_path):
+        return "no_marker", f"agent did not write marker file at {marker_path}"
+
+    try:
+        with open(marker_path, encoding="utf-8") as fh:
+            marker = json.load(fh)
+    except Exception as exc:
+        return "bad_marker", f"marker file unreadable: {exc}"
+
+    if not isinstance(marker, dict):
+        return "bad_marker", "marker file is not a JSON object"
+
+    status = marker.get("status")
+    summary = marker.get("summary") or ""
+    if status not in ("fixed", "transient", "unsalvageable"):
+        return "bad_marker", f"marker has invalid status: {status!r}"
+
+    if status == "unsalvageable":
+        return status, summary or "agent declared failure unsalvageable"
+    return status, summary
+
+
 def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
     """Run Phase A non-interactively. Returns (status, error_msg).
 
@@ -590,26 +612,12 @@ def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
         stderr_snip = (result.stderr or "").strip().splitlines()[-1:] or [""]
         return "claude_exit", f"claude -p exited {result.returncode}: {stderr_snip[0]}"
 
-    if not os.path.isfile(marker_path):
-        return "no_marker", f"agent did not write marker file at {marker_path}"
-
-    try:
-        with open(marker_path, encoding="utf-8") as fh:
-            marker = json.load(fh)
-    except Exception as exc:
-        return "bad_marker", f"marker file unreadable: {exc}"
-
-    if not isinstance(marker, dict):
-        return "bad_marker", "marker file is not a JSON object"
-
-    status = marker.get("status")
-    summary = marker.get("summary") or ""
-    if status not in ("fixed", "transient", "unsalvageable"):
-        return "bad_marker", f"marker has invalid status: {status!r}"
-
-    if status == "unsalvageable":
-        return status, summary or "agent declared failure unsalvageable"
-    return status, ""
+    status, msg = _read_rescue_marker(marker_path)
+    # Headless callers don't surface the summary on success, so blank it out
+    # to preserve the original two-tuple contract (msg empty for fixed/transient).
+    if status in ("fixed", "transient"):
+        return status, ""
+    return status, msg
 
 
 def do_rescue(target: str, headless: bool = False) -> bool:
@@ -694,18 +702,17 @@ def do_rescue(target: str, headless: bool = False) -> bool:
         except OSError:
             log_tail = "(could not read log)"
 
+    # Marker file is the contract between the agent and this wrapper for
+    # both interactive and headless modes. Pre-create the artifacts dir so
+    # the agent doesn't need to mkdir it themselves — one less thing to
+    # get wrong.
     artifacts_dir = os.path.join(wdir, "artifacts")
-    marker_path = None
-    if headless:
-        # The marker file is the contract between the headless agent and
-        # this wrapper. We pre-create the artifacts dir so the agent doesn't
-        # need to mkdir it themselves — one less thing to get wrong.
-        try:
-            os.makedirs(artifacts_dir, exist_ok=True)
-        except OSError:
-            pass
-        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        marker_path = os.path.join(artifacts_dir, f"rescue-{ts}.done")
+    try:
+        os.makedirs(artifacts_dir, exist_ok=True)
+    except OSError:
+        pass
+    ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    marker_path = os.path.join(artifacts_dir, f"rescue-{ts}.done")
 
     # Create a scratch dir so Phase A runs isolated from the worktree.
     # The log tail is written there as a readable file; state.json is passed
@@ -721,8 +728,7 @@ def do_rescue(target: str, headless: bool = False) -> bool:
         except OSError:
             scratch_log = log_path  # fallback: reference the original log path
 
-        prompt = build_rescue_prompt(state, log_tail, sf, scratch_log,
-                                     headless=headless, marker_path=marker_path)
+        prompt = build_rescue_prompt(state, log_tail, sf, scratch_log, marker_path)
 
         print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
         print(f"Gremlin workdir: {workdir}")
@@ -760,7 +766,8 @@ def do_rescue(target: str, headless: bool = False) -> bool:
             # actually relaunches.
             print(f"Phase A complete (status: {status}); handing off to Phase B...")
         else:
-            print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
+            print(f"Phase A: running diagnosis agent inline — Ctrl-C to abort.")
+            print(f"Marker: {marker_path}")
             print()
             try:
                 result = subprocess.run(["claude", "-p", prompt], cwd=scratch_dir)
@@ -768,15 +775,41 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 print("error: 'claude' CLI not found in PATH")
                 return False
             except KeyboardInterrupt:
+                # Operator's deliberate interrupt — preserve state with no
+                # bail so they can rerun /gremlins rescue without first
+                # having to clear a bail_reason.
                 print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
                 return False
 
+            print()
+
             if result.returncode != 0:
-                print()
-                print(f"Rescue agent exited with code {result.returncode}.")
-                print("Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
+                detail = f"claude -p exited {result.returncode}"
+                _write_bail(sf, wdir, "phase_a_claude_error", detail)
+                print(f"Phase A: rescue agent exited with code {result.returncode}.")
                 print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
                 return False
+
+            # Zero exit: the marker is the source of truth. Without it the
+            # agent is presumed to have abdicated the protocol — bail rather
+            # than silently launching Phase B into the same broken state.
+            status, msg = _read_rescue_marker(marker_path)
+            if status == "unsalvageable":
+                _write_bail(sf, wdir, "unsalvageable", msg)
+                print(f"Phase A: agent declared the failure unsalvageable ({msg})")
+                return False
+            if status == "no_marker":
+                _write_bail(sf, wdir, "phase_a_no_marker", msg)
+                print(f"Phase A produced no marker file: {msg}")
+                return False
+            if status == "bad_marker":
+                _write_bail(sf, wdir, "phase_a_bad_marker", msg)
+                print(f"Phase A marker file invalid: {msg}")
+                return False
+            # status ∈ {"fixed", "transient"} → proceed to Phase B.
+            if msg:
+                print(f"Phase A summary: {msg}")
+            print(f"Phase A complete (status: {status}); handing off to Phase B...")
     finally:
         if scratch_dir is not None:
             shutil.rmtree(scratch_dir, ignore_errors=True)
