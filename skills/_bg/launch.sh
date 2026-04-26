@@ -474,12 +474,23 @@ if [[ -n "$_spec_copy_pending" ]]; then
     cp "$_spec_copy_pending" "$STATE_DIR/artifacts/spec.md" || die "could not copy spec to artifacts: $_spec_copy_pending"
 fi
 
-# Isolated workdir setup. For localgremlin in a git repo we create a named
-# branch (bg/localgremlin/<GR_ID>) so the commits the gremlin makes stay
-# reachable after finish.sh runs. For ghgremlin we use --detach because the
-# gremlin's stage 2b creates and pushes its own issue-N-<slug> branch; a
-# named bg/* ref would be a no-op.
+# Isolated workdir setup. Three branches:
+#   localgremlin: named branch bg/localgremlin/<GR_ID> based at HEAD so the
+#     commits the gremlin makes stay reachable after finish.sh runs.
+#     localgremlin is a feature-branch tool and squash-lands onto whatever
+#     branch the user is on, so HEAD is the right base.
+#   ghgremlin: detached worktree based at origin/<default-branch> (after a
+#     fetch). ghgremlin opens a PR against the default branch; basing the
+#     worktree at HEAD would let un-merged commits on the user's current
+#     branch leak into the PR diff. --detach is correct because stage 2b
+#     creates and pushes its own issue-N-<slug> branch — a named bg/* ref
+#     would be a no-op.
+#   bossgremlin: detached worktree at HEAD. The boss itself doesn't open
+#     PRs; it spawns child gremlins that re-enter launch.sh and resolve
+#     their own bases (gh chains additionally pin chain_base_ref via
+#     bossgremlin.py's get_default_branch).
 BRANCH=""
+WORKTREE_BASE_DISPLAY=""
 if [[ $IS_GIT -eq 1 ]]; then
     WORKDIR=$(mktemp -d -t "aibg-$KIND.XXXXXX") || die "mktemp failed"
     rmdir "$WORKDIR" || die "rmdir $WORKDIR failed"
@@ -488,6 +499,28 @@ if [[ $IS_GIT -eq 1 ]]; then
         BRANCH="bg/localgremlin/$GR_ID"
         git -C "$PROJECT_ROOT" worktree add -b "$BRANCH" "$WORKDIR" HEAD >/dev/null \
             || die "git worktree add -b failed"
+    elif [[ "$KIND" == "ghgremlin" ]]; then
+        # Network call at launch time — slower on a flaky connection, but the
+        # alternative (silently basing on a stale origin/<default>) is worse
+        # than a slow launch on a bad connection. die rather than fall back
+        # to HEAD: opening a PR against the wrong base is expensive.
+        git -C "$PROJECT_ROOT" fetch origin --quiet \
+            || die "git fetch origin failed"
+        # symbolic-ref refs/remotes/origin/HEAD is the cheap path. Some
+        # clones lack it (e.g. cloned with --no-checkout, or origin/HEAD
+        # was never set); fall back to `git remote show origin` which
+        # asks the server for the HEAD branch directly.
+        _default=$(git -C "$PROJECT_ROOT" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null \
+            | sed 's@^refs/remotes/origin/@@' || true)
+        if [[ -z "$_default" ]]; then
+            _default=$(git -C "$PROJECT_ROOT" remote show origin 2>/dev/null \
+                | sed -n 's/^  HEAD branch: //p' || true)
+        fi
+        [[ -n "$_default" ]] || die "could not resolve origin's default branch"
+        SETUP_KIND="worktree"
+        WORKTREE_BASE_DISPLAY="origin/$_default"
+        git -C "$PROJECT_ROOT" worktree add --detach "$WORKDIR" "$WORKTREE_BASE_DISPLAY" >/dev/null \
+            || die "git worktree add ($WORKTREE_BASE_DISPLAY) failed"
     else
         SETUP_KIND="worktree"
         git -C "$PROJECT_ROOT" worktree add --detach "$WORKDIR" HEAD >/dev/null \
@@ -574,7 +607,8 @@ fi
 {
     cat <<EOF
 gremlin id:  $GR_ID
-workdir:     $WORKDIR
+workdir:     $WORKDIR${WORKTREE_BASE_DISPLAY:+
+base:        $WORKTREE_BASE_DISPLAY}
 log:         $STATE_DIR/log
 state file:  $STATE_FILE
 pid:         ${PID:-unknown}
