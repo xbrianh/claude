@@ -3,15 +3,11 @@ import subprocess
 
 import pytest
 
+from conftest import MINIMAL_EVENTS
 from pipeline.clients.fake import FakeClaudeClient
 from pipeline.stages.address_code import run_address_code_stage
 from pipeline.stages.implement import run_implement_stage
 from pipeline.stages.plan import run_plan_stage
-
-MINIMAL_EVENTS = [
-    {"type": "system", "subtype": "init", "session_id": "test-session-1"},
-    {"type": "result", "subtype": "success"},
-]
 
 
 def _init_git_repo(path: pathlib.Path) -> None:

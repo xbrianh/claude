@@ -3,13 +3,9 @@ import re
 
 import pytest
 
+from conftest import MINIMAL_EVENTS
 from pipeline.clients.fake import FakeClaudeClient
 from pipeline.orchestrators.local import address_main, local_main, review_main
-
-MINIMAL_EVENTS = [
-    {"type": "system", "subtype": "init", "session_id": "test-session-1"},
-    {"type": "result", "subtype": "success"},
-]
 
 # Labels the triple review emits (default sonnet models).
 _REVIEW_LABELS = {
@@ -27,14 +23,14 @@ class _ReviewCreatingClient(FakeClaudeClient):
     def run(self, prompt, *, label, **kwargs):
         if label.startswith("review-code:"):
             m = re.search(r"`([^`]+\.md)`\s+is the canonical", prompt)
-            if m:
-                out = pathlib.Path(m.group(1))
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text("# Review\n\n## Findings\nNone.\n")
+            assert m, f"regex did not match review-code prompt for label {label!r}"
+            out = pathlib.Path(m.group(1))
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text("# Review\n\n## Findings\nNone.\n")
         return super().run(prompt, label=label, **kwargs)
 
 
-def _common_patches(monkeypatch, session_dir):
+def _common_patches(monkeypatch):
     """Apply monkeypatches shared across orchestrator smoke tests."""
     import shutil
     monkeypatch.setattr(shutil, "which", lambda n: "/fake/claude" if n == "claude" else None)
@@ -57,7 +53,7 @@ def test_local_main_plan_mode(tmp_path, monkeypatch):
     plan_file.write_text("# Plan\nDo stuff.\n")
 
     monkeypatch.chdir(tmp_path)
-    _common_patches(monkeypatch, session_dir)
+    _common_patches(monkeypatch)
     monkeypatch.setattr(
         "pipeline.orchestrators.local.resolve_session_dir", lambda: session_dir
     )
@@ -93,7 +89,7 @@ def test_local_main_plan_mode(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_review_main_calls_client(tmp_path, monkeypatch):
-    _common_patches(monkeypatch, tmp_path)
+    _common_patches(monkeypatch)
     monkeypatch.setattr("pipeline.orchestrators.local.in_git_repo", lambda: False)
 
     client = _ReviewCreatingClient(
@@ -115,7 +111,7 @@ def test_address_main_calls_client(tmp_path, monkeypatch):
             f"# {lens.title()} Review\n\n## Findings\nNone.\n"
         )
 
-    _common_patches(monkeypatch, tmp_path)
+    _common_patches(monkeypatch)
     monkeypatch.setattr("pipeline.orchestrators.local.in_git_repo", lambda: False)
 
     client = FakeClaudeClient(fixtures={"address-code": MINIMAL_EVENTS})
