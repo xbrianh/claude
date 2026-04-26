@@ -501,6 +501,18 @@ Implement the plan above by making the code changes in this repo. You may commit
       git branch -f "$PRE_BRANCH" "$PRE_HEAD" \
         || die "could not reset $PRE_BRANCH back to $PRE_HEAD"
     fi
+    # Sweep stale ghgremlin-impl-handoff-* branches from prior failed runs:
+    # a previous run may have died after `git switch -c` but before commit-pr's
+    # `git branch -m` rename, leaving an orphan branch with a different PID
+    # suffix in this repo's refs/heads/. We're now off any such branch (the
+    # switch above moved HEAD to $HANDOFF_BRANCH), so deleting them is safe.
+    # `git branch -D` refuses to delete branches checked out by another
+    # worktree, so a concurrent gremlin's hand-off branch is protected.
+    while IFS= read -r _stale; do
+      [[ -z "$_stale" || "$_stale" == "$HANDOFF_BRANCH" ]] && continue
+      git branch -D "$_stale" >/dev/null 2>&1 || true
+    done < <(git for-each-ref --format='%(refname:short)' \
+                 'refs/heads/ghgremlin-impl-handoff-*')
     _commit_count=$(git rev-list --count "$PRE_HEAD..HEAD")
     echo "    implement committed during run; moved ${_commit_count} commit(s) onto $HANDOFF_BRANCH${PRE_BRANCH:+ and reset $PRE_BRANCH}"
   fi
