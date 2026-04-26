@@ -418,6 +418,17 @@ def get_child_bail_reason(child_id: str) -> str:
         return ""
 
 
+def get_child_bail_detail(child_id: str) -> str:
+    state_path = os.path.join(STATE_ROOT, child_id, "state.json")
+    if not os.path.isfile(state_path):
+        return ""
+    try:
+        state = load_json(state_path)
+        return state.get("bail_detail") or ""
+    except Exception:
+        return ""
+
+
 def land_child(child_id: str) -> bool:
     gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
     if not os.access(gremlins, os.X_OK):
@@ -643,13 +654,29 @@ def main(argv):
             set_stage(gr_id, "rescuing")
             if not rescue_child(current_child_id):
                 bail_reason = get_child_bail_reason(current_child_id)
-                log(f"rescue refused for {current_child_id} ({bail_reason or 'no bail_reason'})")
+                bail_detail = get_child_bail_detail(current_child_id)
+                # `structural` = headless rescue identified a real bug in pipeline
+                # source or a sibling child plan but cannot fix it itself. Surface
+                # the diagnosis so the operator knows where to look — distinct
+                # from `unsalvageable`, which means genuinely unrecoverable state.
+                if bail_reason == "structural":
+                    log(f"rescue identified structural bug in {current_child_id}: {bail_detail or '(no detail)'}")
+                    log("chain halted — operator must address the structural issue before resuming")
+                    outcome = f"structural:{bail_detail}" if bail_detail else "structural"
+                else:
+                    log(f"rescue refused for {current_child_id} ({bail_reason or 'no bail_reason'})")
+                    outcome = f"bailed:{bail_reason}" if bail_reason else "bailed"
                 boss_state["children"].append({
                     "id": current_child_id,
-                    "outcome": f"bailed:{bail_reason}" if bail_reason else "bailed",
+                    "outcome": outcome,
                 })
                 boss_state["current_child_id"] = None
                 save_boss_state(state_dir, boss_state)
+                if bail_reason == "structural":
+                    die(
+                        f"chain halted: child {current_child_id} hit a structural bug — "
+                        f"{bail_detail or 'see child state.json bail_detail'}"
+                    )
                 die(f"chain halted: child {current_child_id} failed and rescue was refused")
 
             was_rescued = True

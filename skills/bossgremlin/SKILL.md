@@ -54,6 +54,14 @@ The boss appears in `/gremlins` like any other gremlin (KIND=boss). Its stage co
 - `/gremlins stop <boss-id>` — sends SIGTERM to the boss; it stops the current child (or handoff) and exits. The chain is halted; children that already landed stay landed.
 - `/gremlins rescue <boss-id>` — resumes a dead or stalled boss. The boss re-reads `boss_state.json` and continues from where it stopped.
 
+## How child failures are surfaced
+
+When a child gremlin fails and headless rescue declines to relaunch it, the boss halts the chain and records an `outcome` on the child entry in `boss_state.json`:
+
+- `bailed:unsalvageable` — the rescue agent declared the failure unrecoverable (corrupted state, missing worktree, irreconcilable git state). The chain cannot continue without manual intervention; inspect the child's state dir to triage.
+- `structural:<detail>` — the rescue agent identified a real bug in pipeline source (`~/.claude/skills/<kind>/*.sh`) or in a sibling child plan that it can name but cannot safely fix from the rescue context. The boss log surfaces the agent's diagnosis (`<detail>`) so you know where the fix needs to land. Distinct from `unsalvageable`: the chain *can* be salvaged, but a human edit is required (typically in the source repo, then synced via `scripts/sync.sh push`).
+- `bailed:<other-reason>` — a different headless-rescue refusal (e.g. `attempts_exhausted`, `excluded_class:security`). See `gremlins/SKILL.md` for the full vocabulary.
+
 ## Do not
 
 - Do not tail the log or block waiting for the chain to finish.
