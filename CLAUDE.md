@@ -11,7 +11,7 @@ Personal Claude Code config, bidirectionally mirrored with `~/.claude/` via [`sc
 Only the paths in `FILE_PAIRS` and `DIR_PAIRS` at the top of `scripts/sync.sh` are synced. Anything outside those paths is untracked by the sync. The list below is kept in sync manually with `scripts/sync.sh` — update both together.
 
 - `FILE_PAIRS`: `home/CLAUDE.md` → `~/.claude/CLAUDE.md`, `settings.json` → `~/.claude/settings.json`.
-- `DIR_PAIRS`: `skills/`, `agents/`, `commands/` ↔ `~/.claude/{skills,agents,commands}/`. A tracked directory that doesn't yet exist on the source side is skipped (not created) — e.g. `commands/` is tracked but currently empty and won't be mirrored until it has contents.
+- `DIR_PAIRS`: `skills/`, `agents/`, `commands/`, `pipeline/` ↔ `~/.claude/{skills,agents,commands,pipeline}/`. A tracked directory that doesn't yet exist on the source side is skipped (not created) — e.g. `commands/` is tracked but currently empty and won't be mirrored until it has contents.
 
 ## Directory mirroring caveat
 
@@ -27,9 +27,9 @@ The `ghgremlin` skill invokes [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin
 
 ## The local gremlin
 
-The `localgremlin` skill runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via [`skills/localgremlin/localgremlin.py`](skills/localgremlin/localgremlin.py). All artifacts land in `~/.local/state/claude-gremlins/<id>/artifacts/` off the product branch. `--plan <path>` skips the plan stage and uses the supplied file as the plan.
+The `localgremlin` skill runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via the [`pipeline`](pipeline/) package (`python -m pipeline.cli local`). All artifacts land in `~/.local/state/claude-gremlins/<id>/artifacts/` off the product branch. `--plan <path>` skips the plan stage and uses the supplied file as the plan.
 
-The review-code and address-code stage bodies live in [`skills/localgremlin/_core.py`](skills/localgremlin/_core.py) alongside the orchestrator, so the standalone `/localreview` and `/localaddress` skills execute the same code as the gremlin's review and address stages.
+The orchestrator main and stage bodies live under [`pipeline/orchestrators/local.py`](pipeline/orchestrators/local.py) and [`pipeline/stages/`](pipeline/stages/); the standalone `/localreview` and `/localaddress` skills dispatch to `pipeline.cli review` / `pipeline.cli address` so all three callers execute the same code. The skill scripts under `skills/localgremlin/` are thin shims that exec into `pipeline.cli`.
 
 ## Additional skills
 

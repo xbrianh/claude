@@ -137,12 +137,26 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         die "gremlin $RESUME_GR_ID finished successfully — nothing to resume"
     fi
 
+    # Per-kind dispatch resolution. Migrated kinds run via `pipeline.cli`;
+    # not-yet-migrated kinds still resolve a per-kind script. Phases 3 and 4
+    # flip ghgremlin and bossgremlin to the pipeline path; the loop fallback
+    # disappears entirely once all three kinds are migrated.
     PIPELINE=""
-    for ext in py sh; do
-        candidate="$HOME/.claude/skills/$RESUME_KIND/$RESUME_KIND.$ext"
-        if [[ -x "$candidate" ]]; then PIPELINE="$candidate"; break; fi
-    done
-    [[ -n "$PIPELINE" ]] || die "no executable gremlin at $HOME/.claude/skills/$RESUME_KIND/$RESUME_KIND.{py,sh}"
+    KIND_SUBCOMMAND=""
+    USE_PIPELINE=0
+    case "$RESUME_KIND" in
+        localgremlin)
+            KIND_SUBCOMMAND="local"
+            USE_PIPELINE=1
+            ;;
+        *)
+            for ext in py sh; do
+                candidate="$HOME/.claude/skills/$RESUME_KIND/$RESUME_KIND.$ext"
+                if [[ -x "$candidate" ]]; then PIPELINE="$candidate"; break; fi
+            done
+            [[ -n "$PIPELINE" ]] || die "no executable gremlin at $HOME/.claude/skills/$RESUME_KIND/$RESUME_KIND.{py,sh}"
+            ;;
+    esac
 
     # If the gremlin crashed before set-stage was called, .stage is literally
     # "starting" (the initial state.json value). Rewind to the first stage.
@@ -229,12 +243,24 @@ if [[ -n "$RESUME_GR_ID" ]]; then
 
     (
         cd "$WORKDIR"
-        if [[ $_has_plan -eq 1 ]]; then
-            nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
-                -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" </dev/null >>"$STATE_DIR/log" 2>&1 &
+        if [[ $USE_PIPELINE -eq 1 ]]; then
+            if [[ $_has_plan -eq 1 ]]; then
+                PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" \
+                nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                    -- "$KIND_SUBCOMMAND" "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" </dev/null >>"$STATE_DIR/log" 2>&1 &
+            else
+                PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" \
+                nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                    -- "$KIND_SUBCOMMAND" "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
+            fi
         else
-            nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
-                -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
+            if [[ $_has_plan -eq 1 ]]; then
+                nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                    -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" </dev/null >>"$STATE_DIR/log" 2>&1 &
+            else
+                nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                    -- "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
+            fi
         fi
         echo $! >"$STATE_DIR/pid"
     )
@@ -278,12 +304,26 @@ if [[ "$KIND" == "ghgremlin" ]]; then
     command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 fi
 
+# Per-kind dispatch resolution. Migrated kinds run via `pipeline.cli`;
+# not-yet-migrated kinds still resolve a per-kind script. Phases 3 and 4
+# flip ghgremlin and bossgremlin to the pipeline path; the loop fallback
+# disappears entirely once all three kinds are migrated.
 PIPELINE=""
-for ext in py sh; do
-    candidate="$HOME/.claude/skills/$KIND/$KIND.$ext"
-    if [[ -x "$candidate" ]]; then PIPELINE="$candidate"; break; fi
-done
-[[ -n "$PIPELINE" ]] || die "no executable gremlin at $HOME/.claude/skills/$KIND/$KIND.{py,sh}"
+KIND_SUBCOMMAND=""
+USE_PIPELINE=0
+case "$KIND" in
+    localgremlin)
+        KIND_SUBCOMMAND="local"
+        USE_PIPELINE=1
+        ;;
+    *)
+        for ext in py sh; do
+            candidate="$HOME/.claude/skills/$KIND/$KIND.$ext"
+            if [[ -x "$candidate" ]]; then PIPELINE="$candidate"; break; fi
+        done
+        [[ -n "$PIPELINE" ]] || die "no executable gremlin at $HOME/.claude/skills/$KIND/$KIND.{py,sh}"
+        ;;
+esac
 
 if PROJECT_ROOT=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null); then
     IS_GIT=1
@@ -594,8 +634,14 @@ export PIPELINE GR_ID
 # the terminal state.
 (
     cd "$WORKDIR"
-    nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
-        -- "$@" </dev/null >"$STATE_DIR/log" 2>&1 &
+    if [[ $USE_PIPELINE -eq 1 ]]; then
+        PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" \
+        nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+            -- "$KIND_SUBCOMMAND" "$@" </dev/null >"$STATE_DIR/log" 2>&1 &
+    else
+        nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+            -- "$@" </dev/null >"$STATE_DIR/log" 2>&1 &
+    fi
     echo $! >"$STATE_DIR/pid"
 )
 
