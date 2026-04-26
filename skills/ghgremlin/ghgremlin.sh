@@ -447,10 +447,20 @@ Implement the plan above by making the code changes in this repo. You may commit
   # Tolerant adapter: implement may have committed checkpoints (a normal
   # coding-agent pattern on multi-step plans) or left work uncommitted. Both
   # are recoverable. Empty state is still a hard error — there's nothing to PR.
+  #
+  # We treat HEAD as "advanced" only when PRE_HEAD is an ancestor of POST_HEAD
+  # — i.e., implement built fast-forward commits on top of where we started.
+  # If implement instead checked out a different ref or rebased onto a
+  # divergent base, the hand-off / rename / push flow below would silently
+  # reframe unrelated commits as the PR's contents, so we hard-fail instead.
   POST_HEAD=$(git rev-parse HEAD)
   IMPL_HEAD_ADVANCED=0
   if [[ "$POST_HEAD" != "$PRE_HEAD" ]]; then
-    IMPL_HEAD_ADVANCED=1
+    if git merge-base --is-ancestor "$PRE_HEAD" "$POST_HEAD"; then
+      IMPL_HEAD_ADVANCED=1
+    else
+      die "implementation changed HEAD from $PRE_HEAD to $POST_HEAD without advancing from the starting commit; refusing to treat this as committed work to hand off"
+    fi
   fi
   if [[ "$IMPL_HEAD_ADVANCED" == "0" && -z "$(git status --porcelain)" ]]; then
     die "implementation step produced no changes; refusing to open empty PR"
@@ -463,17 +473,29 @@ Implement the plan above by making the code changes in this repo. You may commit
   # PRE_HEAD so the implementation commits don't leak onto the chain's
   # start ref.
   #
+  # Caveat for direct (non-launch.sh) callers: the `git branch -f
+  # "$PRE_BRANCH" "$PRE_HEAD"` below is a destructive rewrite of the local
+  # branch ref. In the launch.sh worktree path PRE_BRANCH is empty (--detach)
+  # and the reset is a no-op, but a direct invocation from a named branch
+  # will see that branch silently moved back to PRE_HEAD; any local-only
+  # state reachable only through that ref name (and not via a tag, another
+  # branch, or HANDOFF_BRANCH) will only be findable via reflog afterward.
+  #
   # Manual repro for this path: in a worktree, run `claude -p "$prompt"` with
   # a prompt instructing the agent to make a commit, then re-enter this
   # script at the implement-stage tail; HEAD-advanced should produce a
   # hand-off branch and a clean original-ref reset, not a die().
   HANDOFF_BRANCH=""
+  _commit_count=0
   if [[ "$IMPL_HEAD_ADVANCED" == "1" ]]; then
     HANDOFF_BRANCH="ghgremlin-impl-handoff-$$"
     if git show-ref --verify --quiet "refs/heads/$HANDOFF_BRANCH"; then
       die "hand-off branch $HANDOFF_BRANCH already exists; refusing to clobber"
     fi
-    git switch -c "$HANDOFF_BRANCH" >/dev/null 2>&1 \
+    # Let stderr through so the underlying git diagnostic (index-write
+    # failure, checkout conflict, etc.) surfaces in the run log; the generic
+    # die message alone leaves operators without enough to debug from.
+    git switch -c "$HANDOFF_BRANCH" >/dev/null \
       || die "could not create hand-off branch $HANDOFF_BRANCH"
     if [[ -n "$PRE_BRANCH" ]]; then
       git branch -f "$PRE_BRANCH" "$PRE_HEAD" \
@@ -502,11 +524,26 @@ if run_stage commit-pr; then
   # Two action shapes depending on what implement left behind. The hand-off
   # branch only exists when implement committed during its run; otherwise
   # we fall through to the original "create branch + commit + push" prompt.
+  # `_commit_count` was computed at the implement-stage tail above and is
+  # still accurate here — nothing between then and now mutates the worktree.
+  #
+  # Default-branch assumption: in the HEAD-advanced path, the renamed branch
+  # descends from PRE_HEAD rather than being branched off origin/<default>.
+  # Under launch.sh's detached worktree PRE_HEAD ≡ the chain start ref (the
+  # default branch tip in the common case), so `gh pr create` infers the
+  # correct base. A direct invocation of ghgremlin.sh from a feature branch
+  # ahead of the default branch would otherwise carry pre-existing commits
+  # into the PR diff, so the prompt below names the default branch as the
+  # PR base explicitly to keep that case honest.
   if [[ "${IMPL_HEAD_ADVANCED:-0}" == "1" ]]; then
-    _commits_count=$(git rev-list --count "$PRE_HEAD..HEAD")
-    _action_clause="The implementation work is already committed on the current branch ('$HANDOFF_BRANCH'), with ${_commits_count} commit(s) above $PRE_HEAD. Rename the current branch with 'git branch -m <new-name>', push it with 'git push -u origin <new-name>', and open a PR with 'gh pr create'. Do NOT make additional commits unless required to add the 'Closes #N' line — if needed, amend the most recent commit with 'git commit --amend'."
+    _worktree_status=$(git status --porcelain)
+    if [[ -z "$_worktree_status" ]]; then
+      _action_clause="The implementation work is already committed on the current branch ('$HANDOFF_BRANCH'), with ${_commit_count} commit(s) above $PRE_HEAD. Rename the current branch with 'git branch -m <new-name>', push it with 'git push -u origin <new-name>', and open a PR against the default branch with 'gh pr create --base <default-branch>'. Do NOT make additional commits unless required to add the 'Closes #N' line — if needed, amend the most recent commit with 'git commit --amend'."
+    else
+      _action_clause="The implementation work is partially committed on the current branch ('$HANDOFF_BRANCH'), with ${_commit_count} commit(s) above $PRE_HEAD plus uncommitted local changes still in the worktree. Rename the current branch with 'git branch -m <new-name>'. Include the remaining changes before pushing — either amend the most recent commit with 'git commit --amend' (if they belong with that commit) or create a new commit. Then push with 'git push -u origin <new-name>' and open a PR against the default branch with 'gh pr create --base <default-branch>'. Make sure both the existing commits and the previously-uncommitted changes end up in the PR."
+    fi
   else
-    _action_clause="Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR with 'gh pr create'."
+    _action_clause="Create a new branch from the default branch, commit all changes with a descriptive message, push the branch, and open a PR against the default branch with 'gh pr create --base <default-branch>'."
   fi
 
   _pr_prompt="$_action_clause $_branch_clause $_closes_clause Print ONLY the PR URL on the final line of your response."
