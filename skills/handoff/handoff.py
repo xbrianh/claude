@@ -361,8 +361,36 @@ def main(argv: List[str]) -> int:
         print(f"    updated plan: {out_path}", flush=True)
         print(f"    signal file:  {signal_path}", flush=True)
 
-    followups = state.get("operator_followups") or []
-    if isinstance(followups, list) and followups:
+    # Validate and normalize operator_followups. The agent prompt requires
+    # this field on every exit state as a list of one-line strings; warn
+    # loudly (rather than silently coerce) if it's missing or the wrong
+    # shape, since silent drops here lose operator tasks the human owes.
+    raw_followups = state.get("operator_followups", "__missing__")
+    if raw_followups == "__missing__":
+        sys.stderr.write(
+            "warning: signal file is missing required field 'operator_followups'; "
+            "treating as empty list\n"
+        )
+        followups: List[str] = []
+    elif not isinstance(raw_followups, list):
+        sys.stderr.write(
+            f"warning: signal file 'operator_followups' is not a list "
+            f"(got {type(raw_followups).__name__}); treating as empty\n"
+        )
+        followups = []
+    else:
+        followups = []
+        for item in raw_followups:
+            if not isinstance(item, str):
+                sys.stderr.write(
+                    f"warning: signal file 'operator_followups' contains a "
+                    f"non-string entry ({type(item).__name__}); coercing to str\n"
+                )
+                item = str(item)
+            item = item.strip()
+            if item:
+                followups.append(item)
+    if followups:
         print(f"    operator follow-ups ({len(followups)}):", flush=True)
         for item in followups:
             print(f"      - {item}", flush=True)
