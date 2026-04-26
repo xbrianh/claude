@@ -155,19 +155,19 @@ def run_triple_review(
         ReviewWorker(
             client=client, model=model_a, out_file=out_a, focus=focus_a,
             context=context, where_field=where_field,
-            label=f"review-code:{model_a}",
+            label=f"review-code:{lens_keys[0]}:{model_a}",
             raw_path=session_dir / f"stream-review-code-{lens_keys[0]}-{model_a}.jsonl",
         ),
         ReviewWorker(
             client=client, model=model_b, out_file=out_b, focus=focus_b,
             context=context, where_field=where_field,
-            label=f"review-code:{model_b}",
+            label=f"review-code:{lens_keys[1]}:{model_b}",
             raw_path=session_dir / f"stream-review-code-{lens_keys[1]}-{model_b}.jsonl",
         ),
         ReviewWorker(
             client=client, model=model_c, out_file=out_c, focus=focus_c,
             context=context, where_field=where_field,
-            label=f"review-code:{model_c}",
+            label=f"review-code:{lens_keys[2]}:{model_c}",
             raw_path=session_dir / f"stream-review-code-{lens_keys[2]}-{model_c}.jsonl",
         ),
     ]

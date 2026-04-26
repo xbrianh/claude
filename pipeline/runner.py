@@ -17,10 +17,12 @@ import signal
 import sys
 from typing import Callable, List, Optional, Sequence, Tuple
 
+from .clients.claude import ClaudeClient
+
 Stage = Tuple[str, Callable[[], None]]
 
 
-def install_signal_handlers(client) -> None:
+def install_signal_handlers(client: ClaudeClient) -> None:
     """Register SIGINT/SIGTERM handlers that reap claude children before
     exit. Pass the live ClaudeClient (real or fake) — its ``reap_all`` is
     what gets called."""

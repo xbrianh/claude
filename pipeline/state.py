@@ -67,21 +67,23 @@ def set_stage(stage: str, sub_stage=None) -> None:
 def resolve_session_dir() -> pathlib.Path:
     """Resolve the artifacts directory for the current run.
 
-    Under a gremlin (``GR_ID`` set), nests under
+    Under a gremlin (``GR_ID`` set and valid), nests under
     ``$STATE_ROOT/<gr_id>/artifacts/`` so the launcher's state.json and the
-    pipeline artifacts share a parent. Direct invocations have no GR_ID and
-    nest under ``$STATE_ROOT/direct/<ts>-<rand>/artifacts/`` so they're
-    visually separated from real gremlins and can be pruned on a simpler
-    age-based heuristic.
+    pipeline artifacts share a parent. Direct invocations (no ``GR_ID``, or a
+    malformed ``GR_ID`` treated as absent rather than raising) nest under
+    ``$STATE_ROOT/direct/<ts>-<rand>/artifacts/`` so they're visually separated
+    from real gremlins and can be pruned on a simpler age-based heuristic.
     """
     state_root = pathlib.Path(
         os.environ.get("XDG_STATE_HOME")
         or os.path.join(os.path.expanduser("~"), ".local", "state")
     ) / "claude-gremlins"
     gr_id = os.environ.get("GR_ID", "")
+    if gr_id and not GR_ID_RE.match(gr_id):
+        # Malformed GR_ID — treat as a direct invocation rather than raising a
+        # raw Python traceback for malformed environment input.
+        gr_id = ""
     if gr_id:
-        if not GR_ID_RE.match(gr_id):
-            raise ValueError(f"invalid GR_ID: {gr_id}")
         session_dir = state_root / gr_id / "artifacts"
     else:
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")

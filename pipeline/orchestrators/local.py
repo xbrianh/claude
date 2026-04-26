@@ -38,7 +38,8 @@ VALID_RESUME_STAGES = ["plan", "implement", "review-code", "address-code"]
 
 # `pragmatic-developer.md` is sourced from the synced agents/ dir under
 # ~/.claude. The package lives at ~/.claude/pipeline/, so the agent file
-# is two parents up from this module's location.
+# is three parents up from this module's location:
+# local.py → orchestrators/ → pipeline/ → ~/.claude/
 AGENT_FILE = (
     pathlib.Path(__file__).resolve().parent.parent.parent
     / "agents"
