@@ -418,6 +418,35 @@ def get_child_bail_reason(child_id: str) -> str:
         return ""
 
 
+def get_child_bail_detail(child_id: str) -> str:
+    state_path = os.path.join(STATE_ROOT, child_id, "state.json")
+    if not os.path.isfile(state_path):
+        return ""
+    try:
+        state = load_json(state_path)
+        return state.get("bail_detail") or ""
+    except Exception:
+        return ""
+
+
+def _summarize_for_log(text: str, limit: int = 240) -> str:
+    """Collapse to one line + cap length for boss-log readability.
+
+    bail_detail is whatever the headless rescue agent (or upstream wrapper)
+    chose to put there. Headless rescue normalizes its own marker summary,
+    but other writers (set-bail.sh, future stages) are not strongly
+    enforced — keep the boss log resilient against multi-line or runaway
+    text without losing the underlying field in state.json (which we
+    deliberately don't truncate).
+    """
+    if not text:
+        return ""
+    one_line = " ".join(text.split()).strip()
+    if len(one_line) > limit:
+        return one_line[: limit - 3] + "..."
+    return one_line
+
+
 def land_child(child_id: str) -> bool:
     gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
     if not os.access(gremlins, os.X_OK):
@@ -643,7 +672,41 @@ def main(argv):
             set_stage(gr_id, "rescuing")
             if not rescue_child(current_child_id):
                 bail_reason = get_child_bail_reason(current_child_id)
-                log(f"rescue refused for {current_child_id} ({bail_reason or 'no bail_reason'})")
+                bail_detail = _summarize_for_log(
+                    get_child_bail_detail(current_child_id)
+                )
+                # `structural` is distinct from `unsalvageable`: the agent
+                # recognized a real bug in the pipeline source or a sibling
+                # artifact (e.g. a child plan) that the chain *can* be salvaged
+                # from with a human edit, but the agent isn't the right actor.
+                # `unsalvageable` means the run is dead and giving up. Surface
+                # the difference in the boss log so an operator skimming a
+                # finished chain can tell whether to look at the pipeline or
+                # write off the run. The agent's diagnosis (bail_detail) is
+                # the actionable bit — keep our preamble terse so it doesn't
+                # bury the diagnosis line below.
+                if bail_reason == "structural":
+                    log(
+                        f"child {current_child_id} bailed: STRUCTURAL — "
+                        f"pipeline/sibling-artifact bug, human edit required"
+                    )
+                    if bail_detail:
+                        log(f"  diagnosis: {bail_detail}")
+                elif bail_reason == "unsalvageable":
+                    log(
+                        f"child {current_child_id} bailed: UNSALVAGEABLE — run "
+                        f"cannot be recovered (giving up)"
+                    )
+                    if bail_detail:
+                        log(f"  detail: {bail_detail}")
+                else:
+                    # Other headless-rescue bail reasons (`phase_a_*`,
+                    # `attempts_exhausted`, `excluded_class:*`) also populate
+                    # bail_detail; surface it so the chain log isn't silent
+                    # about *why* rescue refused.
+                    log(f"rescue refused for {current_child_id} ({bail_reason or 'no bail_reason'})")
+                    if bail_detail:
+                        log(f"  detail: {bail_detail}")
                 boss_state["children"].append({
                     "id": current_child_id,
                     "outcome": f"bailed:{bail_reason}" if bail_reason else "bailed",
