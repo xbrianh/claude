@@ -454,13 +454,23 @@ def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
         f"  worktree. Look here when the failure smells like a code-level issue in",
         f"  the orchestrator rather than a problem with the gremlin's own state.",
         "",
-        f"- **Worktree** (the failed gremlin's checkout, may lag behind `main`):",
-        f"    - `{workdir}` — the gremlin runs here at the chain's base ref.",
+        f"- **Worktree** (the failed gremlin's checkout, may lag behind the default branch):",
+    ]
+    if workdir:
+        context_lines.append(
+            f"    - `{workdir}` — the gremlin runs here at the chain's base ref."
+        )
+    else:
+        context_lines.append(
+            f"    - (no workdir recorded in state — skip this section)"
+        )
+    pr_quoted = f'"{project_root}"' if project_root else "<project_root>"
+    context_lines += [
         "",
-        f"- **Product repo at current `main`** (catches fixes that landed after the",
-        f"  chain started — the worktree's base ref will not see them):",
-        f"    - `git -C {project_root or '<project_root>'} log -20 main`",
-        f"    - `git -C {project_root or '<project_root>'} diff <base-ref>..main`",
+        f"- **Product repo at current default branch** (catches fixes that landed",
+        f"  after the chain started — the worktree's base ref will not see them):",
+        f"    - `git -C {pr_quoted} log -20 origin/HEAD`",
+        f"    - `git -C {pr_quoted} diff \"$(git -C {pr_quoted} merge-base HEAD origin/HEAD)\"..origin/HEAD`",
         f"  Use this when you suspect the failure was already addressed elsewhere.",
     ]
     if parent_state_dir:
@@ -505,8 +515,8 @@ Parent (boss) id: {parent_id or '(none)'}
 ## What to do (headless mode — no human is watching)
 
 1. Diagnose the failure. Read the relevant items from the **Inspect before deciding**
-   list above; do not skip the pipeline-source / current-`main` / parent-state checks
-   when the log alone does not make the root cause obvious.
+   list above; do not skip the pipeline-source / current-default-branch / parent-state
+   checks when the log alone does not make the root cause obvious.
 2. Decide which verdict applies. The bar for each one is strict — picking the wrong
    verdict means the chain either resumes into the same failure or halts when it
    could have continued.
@@ -528,8 +538,8 @@ Parent (boss) id: {parent_id or '(none)'}
      and *why* a fix elsewhere is required — the operator will read your summary.
    - **unsalvageable**: reserved for genuinely unrecoverable states — corrupted
      state dir, missing worktree, conflicting git state with no clean rewind.
-     This should be rare. If you are tempted to pick `unsalvageable` because the
-     fix isn't in `state.json`, you almost certainly want `structural` instead.
+     This should be rare. If the fix isn't a `state.json` or worktree edit you
+     can make here, you almost certainly want `structural` instead.
 3. Write a marker file to **exactly** this path:
 
        {marker_path}
@@ -556,8 +566,9 @@ Constraints for headless mode:
 - Do NOT prompt for input; there is no TTY.
 - Do NOT call `exit` or otherwise abort — finish normally so the wrapper can read the marker.
 - If you cannot write the marker file, the wrapper will treat that as an unsalvageable failure.
-- Permitted edits: `state.json` at `{state_file_path}`, files inside the
-  worktree at `{workdir or '(unknown)'}`, and your scratch working directory.
+- Permitted edits: `state.json` at `{state_file_path}`{(", files inside the worktree at `" + workdir + "`") if workdir else ""}, the marker file at
+  `{marker_path}` (you MUST write this — that's how the wrapper reads your
+  verdict), and your scratch working directory.
   Pipeline source under `~/.claude/skills/` is read-only for this rescue —
   surface bugs there via `structural`.
 """
@@ -566,10 +577,9 @@ Constraints for headless mode:
 ## What to do
 
 1. Diagnose the failure. Read the relevant items from the **Inspect before deciding**
-   list above; do not skip the pipeline-source / current-`main` / parent-state checks
-   when the log alone does not make the root cause obvious.
-2. Permitted fixes are edits to `state.json` at `{state_file_path}` or files inside
-   the gremlin's worktree at `{workdir or '(unknown)'}`. Pipeline source under
+   list above; do not skip the pipeline-source / current-default-branch / parent-state
+   checks when the log alone does not make the root cause obvious.
+2. Permitted fixes are edits to `state.json` at `{state_file_path}`{(" or files inside the gremlin's worktree at `" + workdir + "`") if workdir else ""}. Pipeline source under
    `~/.claude/skills/` is mirrored from a source repo and would be clobbered by the
    next sync — if that's where the fix belongs, say so clearly in your final message
    and leave everything untouched; the operator must Ctrl-C during Phase A to prevent
@@ -696,7 +706,21 @@ def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
         return "bad_marker", "marker file is not a JSON object"
 
     status = marker.get("status")
-    summary = marker.get("summary") or ""
+    raw_summary = marker.get("summary", "")
+    # Normalize summary: must be a string. We persist it into state.json as
+    # bail_detail and print it in logs (plain text, single line for boss
+    # log readability), so reject objects/arrays and collapse whitespace
+    # rather than letting a chatty agent inject newlines into our logs.
+    if raw_summary is None:
+        summary = ""
+    elif isinstance(raw_summary, str):
+        summary = " ".join(raw_summary.split()).strip()
+        # Cap to a sane length so a runaway summary can't blow up logs.
+        if len(summary) > 500:
+            summary = summary[:497] + "..."
+    else:
+        return "bad_marker", f"marker summary must be a string, got {type(raw_summary).__name__}"
+
     if status not in ("fixed", "transient", "structural", "unsalvageable"):
         return "bad_marker", f"marker has invalid status: {status!r}"
 
@@ -704,7 +728,10 @@ def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
         return status, summary or "agent declared failure structural"
     if status == "unsalvageable":
         return status, summary or "agent declared failure unsalvageable"
-    return status, ""
+    # `fixed` / `transient`: also surface the agent's own description of
+    # what they changed (or why no change was needed) so the operator log
+    # records the diagnosis, not just that there was one.
+    return status, summary
 
 
 def do_rescue(target: str, headless: bool = False) -> bool:
@@ -859,8 +886,12 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 return False
             # status == "fixed" or "transient" → proceed to Phase B. Both count
             # as a rescue attempt; the launcher increments rescue_count when it
-            # actually relaunches.
-            print(f"Phase A complete (status: {status}); handing off to Phase B...")
+            # actually relaunches. err_msg carries the agent's summary on the
+            # success path so a post-mortem reader can see WHAT was diagnosed.
+            if err_msg:
+                print(f"Phase A complete (status: {status}, diagnosis: {err_msg}); handing off to Phase B...")
+            else:
+                print(f"Phase A complete (status: {status}); handing off to Phase B...")
         else:
             print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
             print()
