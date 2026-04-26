@@ -584,3 +584,4 @@ Claude session for this project when it finishes.
 EOF
 } >&$( [[ $PRINT_ID -eq 1 ]] && echo 2 || echo 1 )
 [[ $PRINT_ID -eq 1 ]] && printf '%s\n' "$GR_ID"
+exit 0
