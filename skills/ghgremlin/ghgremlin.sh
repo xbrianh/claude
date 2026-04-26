@@ -488,6 +488,19 @@ Implement the plan above by making the code changes in this repo. You may commit
   HANDOFF_BRANCH=""
   _commit_count=0
   if [[ "$IMPL_HEAD_ADVANCED" == "1" ]]; then
+    # Sweep stale hand-off branches from prior crashed runs. A run that died
+    # between `git switch -c` below and commit-pr's `git branch -m` leaves
+    # its branch under the dead PID's name; the new run picks a fresh PID
+    # so the live work isn't blocked, but the stale branch lingers as cruft.
+    # `git branch -D` refuses to delete a branch checked out in any worktree,
+    # so concurrent gremlins are safe.
+    while IFS= read -r _stale; do
+      [[ -n "$_stale" ]] || continue
+      if git branch -D "$_stale" 2>/dev/null; then
+        echo "    swept stale hand-off branch: $_stale"
+      fi
+    done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/ghgremlin-impl-handoff-*')
+
     HANDOFF_BRANCH="ghgremlin-impl-handoff-$$"
     if git show-ref --verify --quiet "refs/heads/$HANDOFF_BRANCH"; then
       die "hand-off branch $HANDOFF_BRANCH already exists; refusing to clobber"
