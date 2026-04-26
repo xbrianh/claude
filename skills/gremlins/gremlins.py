@@ -1366,7 +1366,7 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
     r = subprocess.run(
         ["gh", "pr", "view", pr_url, "--json",
          "state,mergeable,reviewDecision,statusCheckRollup"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, cwd=cwd,
     )
     if r.returncode != 0:
         print(f"error: could not fetch PR info: {r.stderr.strip()}")
@@ -1417,7 +1417,7 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
         time.sleep(5)
         r = subprocess.run(
             ["gh", "pr", "view", pr_url, "--json", "mergeable"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, cwd=cwd,
         )
         if r.returncode == 0:
             try:
@@ -1433,7 +1433,7 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
     print(f"Merging: {pr_url}")
     r = subprocess.run(
         ["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, cwd=cwd,
     )
     if r.returncode != 0:
         if "already merged" in r.stdout.lower() or "already merged" in r.stderr.lower():
