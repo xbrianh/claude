@@ -418,6 +418,17 @@ def get_child_bail_reason(child_id: str) -> str:
         return ""
 
 
+def get_child_bail_detail(child_id: str) -> str:
+    state_path = os.path.join(STATE_ROOT, child_id, "state.json")
+    if not os.path.isfile(state_path):
+        return ""
+    try:
+        state = load_json(state_path)
+        return state.get("bail_detail") or ""
+    except Exception:
+        return ""
+
+
 def land_child(child_id: str) -> bool:
     gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
     if not os.access(gremlins, os.X_OK):
@@ -643,7 +654,32 @@ def main(argv):
             set_stage(gr_id, "rescuing")
             if not rescue_child(current_child_id):
                 bail_reason = get_child_bail_reason(current_child_id)
-                log(f"rescue refused for {current_child_id} ({bail_reason or 'no bail_reason'})")
+                bail_detail = get_child_bail_detail(current_child_id)
+                # `structural` is distinct from `unsalvageable`: the agent
+                # recognized a real bug in the pipeline source or a sibling
+                # artifact (e.g. a child plan) that the chain *can* be salvaged
+                # from with a human edit, but the agent isn't the right actor.
+                # `unsalvageable` means the run is dead and giving up. Surface
+                # the difference in the boss log so an operator skimming a
+                # finished chain can tell whether to look at the pipeline or
+                # write off the run.
+                if bail_reason == "structural":
+                    log(
+                        f"child {current_child_id} bailed: STRUCTURAL — points at a "
+                        f"bug in the pipeline source or a sibling artifact that "
+                        f"needs a human edit elsewhere"
+                    )
+                    if bail_detail:
+                        log(f"  diagnosis: {bail_detail}")
+                elif bail_reason == "unsalvageable":
+                    log(
+                        f"child {current_child_id} bailed: UNSALVAGEABLE — run "
+                        f"cannot be recovered (giving up)"
+                    )
+                    if bail_detail:
+                        log(f"  detail: {bail_detail}")
+                else:
+                    log(f"rescue refused for {current_child_id} ({bail_reason or 'no bail_reason'})")
                 boss_state["children"].append({
                     "id": current_child_id,
                     "outcome": f"bailed:{bail_reason}" if bail_reason else "bailed",

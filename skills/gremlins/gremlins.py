@@ -422,10 +422,59 @@ def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
     kind = state.get("kind", "localgremlin")
     stage = state.get("stage") or "unknown"
     description = state.get("description") or ""
+    project_root = state.get("project_root") or ""
+    workdir = state.get("workdir") or ""
+    parent_id = state.get("parent_id") or ""
 
     stages = GREMLIN_STAGES.get(kind, [])
 
     log_tail_safe = log_tail.replace("```", "` ` `")
+
+    pipeline_paths = [
+        (f"~/.claude/skills/{kind}/", f"shell/python that drives the {kind} stages"),
+        ("~/.claude/skills/_bg/", "shared launcher, finish, set-stage, set-bail wrappers"),
+    ]
+    parent_state_dir = (
+        os.path.join(STATE_ROOT, parent_id) if parent_id else ""
+    )
+
+    context_lines = [
+        "## Inspect before deciding",
+        "",
+        "The log above is a starting point, not the whole story. Read whichever of",
+        "these are relevant before forming a verdict — narrow context is the most",
+        "common cause of a wrong call:",
+        "",
+        f"- **Pipeline source actually executing** (read-only — see `fixed` rules below):",
+    ]
+    for path, purpose in pipeline_paths:
+        context_lines.append(f"    - `{path}` ({purpose})")
+    context_lines += [
+        f"  Bugs in the pipeline often surface as confusing failure logs in the",
+        f"  worktree. Look here when the failure smells like a code-level issue in",
+        f"  the orchestrator rather than a problem with the gremlin's own state.",
+        "",
+        f"- **Worktree** (the failed gremlin's checkout, may lag behind `main`):",
+        f"    - `{workdir}` — the gremlin runs here at the chain's base ref.",
+        "",
+        f"- **Product repo at current `main`** (catches fixes that landed after the",
+        f"  chain started — the worktree's base ref will not see them):",
+        f"    - `git -C {project_root or '<project_root>'} log -20 main`",
+        f"    - `git -C {project_root or '<project_root>'} diff <base-ref>..main`",
+        f"  Use this when you suspect the failure was already addressed elsewhere.",
+    ]
+    if parent_state_dir:
+        context_lines += [
+            "",
+            f"- **Parent boss state dir** (this gremlin is a child of boss `{parent_id}`):",
+            f"    - `{parent_state_dir}/boss_state.json` — chain progress, prior children",
+            f"    - `{parent_state_dir}/handoff-*.md` — rolling plan documents",
+            f"    - `{parent_state_dir}/handoff-*-child.md` — sibling child plans (the",
+            f"      plan handed to *this* child may itself be the source of the failure)",
+            f"    - `{parent_state_dir}/log` — boss lifecycle events",
+        ]
+    context_lines.append("")
+    context_block = "\n".join(context_lines)
 
     head = f"""You are diagnosing a failed background gremlin so it can resume.
 
@@ -435,6 +484,10 @@ Kind: {kind}
 Description: {description}
 Failed at stage: {stage}
 Stage order for {kind}: {' → '.join(stages)}
+State dir: {os.path.dirname(state_file_path)}
+Worktree: {workdir or '(unknown)'}
+Project root: {project_root or '(unknown)'}
+Parent (boss) id: {parent_id or '(none)'}
 
 ## Failure log (last ~200 lines)
 
@@ -443,25 +496,49 @@ Stage order for {kind}: {' → '.join(stages)}
 ```
 {log_tail_safe}
 ```
+
+{context_block}
 """
 
     if headless:
         return head + f"""
 ## What to do (headless mode — no human is watching)
 
-1. Diagnose the failure from the log above.
-2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, declare `unsalvageable`.
-3. Decide which of these applies:
-   - **fixed**: you edited `state.json` to resolve the failure; rerunning stage {stage} should now succeed.
-   - **transient**: the failure was a flake (network, tool timeout, retriable infra). No change needed; rerunning the same stage as-is should succeed.
-   - **unsalvageable**: the failure cannot be fixed by patching `state.json` alone. Do NOT make any other changes.
-4. Write a marker file to **exactly** this path:
+1. Diagnose the failure. Read the relevant items from the **Inspect before deciding**
+   list above; do not skip the pipeline-source / current-`main` / parent-state checks
+   when the log alone does not make the root cause obvious.
+2. Decide which verdict applies. The bar for each one is strict — picking the wrong
+   verdict means the chain either resumes into the same failure or halts when it
+   could have continued.
+   - **fixed**: you edited `state.json` (at `{state_file_path}`) or files inside
+     the gremlin's worktree to resolve the failure; rerunning stage {stage} should
+     now succeed. **Do NOT edit pipeline source under `~/.claude/skills/`** — those
+     paths are mirrored from a source repo and your changes would be clobbered on
+     the next sync. If the fix lives in pipeline source, choose `structural`.
+   - **transient**: the failure was a flake (network, tool timeout, retriable
+     infra) OR a fix has already landed elsewhere (e.g. in `main`, in a synced
+     `~/.claude/skills/` file) that the chain's pre-fix base ref doesn't see.
+     No change needed; rerunning the same stage as-is should succeed.
+   - **structural**: the failure points at a real bug in the pipeline source
+     (`~/.claude/skills/<kind>/*.sh`, `~/.claude/skills/_bg/*.sh`, or the
+     associated python) or in a sibling artifact (e.g. a malformed child plan
+     under the parent boss's state dir) that you recognize but cannot fix here.
+     Use this when the remedy is "edit the pipeline" or "edit the child plan",
+     not "tweak `state.json`". Articulate *what* in the pipeline / plan is wrong
+     and *why* a fix elsewhere is required — the operator will read your summary.
+   - **unsalvageable**: reserved for genuinely unrecoverable states — corrupted
+     state dir, missing worktree, conflicting git state with no clean rewind.
+     This should be rare. If you are tempted to pick `unsalvageable` because the
+     fix isn't in `state.json`, you almost certainly want `structural` instead.
+3. Write a marker file to **exactly** this path:
 
        {marker_path}
 
    The marker MUST be a single JSON object with these fields:
-   - `"status"`: one of `"fixed"`, `"transient"`, or `"unsalvageable"` (mapping to the cases above).
-   - `"summary"` (optional): a one-line string explaining your decision.
+   - `"status"`: one of `"fixed"`, `"transient"`, `"structural"`, or `"unsalvageable"`.
+   - `"summary"` (optional, but strongly recommended for `structural` and
+     `unsalvageable`): a one-line string explaining your decision. For
+     `structural`, name the file/function and the bug.
 
    Example:
 
@@ -469,23 +546,37 @@ Stage order for {kind}: {' → '.join(stages)}
    {{"status": "fixed", "summary": "removed bad --model flag from pipeline_args in state.json"}}
    ```
 
-5. Stop. Do NOT re-run the failed stage or any remaining stages yourself — the wrapper reads the marker and (on `fixed`/`transient`) hands off to a background resume that relaunches the pipeline starting at {stage}. On `unsalvageable`, the wrapper writes a bail reason and the gremlin stays terminal.
+4. Stop. Do NOT re-run the failed stage or any remaining stages yourself — the
+   wrapper reads the marker and (on `fixed`/`transient`) hands off to a
+   background resume that relaunches the pipeline starting at {stage}. On
+   `structural` or `unsalvageable`, the wrapper writes a bail reason and the
+   gremlin stays terminal.
 
 Constraints for headless mode:
 - Do NOT prompt for input; there is no TTY.
 - Do NOT call `exit` or otherwise abort — finish normally so the wrapper can read the marker.
 - If you cannot write the marker file, the wrapper will treat that as an unsalvageable failure.
-- Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
+- Permitted edits: `state.json` at `{state_file_path}`, files inside the
+  worktree at `{workdir or '(unknown)'}`, and your scratch working directory.
+  Pipeline source under `~/.claude/skills/` is read-only for this rescue —
+  surface bugs there via `structural`.
 """
 
     return head + f"""
 ## What to do
 
-1. Diagnose the failure from the log above.
-2. Your **only permitted fix** is editing `state.json` at `{state_file_path}` (e.g. removing bad `pipeline_args` entries). If fixing the failure requires anything beyond patching `state.json`, say so clearly in your final message and leave everything untouched; the operator must Ctrl-C during Phase A to prevent the automatic resume.
-3. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you exit successfully, a background resume will relaunch the gremlin pipeline starting at {stage} and complete the rest automatically.
-
-Your working directory is a scratch space. The only file outside it you may touch is `state.json` at `{state_file_path}`.
+1. Diagnose the failure. Read the relevant items from the **Inspect before deciding**
+   list above; do not skip the pipeline-source / current-`main` / parent-state checks
+   when the log alone does not make the root cause obvious.
+2. Permitted fixes are edits to `state.json` at `{state_file_path}` or files inside
+   the gremlin's worktree at `{workdir or '(unknown)'}`. Pipeline source under
+   `~/.claude/skills/` is mirrored from a source repo and would be clobbered by the
+   next sync — if that's where the fix belongs, say so clearly in your final message
+   and leave everything untouched; the operator must Ctrl-C during Phase A to prevent
+   the automatic resume, then patch the source repo before resuming.
+3. STOP. Do NOT re-run the failed stage or any remaining stages yourself — after you
+   exit successfully, a background resume will relaunch the gremlin pipeline starting
+   at {stage} and complete the rest automatically.
 """
 
 
@@ -546,13 +637,15 @@ def _write_bail(sf: str, wdir: str, bail_reason: str, bail_detail: str = "") -> 
 def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
     """Run Phase A non-interactively. Returns (status, error_msg).
 
-    status ∈ {"fixed", "transient", "unsalvageable"} → handled by caller
+    status ∈ {"fixed", "transient", "structural", "unsalvageable"} →
+        handled by caller
     status ∈ {"timeout", "claude_exit", "no_marker", "bad_marker"} →
         Phase A failure modes that should write a bail_reason.
 
     error_msg is empty for the success-shaped statuses ("fixed",
-    "transient") and populated for the failure-shaped ones (including
-    "unsalvageable", which carries the agent's summary if provided).
+    "transient") and populated for the bail-shaped ones (including
+    "structural" and "unsalvageable", which carry the agent's summary
+    if provided).
     """
     env = os.environ.copy()
     # Same rationale as _run_claude_p_text below — keep the session-summary
@@ -604,9 +697,11 @@ def _run_headless_phase_a(workdir: str, prompt: str, marker_path: str):
 
     status = marker.get("status")
     summary = marker.get("summary") or ""
-    if status not in ("fixed", "transient", "unsalvageable"):
+    if status not in ("fixed", "transient", "structural", "unsalvageable"):
         return "bad_marker", f"marker has invalid status: {status!r}"
 
+    if status == "structural":
+        return status, summary or "agent declared failure structural"
     if status == "unsalvageable":
         return status, summary or "agent declared failure unsalvageable"
     return status, ""
@@ -750,6 +845,13 @@ def do_rescue(target: str, headless: bool = False) -> bool:
             if status == "bad_marker":
                 _write_bail(sf, wdir, "phase_a_bad_marker", err_msg)
                 print(f"Phase A marker file invalid: {err_msg}")
+                return False
+            if status == "structural":
+                _write_bail(sf, wdir, "structural", err_msg)
+                print(
+                    f"Phase A: agent flagged a structural problem in the pipeline "
+                    f"or sibling artifacts that requires a human edit ({err_msg})"
+                )
                 return False
             if status == "unsalvageable":
                 _write_bail(sf, wdir, "unsalvageable", err_msg)
