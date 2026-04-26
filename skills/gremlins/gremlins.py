@@ -523,13 +523,16 @@ Parent (boss) id: {parent_id or '(none)'}
    could have continued.
    - **fixed**: you edited `state.json` (at `{state_file_path}`) or files inside
      the gremlin's worktree to resolve the failure; rerunning stage {stage} should
-     now succeed. **Do NOT edit pipeline source under `~/.claude/skills/`** — those
-     paths are mirrored from a source repo and your changes would be clobbered on
-     the next sync. If the fix lives in pipeline source, choose `structural`.
+     now succeed. **Do NOT edit pipeline source under `~/.claude/skills/`** —
+     those paths live outside the gremlin's worktree, so edits there cannot land
+     in the PR diff, and may additionally be overwritten by future syncs from an
+     upstream source repo. If the fix lives in pipeline source, choose
+     `structural`.
    - **transient**: the failure was a flake (network, tool timeout, retriable
-     infra) OR a fix has already landed elsewhere (e.g. in `main`, in a synced
-     `~/.claude/skills/` file) that the chain's pre-fix base ref doesn't see.
-     No change needed; rerunning the same stage as-is should succeed.
+     infra) OR a fix has already landed elsewhere (e.g. in `main`, in a
+     `~/.claude/skills/` file outside the gremlin's worktree) that the chain's
+     pre-fix base ref doesn't see. No change needed; rerunning the same stage
+     as-is should succeed.
    - **structural**: the failure points at a real bug in the pipeline source
      (`~/.claude/skills/<kind>/*.sh`, `~/.claude/skills/_bg/*.sh`, or the
      associated python) or in a sibling artifact (e.g. a malformed child plan
