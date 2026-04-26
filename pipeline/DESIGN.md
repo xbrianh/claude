@@ -46,8 +46,11 @@ and need to be reified by the new package:
 - Child-process tracking: long-running stages (notably `review-code`'s
   triple-reviewer fan-out) spawn multiple `claude -p` subprocesses in
   parallel. On SIGINT/SIGTERM we must terminate every live child. Today
-  that's `_core._reap_all` (`_core.py:68`) backed by a module-level
-  `_children: List[Popen]` under an RLock; bash uses `trap 'kill -- -$$'`.
+  Python tracks via `_core._reap_all` (`_core.py:68`) backed by a
+  module-level `_children: List[Popen]` under an RLock; bash today does
+  no reaping (no `trap` in `ghgremlin.sh` — children are cleaned up only
+  when the launcher's process tree is killed). The unified pipeline
+  brings ghgremlin to parity with localgremlin on this point.
 
 ### `claude -p` wrapper + stream-json logger
 
@@ -79,7 +82,9 @@ and need to be reified by the new package:
     branch, status, stage, sub_stage, pid, exit_code, bail_class,
     pipeline_args, parent_id, etc.).
   - `artifacts/` — plan.md, review-code-*.md, stream-*.jsonl traces,
-    spec.md (boss only), ghplan-out.jsonl (gh only).
+    `spec.md` (snapshot of `argv[1]` when the first positional argument
+    is a readable file — so `/design`-style spec hand-offs land here for
+    any kind, not just boss), `ghplan-out.jsonl` (gh only).
   - `instructions.txt` — full untruncated instructions sidecar (state.json
     only stores a 200-char display summary).
   - `log` — appended stdout/stderr from the gremlin process itself.
@@ -118,10 +123,15 @@ and need to be reified by the new package:
   URL) is fetched via `gh issue view`. Cross-repo issue refs deliberately
   skip the `Closes #N` link to avoid auto-closing an issue in another
   repo. See `ghgremlin.sh:193`.
-- `bossgremlin`: `--plan <spec-path>` is required; the spec is copied to
-  `state-dir/artifacts/spec.md` by launch.sh up front
-  (`launch.sh:472`) and is the north star handed to every child via
-  `/handoff`.
+- `bossgremlin`: `--plan <spec-path>` is required; the spec is handed to
+  every child via `/handoff` as the north-star context. Note that
+  `launch.sh`'s `spec.md` snapshot at `launch.sh:472` only fires when the
+  first positional arg is a readable file, and bossgremlin passes its
+  spec via `--plan` rather than positionally — so `artifacts/spec.md` is
+  *not* populated for boss runs today. If we want `artifacts/spec.md`
+  for pipeline parity (so a rescue/inspector can find the spec at a
+  uniform path), treat that as a future-phase change to `launch.sh` or
+  to `pipeline/orchestrators/boss.py`, not current behavior.
 
 ### Resume-precondition checks
 
@@ -139,7 +149,11 @@ a non-zero stage:
     the same in-process run), so a request to resume there silently
     rewinds to `implement` (`ghgremlin.sh:107`).
   - Stages from `implement` onward without `--plan` need `issue_url` in
-    state.json; stages from `wait-copilot`+ need `pr_url`.
+    state.json; stages from `request-copilot` onward need `pr_url` (the
+    PR-URL resolution block at `ghgremlin.sh:480-487` runs unconditionally
+    before `request-copilot` and dies if `.pr_url` is missing on resume,
+    so every stage from `request-copilot` through `ghaddress` shares
+    that precondition — not just `wait-copilot`+).
 - bossgremlin: resume strategy is "rescue the failing child gremlin in
   place, then the boss continues" rather than fast-forwarding the boss
   itself.
@@ -147,9 +161,23 @@ a non-zero stage:
 ### Handoff invocation contract
 
 bossgremlin calls `~/.claude/skills/handoff/handoff.py --plan <path>
-[--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]`
-between children. The handoff agent reads the current plan and the diff
-landed on the branch and writes either:
+[--spec <path>] [--out <path>] [--base <ref>] [--rev <ref>]
+[--model <model>] [--timeout <secs>]` between children
+(see `bossgremlin.py:264-273` and `handoff.py:201-213`). Two of those
+flags are load-bearing for chain semantics and easy to miss:
+
+- `--spec <path>` — the immutable north-star spec, distinct from the
+  rolling `--plan`. The plan-loading section above already names this
+  distinction; the handoff contract mirrors it. (Boss skips `--spec` on
+  handoff #1 because the rolling plan and the spec are the same file
+  there — see `bossgremlin.py:255-260` — but every later handoff
+  forwards it.)
+- `--rev <ref>` — the rev to compare the diff against (e.g.
+  `origin/<target_branch>` for gh chains, so handoff sees PRs that
+  landed remotely rather than only commits on the local branch).
+
+The handoff agent reads the current plan and the diff landed on the
+branch and writes either:
 - a `next-plan` document (keep going, here's the next child plan), or
 - a `chain-done` marker (we're done), or
 - a `bail` marker (something is wrong, stop).
@@ -186,7 +214,9 @@ pipeline/
 ├── cli.py                          # `python -m pipeline.cli {local,gh,boss}` dispatch
 ├── runner.py                       # generic stage runner
 ├── state.py                        # session-dir resolution, set_stage / emit_bail wrappers
+├── streamjson.py                   # extract_session_id, extract_url (pure parsers, free functions)
 ├── git.py                          # in_git_repo, git_head, dirty-tree checks, branch/worktree helpers
+├── gh.py                           # gh issue/pr wrappers (view/create/edit/diff/merge/review)
 ├── clients/
 │   ├── __init__.py
 │   ├── claude.py                   # ClaudeClient protocol + real subprocess implementation
@@ -213,7 +243,13 @@ pipeline/
 │   ├── address_code.md
 │   ├── gh_pr.md
 │   ├── gh_pr_no_issue.md
-│   └── scope_review.md
+│   ├── scope_review.md
+│   ├── lens-holistic-code.md       # migrated from skills/localgremlin/
+│   ├── lens-detail-code.md         # migrated from skills/localgremlin/
+│   └── lens-scope-code.md          # migrated from skills/localgremlin/
+│                                   # (read by both localgremlin's review-code
+│                                   # and ghgremlin's parallel scope reviewer
+│                                   # at ghgremlin.sh:504 today)
 └── tests/
     ├── __init__.py
     ├── fixtures/
@@ -292,8 +328,24 @@ review-code returns the three output paths).
 
 One module per stage. Each module exports a single `run(ctx) -> Result`
 function plus the prompt template (loaded from `pipeline/prompts/`).
-Stages depend only on `ctx.client: ClaudeClient`, never on
-`subprocess.Popen` directly — this is what lets fake clients drive them.
+Stages route their `claude -p` invocations through
+`ctx.client: ClaudeClient`, never `subprocess.Popen` directly — this is
+what lets fake clients drive them.
+
+Note that `claude -p` is not the only subprocess the stages spawn. The
+gh stages also shell out to `gh issue view`, `gh issue create`,
+`gh pr create`, `gh pr edit`, `gh pr review`, `gh pr diff`, and
+`gh pr merge`; every kind shells to `git worktree`, `git rev-parse`,
+and dirty-tree probes. Faking only `ClaudeClient` makes `claude -p`
+deterministic in unit tests, but stages will still spawn real `gh` and
+`git` against whatever happens to be on PATH and in cwd. Phase 1 needs
+to decide whether `gh` and `git` get their own seams (e.g.
+`pipeline/gh.py` and `pipeline/git.py` with fake variants) for full
+unit-testability, or whether stages are tested only at the integration
+layer with a real `gh`/`git`. **Default: Phase 1 introduces
+`pipeline/git.py` as a thin wrapper (already listed above) and a
+similar `pipeline/gh.py`; the fake `git`/`gh` variants land alongside
+the stage modules that exercise them.**
 
 #### `pipeline/orchestrators/`
 
@@ -312,17 +364,35 @@ heredocs become standalone files loaded by stage modules at import or
 call time. Embedded substitutions (`{plan_text}`, `{core_principles}`,
 etc.) use `str.format` with named keys.
 
+Note that `{core_principles}` is not a sibling prompt file — today
+localgremlin parses the `## Core Principles` section out of
+`agents/pragmatic-developer.md` at runtime
+(`localgremlin.py:171-186`), which is a different top-level repo dir.
+The pipeline keeps that behavior: `pipeline/stages/implement.py` reads
+`agents/pragmatic-developer.md` via a documented path resolver
+(rooted at the repo / `~/.claude/` root, not at `pipeline/prompts/`)
+and slices out the section live, rather than snapshotting it into
+`pipeline/prompts/core_principles.md`. Snapshotting would duplicate
+the canonical agent definition; live-reading keeps `pipeline/` honest
+about the cross-package read.
+
 #### `pipeline/pyproject.toml`
 
 ```toml
 [project]
 name = "pipeline"
 version = "0.0.0"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 ```
+
+The `>=3.10` floor matches the runtime baseline already supported by
+the existing tooling (e.g. `skills/gremlins/gremlins.py` carries a
+`datetime.fromisoformat('Z')` shim for Python <3.11). If we ever drop
+the shim and require 3.11+ across the repo, this value moves with it
+in lockstep — but the design doesn't unilaterally raise the floor here.
 
 ## ClaudeClient interface
 
@@ -336,42 +406,41 @@ from pathlib import Path
 class ClaudeClient(Protocol):
     def run(
         self,
-        model: str,
+        model: str | None,
         prompt: str,
         *,
         label: str,
         raw_path: Path,
         output_format: str = "stream-json",
-        flags: Sequence[str] = (),
+        extra_flags: Sequence[str] = (),
         resume_session: str | None = None,
     ) -> None:
         """Spawn `claude -p`, stream stdout to raw_path (also tee to stderr
         as a human-readable progress trace), and raise on non-zero exit.
 
+        `model` is `str | None` (not bare `str`): `None` (or `""`) means
+        "no `--model` flag", which today is how `claude` falls back to the
+        default model. Both scripts gate `--model` on truthiness (see
+        `_core.py`'s `run_claude` and `ghgremlin.sh`'s `CLAUDE_FLAGS`
+        construction), so the protocol matches that contract explicitly.
+
+        `extra_flags` is appended to the standard flag set the
+        implementation always injects
+        (`--permission-mode bypassPermissions --output-format <output_format>
+        --verbose`); it is *not* a full replacement, so `extra_flags=()`
+        means "no caller-supplied additions" rather than "no flags at all".
+        See "Real implementation" below for the precise composition rule
+        (and how `output_format` interacts with the standard set).
+
         Implementations MUST track child processes and reap them on
-        SIGINT/SIGTERM (parity with _core._reap_all)."""
-        ...
-
-    def extract_session_id(self, raw_path: Path) -> str:
-        """Read the system/init event from a stream-json trace file and
-        return its session_id. Used by ghgremlin's commit-pr stage to
-        resume the implement-stage agent session for the PR-opening
-        prompt."""
-        ...
-
-    def extract_url(
-        self,
-        raw_path: Path,
-        url_pattern: str,
-        cmd_pattern: str,
-        label: str,
-    ) -> str:
-        """Scan a stream-json trace for tool_use Bash commands matching
-        cmd_pattern, pair them with their tool_result, and return the
-        most recent URL matching url_pattern. Falls back to the final
-        result text scan."""
+        SIGINT/SIGTERM (parity with `_core._reap_all`)."""
         ...
 ```
+
+Stream-json parsing helpers (`extract_session_id`, `extract_url`) are
+*not* methods on `ClaudeClient`; they live in `pipeline/streamjson.py`
+as free functions. See "Stream-json parsing helpers" below for the
+rationale and signatures.
 
 ### Real implementation (`clients/claude.py`)
 
@@ -382,14 +451,25 @@ class ClaudeClient(Protocol):
   reader so `readline()` doesn't degrade to one `os.read()` per byte —
   this is a measured perf win on long implement-stage traces, see
   `_core.py:271`).
-- Defaults `flags` to `("--permission-mode", "bypassPermissions",
-  "--output-format", "stream-json", "--verbose")`. `output_format=` is
-  separate (and default `"stream-json"`) so future callers can switch to
-  `"text"` for one-shot non-streaming calls (e.g. ghgremlin's issue-title
-  generation in `ghgremlin.sh:209`).
-- `--model <model>` is appended only when `model` is truthy. Today both
-  scripts gate the `--model` flag the same way; bossgremlin and resume
+- Always injects the standard flag set:
+  `--permission-mode bypassPermissions --output-format <output_format> --verbose`,
+  with `--model <model>` prepended only when `model` is truthy. Both
+  scripts gate `--model` the same way today; bossgremlin and resume
   rehydrate `MODEL` from `state.json`.
+- `output_format` interaction: the parameter substitutes into the
+  standard `--output-format` slot of the flag set above. `--verbose`
+  is kept regardless of `output_format` because the launcher's logging
+  contract relies on it (the progress tee parses verbose-mode lines
+  even when the output format is text). Callers that need the legacy
+  one-shot `claude -p "<prompt>"` style — e.g. ghgremlin's issue-title
+  generation in `ghgremlin.sh:209` — pass `output_format="text"` and
+  the implementation just renders the result text instead of streaming
+  events. (Decision: substitute, do not strip; do not let callers turn
+  off `--verbose` via `output_format`.)
+- `extra_flags` is appended *after* the standard set, so callers can
+  add stage-specific options (e.g. `--resume <session-id>` is wired
+  through the dedicated `resume_session=` kwarg, not through
+  `extra_flags`).
 
 ### Fake implementation (`clients/fake.py`)
 
@@ -400,9 +480,44 @@ class ClaudeClient(Protocol):
   `(model, prompt, label, ...)` onto `self.calls` for assertions.
 - Supports `client.fail_on(label, exit_code=1)` to simulate a stage
   failure.
-- `.extract_session_id` / `.extract_url` reuse the real-client parsing
-  logic (parsing is pure, so we don't need to fake it — only the
-  subprocess invocation is faked).
+- The fake only fakes the subprocess invocation; the stream-json parsing
+  helpers (`extract_session_id`, `extract_url`) are free functions in
+  `pipeline/streamjson.py` that callers and the fake both invoke
+  directly on whatever `raw_path` was written.
+
+### Stream-json parsing helpers (`pipeline/streamjson.py`)
+
+The two parsing helpers live as module-level free functions, not
+methods on `ClaudeClient`:
+
+```python
+# pipeline/streamjson.py
+
+def extract_session_id(raw: Path) -> str:
+    """Read the system/init event from a stream-json trace file and
+    return its session_id. Used by ghgremlin's commit-pr stage to
+    resume the implement-stage agent session for the PR-opening
+    prompt."""
+    ...
+
+def extract_url(raw: Path, url_pattern: str, cmd_pattern: str,
+                label: str) -> str:
+    """Scan a stream-json trace for tool_use Bash commands matching
+    cmd_pattern, pair them with their tool_result, and return the
+    most recent URL matching url_pattern. Falls back to the final
+    result text scan."""
+    ...
+```
+
+Rationale: parsing is pure (path in → string out, no I/O beyond
+reading the file the client already wrote) and the fake would have
+nothing to fake — it would just delegate to the real parser. Hanging
+these off `ClaudeClient` would add a Protocol method whose only
+implementation is a thin delegation, with no mechanical payoff. As
+free functions they're callable from real-client paths, fake-client
+paths, ad-hoc tests, and future debugging tools without instantiating
+a client. `ClaudeClient` stays minimal — just `run()` — which keeps
+the fake trivially small.
 
 ## `launch.sh --resume` contract update
 
@@ -416,11 +531,23 @@ mapping changes:
 1. If `$HOME/.claude/pipeline/` exists and `python -m pipeline.cli` is
    invocable, prefer:
    ```bash
-   PIPELINE=("python" "-m" "pipeline.cli" "$KIND_SHORT")
+   PIPELINE=("env" "PYTHONPATH=$HOME/.claude" "python" "-m" "pipeline.cli" "$KIND_SHORT")
    ```
    where `$KIND_SHORT` is `local`, `gh`, or `boss` (the `gremlin` suffix
    is dropped — `python -m pipeline.cli local-gremlin` is needlessly
    redundant).
+
+   Importability: `launch.sh` `cd`s into the gremlin's workdir before
+   invoking the pipeline, so `python` will not find `pipeline/` on the
+   default `sys.path`. Setting `PYTHONPATH=$HOME/.claude` puts the
+   package on the import path without needing a `pip install -e`. This
+   matches the rest of the repo's "checked-in scripts under
+   `~/.claude/`" convention rather than introducing a packaging step.
+
+   (Note: the existing scripts use `#!/usr/bin/env python3` shebangs, but
+   the local convention is to invoke them as `python` — the project
+   `claudeMd` enforces `python` over `python3` for tool calls. Keep
+   `python` here for consistency with the rest of the repo's invocations.)
 2. Else fall back to `$HOME/.claude/skills/<kind>/<kind>.{py,sh}` (the
    current behavior). This is the migration safety net: a `pipeline/`
    that is broken or only partially synced still lets a user run the old
@@ -444,10 +571,10 @@ dies inside the orchestrator with a clear message).
 ### `PIPELINE` variable shape
 
 Today `PIPELINE` is a single path string passed to `nohup bash -c '"$PIPELINE" "$@"'`.
-With the new resolution, `PIPELINE` becomes an array
-(`("python" "-m" "pipeline.cli" "$KIND_SHORT")`), expanded inside the
-`nohup bash -c` invocation. The single-quoted `bash -c` body needs to be
-adjusted to expand the array, e.g.:
+With the new resolution, `PIPELINE` becomes an array (the `env
+PYTHONPATH=... python -m pipeline.cli <kind>` form spelled out above),
+expanded inside the `nohup bash -c` invocation. The single-quoted
+`bash -c` body needs to be adjusted to expand the array, e.g.:
 
 ```bash
 nohup bash -c '"$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
@@ -482,9 +609,9 @@ the change is mechanical once `pipeline/` is in place.
   both the existing scripts and `pipeline/`) or keep `pipeline/` as its
   own self-contained project. Default: self-contained, since the existing
   scripts are not a Python package.
-- Whether `ClaudeClient.extract_session_id` and `.extract_url` belong on
-  the client or as free functions in a `pipeline/streamjson.py` helper.
-  They're parsing-only, no I/O, so making them free functions is purer —
-  but keeping them on the client matches "everything claude-shaped goes
-  through one interface" and gives the fake one place to stub. **Default:
-  client methods, as drafted above.**
+- ~~Whether `ClaudeClient.extract_session_id` and `.extract_url` belong
+  on the client or as free functions in a `pipeline/streamjson.py`
+  helper.~~ Resolved during review: free functions in
+  `pipeline/streamjson.py`. Parsing is pure, the fake would have nothing
+  to fake, and the `ClaudeClient` interface stays minimal (just `run()`).
+  See the "Stream-json parsing helpers" section above.
