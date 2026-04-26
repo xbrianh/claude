@@ -153,7 +153,7 @@ A child gremlin operates **inside a detached-HEAD worktree, against a single fea
 
 Classify a task as **operator** if executing it inside a child gremlin's worktree would be impossible, destructive, or undefined. Concrete signals:
 
-- **Mutates `~/.claude/` or other live user state directly**: `scripts/sync.sh push`, `scripts/sync.sh pull`, hand-edits under `~/.claude/`, copying files into `~/.claude/`. (The child has unmerged code in its worktree; mirroring that into `~/.claude/` would suddenly run unmerged code on the user's machine.)
+- **Mutates the user's live config or other shared machine state directly**: hand-edits under `~/.claude/` (or equivalent live config dirs), running a script that mirrors the worktree into shared state, copying built artifacts onto the user's machine. (The child has unmerged code in its worktree; pushing that into live state would suddenly run unmerged code on the user's machine.)
 - **Launches another gremlin**: `/localgremlin`, `/ghgremlin`, `/bossgremlin`, or a smoke-run / end-to-end run that boils down to invoking one. Recursive gremlin launch from a detached worktree is undefined behavior.
 - **Pushes to a remote outside the PR flow**: `git push origin main`, force-pushes, manual `gh pr merge`, direct merges. The child's only remote interaction is opening (and updating) one PR.
 - **Operator commands**: `/gremlins land`, `/gremlins rescue`, `/gremlins stop`, `/gremlins close`, `/gremlins rm`. These are human controls, not workflow steps.
@@ -161,10 +161,10 @@ Classify a task as **operator** if executing it inside a child gremlin's worktre
 
 Classify as **implementation** if it is a code/doc/config change that lands in the child's PR. Examples that *look* operator-adjacent but are implementation:
 
-- "Update `CLAUDE.md` to mention `pipeline/`" — edits a tracked repo file. The fact that `CLAUDE.md` is mirrored to `~/.claude/CLAUDE.md` by `sync.sh` is irrelevant: the child edits the in-repo file, the human runs `sync.sh push` later.
-- "Extend `scripts/sync.sh` `DIR_PAIRS` with `pipeline:...`" — edits a tracked script. Implementation.
-- "Add `pipeline/DESIGN.md`" — creates a tracked file. Implementation.
-- "Run `scripts/sync.sh push --dry-run` and confirm output is clean" — operator. The dry-run reads live `~/.claude/` state and isn't a code change. (A dry-run *check encoded as a unit test* against fixture data would be implementation; a real `--dry-run` invocation against the user's live tree is not.)
+- "Update a tracked docs file to describe a new module" — edits a tracked repo file. The fact that the file may later be mirrored to live machine state by an operator step is irrelevant: the child edits the in-repo copy, the human runs the mirror later.
+- "Extend a tracked configuration script to handle a new case" — edits a tracked script. Implementation.
+- "Add a new design or docs file under the repo" — creates a tracked file. Implementation.
+- "Run a tooling dry-run against the user's live config and confirm output is clean" — operator. The dry-run reads live machine state and isn't a code change. (A dry-run *check encoded as a unit test* against fixture data would be implementation; a real invocation against the user's live tree is not.)
 
 The distinction is **what the task changes** (tracked repo files = implementation) vs **what the task reads or mutates outside the worktree** (live user config, sibling processes, remotes outside the PR = operator). When in doubt, ask: "Could a fresh gremlin with no access to my home directory do this?" If no, operator.
 
