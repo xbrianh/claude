@@ -122,13 +122,26 @@ def setup_shell_env(
 
 
 def wait_for_finished(state_dir: pathlib.Path, timeout: float = 60.0) -> bool:
-    """Poll for ``state_dir/finished`` (written by finish.sh on terminal exit).
-    Returns True if found within ``timeout``, False otherwise."""
+    """Poll for both ``state_dir/finished`` and a terminal status in state.json.
+
+    finish.sh writes the ``finished`` marker before patching state.json, so
+    polling only for the marker leaves a small race window where
+    state["status"] is still "running". This helper waits for both.
+
+    Returns True once both conditions are met within ``timeout``, False
+    if the deadline expires first.
+    """
     finished = state_dir / "finished"
+    state_file = state_dir / "state.json"
     deadline = time.time() + timeout
     while time.time() < deadline:
         if finished.exists():
-            return True
+            try:
+                data = json.loads(state_file.read_text(encoding="utf-8"))
+                if data.get("status") not in ("running", "starting", None, ""):
+                    return True
+            except Exception:
+                pass
         time.sleep(0.1)
     return False
 
