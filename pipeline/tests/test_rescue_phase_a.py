@@ -13,6 +13,20 @@ contract this layer protects:
 - A missing / malformed marker results in a wrapper-level bail
   (``diagnosis_no_marker`` / ``diagnosis_bad_marker``), never silent
   success.
+
+Out of scope for this layer — writability restriction:
+  The plan target "only ``state.json`` is writable, ``unsalvageable``
+  declared for anything outside that" is **not implemented or testable
+  here**.  This wrapper does not enforce any file-system restriction.
+  The rescue prompt's "permitted edits" text is guidance only, and the
+  current prompt wording allows edits to files in the gremlin worktree
+  as well as ``state.json``.  In headless mode the wrapper runs with
+  ``--permission-mode bypassPermissions``, so Claude's own permission
+  system doesn't gate writes either.  A fake binary can write anything
+  it likes; nothing in the wrapper observes or reacts to unauthorized
+  writes.  Testing this contract would require either running a real
+  Claude agent or adding a wrapper-level enforcement mechanism —
+  neither of which exists today.
 """
 
 from __future__ import annotations
