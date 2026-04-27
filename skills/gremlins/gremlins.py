@@ -1041,7 +1041,7 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 if status == "structural":
                     _write_bail(sf, wdir, "structural", err_msg)
                     print(
-                        f"Diagnosis: agent flagged a structural problem in the pipeline "
+                        f"Diagnosis step: agent flagged a structural problem in the pipeline "
                         f"or sibling artifacts that requires a human edit ({err_msg})"
                     )
                     report["verdict"] = "structural"
@@ -1050,9 +1050,9 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 if status == "unsalvageable":
                     _write_bail(sf, wdir, "unsalvageable", err_msg)
                     if err_msg:
-                        print(f"Diagnosis: agent declared the failure unsalvageable ({err_msg})")
+                        print(f"Diagnosis step: agent declared the failure unsalvageable ({err_msg})")
                     else:
-                        print("Diagnosis: agent declared the failure unsalvageable.")
+                        print("Diagnosis step: agent declared the failure unsalvageable.")
                     report["verdict"] = "unsalvageable"
                     report["summary"] = err_msg
                     return False
@@ -1062,9 +1062,9 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 # agent's summary on the success path so a post-mortem reader
                 # can see WHAT was diagnosed.
                 if err_msg:
-                    print(f"Diagnosis complete (status: {status}, diagnosis: {err_msg}); handing off to relaunch step...")
+                    print(f"Diagnosis step complete (status: {status}, diagnosis: {err_msg}); handing off to relaunch step...")
                 else:
-                    print(f"Diagnosis complete (status: {status}); handing off to relaunch step...")
+                    print(f"Diagnosis step complete (status: {status}); handing off to relaunch step...")
                 report["verdict"] = status
                 report["summary"] = err_msg
             else:
