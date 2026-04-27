@@ -1,4 +1,4 @@
-"""Tests for skills/handoff/handoff.py."""
+"""Tests for pipeline/handoff.py (formerly skills/handoff/handoff.py)."""
 
 import json
 import pathlib
@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-import handoff
+from pipeline import handoff
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,6 @@ contract this layer protects:
 from __future__ import annotations
 
 import datetime
-import importlib.util
 import json
 import pathlib
 
@@ -31,14 +30,9 @@ from fixtures.shell_env import (
 
 
 def _load_gremlins_module():
-    """Load skills/gremlins/gremlins.py as a regular module so do_rescue is callable."""
-    spec = importlib.util.spec_from_file_location(
-        "gremlins_under_test",
-        REPO_ROOT / "skills" / "gremlins" / "gremlins.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Return the fleet module — the canonical home for do_rescue."""
+    from pipeline import fleet
+    return fleet
 
 
 def _make_failed_gremlin(state_root: pathlib.Path, workdir: pathlib.Path,

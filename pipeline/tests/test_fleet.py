@@ -1,4 +1,4 @@
-"""Tests for skills/gremlins/gremlins.py."""
+"""Tests for pipeline/fleet.py (formerly skills/gremlins/gremlins.py)."""
 
 import json
 import os
@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-import gremlins
+from pipeline import fleet as gremlins
 
 
 # ---------------------------------------------------------------------------

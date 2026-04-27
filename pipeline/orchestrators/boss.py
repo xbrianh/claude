@@ -17,6 +17,7 @@ import argparse
 import datetime
 import json
 import os
+import pathlib
 import re
 import shutil
 import signal
@@ -32,6 +33,26 @@ STATE_ROOT = os.path.join(
     os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")),
     "claude-gremlins",
 )
+
+# Parent of the pipeline package — where ``python -m pipeline.cli`` needs to
+# find ``pipeline/`` on PYTHONPATH when boss subprocesses out to handoff /
+# fleet. Resolved from this file's path so the same code works whether the
+# package lives under ``~/.claude/pipeline/`` (production) or under a test
+# fake-home tree.
+_PIPELINE_PARENT = str(pathlib.Path(__file__).resolve().parents[2])
+
+
+def _pipeline_cli_cmd(*args: str) -> list:
+    return [sys.executable, "-m", "pipeline.cli", *args]
+
+
+def _pipeline_cli_env() -> dict:
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{_PIPELINE_PARENT}{os.pathsep}{existing}" if existing else _PIPELINE_PARENT
+    )
+    return env
 
 POLL_INTERVAL = 5  # seconds between finished-marker polls
 HANDOFF_TIMEOUT = int(os.environ.get("BOSSGREMLIN_HANDOFF_TIMEOUT", "3600"))
@@ -229,9 +250,6 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     in the user's repo that may never advance during the chain.
     """
     set_stage(gr_id, "handoff")
-    handoff_script = os.path.expanduser("~/.claude/skills/handoff/handoff.py")
-    if not os.access(handoff_script, os.X_OK):
-        die(f"handoff.py not executable at {handoff_script}")
 
     n = boss_state["handoff_count"] + 1
     out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
@@ -268,8 +286,8 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     spec_log = spec_path if forward_spec else "(none)"
     log(f"handoff {n}: plan={current_plan}, spec={spec_log}, base={base_ref[:12]}, rev={rev_label}, cwd={handoff_cwd}")
     spec_args = ["--spec", spec_path] if forward_spec else []
-    cmd = [
-        handoff_script,
+    cmd = _pipeline_cli_cmd(
+        "handoff",
         "--plan", current_plan,
         *spec_args,
         "--out", out_path,
@@ -277,8 +295,8 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
         "--model", model,
         "--timeout", str(HANDOFF_TIMEOUT),
         *rev_args,
-    ]
-    rc = run_proc(cmd, cwd=handoff_cwd)
+    )
+    rc = run_proc(cmd, cwd=handoff_cwd, env=_pipeline_cli_env())
     check_stop()
 
     if rc != 0:
@@ -372,9 +390,11 @@ def wait_for_child(child_id: str, gr_id: str) -> bool:
     while True:
         if _stop_requested:
             log(f"stop requested — stopping child {child_id}")
-            gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
-            if os.access(gremlins, os.X_OK):
-                subprocess.run([gremlins, "stop", child_id], capture_output=True)
+            subprocess.run(
+                _pipeline_cli_cmd("fleet", "stop", child_id),
+                capture_output=True,
+                env=_pipeline_cli_env(),
+            )
             sys.exit(130)
 
         if os.path.isfile(finished_path):
@@ -447,19 +467,19 @@ def _summarize_for_log(text: str, limit: int = 240) -> str:
 
 
 def land_child(child_id: str) -> bool:
-    gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
-    if not os.access(gremlins, os.X_OK):
-        die(f"gremlins.py not executable at {gremlins}")
     log(f"landing child {child_id}")
-    return run_proc([gremlins, "land", child_id]) == 0
+    return run_proc(
+        _pipeline_cli_cmd("fleet", "land", child_id),
+        env=_pipeline_cli_env(),
+    ) == 0
 
 
 def rescue_child(child_id: str) -> bool:
-    gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
-    if not os.access(gremlins, os.X_OK):
-        die(f"gremlins.py not executable at {gremlins}")
     log(f"rescuing child {child_id} (headless)")
-    return run_proc([gremlins, "rescue", "--headless", child_id]) == 0
+    return run_proc(
+        _pipeline_cli_cmd("fleet", "rescue", "--headless", child_id),
+        env=_pipeline_cli_env(),
+    ) == 0
 
 
 def _parse_boss_args(argv: List[str]) -> argparse.Namespace:
@@ -713,9 +733,11 @@ def boss_main(argv: List[str]) -> int:
             # or just after launch (pre-wait window).
             if _stop_requested:
                 log(f"stop requested — stopping newly launched child {current_child_id}")
-                gremlins = os.path.expanduser("~/.claude/skills/gremlins/gremlins.py")
-                if os.access(gremlins, os.X_OK):
-                    subprocess.run([gremlins, "stop", current_child_id], capture_output=True)
+                subprocess.run(
+                    _pipeline_cli_cmd("fleet", "stop", current_child_id),
+                    capture_output=True,
+                    env=_pipeline_cli_env(),
+                )
                 sys.exit(130)
             check_stop()
 

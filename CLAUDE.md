@@ -29,7 +29,7 @@ The `ghgremlin` skill invokes [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin
 
 The `localgremlin` skill runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via the [`pipeline`](pipeline/) package (`python -m pipeline.cli local`). All artifacts land in `~/.local/state/claude-gremlins/<id>/artifacts/` off the product branch. `--plan <path>` skips the plan stage and uses the supplied file as the plan.
 
-The orchestrator main and stage bodies live under [`pipeline/orchestrators/local.py`](pipeline/orchestrators/local.py) and [`pipeline/stages/`](pipeline/stages/); the standalone `/localreview` and `/localaddress` skills dispatch to `pipeline.cli review` / `pipeline.cli address` so all three callers execute the same code. The skill scripts under `skills/localgremlin/` are thin shims that exec into `pipeline.cli`.
+The orchestrator main and stage bodies live under [`pipeline/orchestrators/local.py`](pipeline/orchestrators/local.py) and [`pipeline/stages/`](pipeline/stages/); the standalone `/localreview` and `/localaddress` skills dispatch to `pipeline.cli review` / `pipeline.cli address` so all three callers execute the same code. The same applies to `/gremlins` (→ `pipeline.cli fleet`) and `/handoff` (→ `pipeline.cli handoff`) — fleet management and chain-step decisions live in [`pipeline/fleet.py`](pipeline/fleet.py) and [`pipeline/handoff.py`](pipeline/handoff.py). The skill scripts under `skills/localgremlin/`, `skills/gremlins/`, and `skills/handoff/` are thin shims that exec into `pipeline.cli`.
 
 ## Additional skills
 

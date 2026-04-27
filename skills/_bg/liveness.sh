@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Shared helper: classify a background gremlin's liveness from its state.json.
-# Sourced by session-summary.sh (hook) and gremlins.py (on-demand status).
-# Keeping one source of truth means the two never disagree on whether a
-# gremlin is running, dead, or stalled.
+# Sourced by session-summary.sh (hook). The on-demand /gremlins listing
+# (pipeline/fleet.py) reimplements the same classifier inline in Python
+# rather than sourcing this file, so the two implementations must be kept
+# in lockstep by hand — when you change one, mirror the change in the other.
 #
 # Requires: jq on PATH. If jq is missing the caller has bigger problems; this
 # file's functions will echo empty strings rather than fail loudly.
@@ -34,9 +35,10 @@ liveness_of_state_file() {
     local wdir gr_status gr_pid gr_exit_code gr_bail_reason
     wdir=$(dirname "$sf")
 
-    # US (\x1f) separator, matching session-summary.sh and gremlins.py: bash
-    # treats tab as IFS-whitespace and collapses consecutive empty columns, so
-    # a future 5th field could silently lose a value. US is non-whitespace.
+    # US (\x1f) separator, matching session-summary.sh and pipeline/fleet.py:
+    # bash treats tab as IFS-whitespace and collapses consecutive empty
+    # columns, so a future 5th field could silently lose a value. US is
+    # non-whitespace.
     IFS=$'\x1f' read -r gr_status gr_pid gr_exit_code gr_bail_reason < <(
         jq -r '[.status, (.pid // "" | tostring),
                 (.exit_code // "" | tostring),

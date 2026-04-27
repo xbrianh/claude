@@ -375,9 +375,9 @@ continue to read.
 
 | Field             | Writer                              | Consumers                                         |
 |-------------------|-------------------------------------|---------------------------------------------------|
-| `bail_class`      | upstream stage via `_bg/set-bail.sh` (or `_core.emit_bail`) | `gremlins.py` headless rescue, `liveness.sh`     |
-| `bail_detail`     | upstream stage via `_bg/set-bail.sh` (or `_core.emit_bail`) | `gremlins.py` (preserved through marker)         |
-| `bail_reason`     | `gremlins.py:_write_bail` (rescue path) | `liveness.sh`, `bossgremlin.py.get_child_bail_reason` |
+| `bail_class`      | upstream stage via `_bg/set-bail.sh` (or `_core.emit_bail`) | `pipeline/fleet.py` headless rescue, `liveness.sh` |
+| `bail_detail`     | upstream stage via `_bg/set-bail.sh` (or `_core.emit_bail`) | `pipeline/fleet.py` (preserved through marker)   |
+| `bail_reason`     | `pipeline/fleet.py:_write_bail` (rescue path) | `liveness.sh`, `pipeline/orchestrators/boss.py.get_child_bail_reason` |
 | `stage`           | `_bg/set-stage.sh` (via `set_stage` in each pipeline) | `/gremlins`, `liveness.sh`, `session-summary.sh` |
 | `sub_stage`       | `_bg/set-stage.sh` (review-code only) | `/gremlins`                                       |
 | `stage_updated_at`| `_bg/set-stage.sh`                   | `liveness.sh` (stall heuristic)                   |
@@ -385,12 +385,12 @@ continue to read.
 Note: `bail_class` and `bail_reason` are **distinct fields** —
 upstream stages write `bail_class` via `set-bail.sh`; the headless
 rescue agent reads `bail_class` to decide whether to attempt recovery
-(`gremlins.py:54` defines `EXCLUDED_BAIL_CLASSES`), then writes
+(`pipeline/fleet.py` defines `EXCLUDED_BAIL_CLASSES`), then writes
 `bail_reason` via `_write_bail` to record the rescue outcome. Boss
 prefers `bail_reason` over `bail_class`
-(`bossgremlin.py:get_child_bail_reason` at `:410-418`), and
-`liveness.sh` does likewise (`liveness.sh:50-57`). The migration must
-preserve both writes and the precedence between them.
+(`pipeline/orchestrators/boss.py:get_child_bail_reason`), and
+`liveness.sh` does likewise. The migration must preserve both writes
+and the precedence between them.
 
 ### Bail-class vocabulary (upstream stages → `state.json.bail_class`)
 
@@ -406,7 +406,7 @@ entire vocabulary upstream stages write today:
   `_core.emit_bail` from the review-code and address-code stage
   wrappers (`_core.py:599`, `_core.py:708`) on infrastructure failure.
 
-The first three are in `EXCLUDED_BAIL_CLASSES` (`gremlins.py:54`);
+The first three are in `EXCLUDED_BAIL_CLASSES` (`pipeline/fleet.py`);
 headless rescue refuses to run for them and writes a
 `bail_reason="excluded_class:<class>"` instead.
 
@@ -414,7 +414,7 @@ headless rescue refuses to run for them and writes a
 
 The headless rescue agent writes a JSON marker file that the rescue
 wrapper reads. The `status` field is one of four values
-(validated in `gremlins.py:_read_rescue_marker`):
+(validated in `pipeline/fleet.py:_read_rescue_marker`):
 
 - `fixed` — agent edited `state.json` or pipeline source so the bug is
   no longer present; rescue should proceed to the relaunch step.
@@ -429,13 +429,13 @@ wrapper reads. The `status` field is one of four values
 
 The agent's `summary` field is copied into `bail_detail` for
 `structural` and `unsalvageable` outcomes so the boss can show it in
-its log (`bossgremlin.py:_summarize_for_log` at `:432-447`).
+its log (`pipeline/orchestrators/boss.py:_summarize_for_log`).
 
 ### Marker-protocol bail reasons (diagnosis-step failure modes)
 
 When the diagnosis-step agent does not produce a usable marker, the
 rescue wrapper writes its own `bail_reason` describing why (the
-diagnosis-step bail ladder in `gremlins.py:do_rescue`, with the
+diagnosis-step bail ladder in `pipeline/fleet.py:do_rescue`, with the
 headless branch dispatching on `_run_headless_diagnosis`'s status —
 which wraps `_read_rescue_marker` plus the pre-marker `timeout` /
 `claude_exit` statuses that surface as `diagnosis_timeout` and
@@ -453,7 +453,7 @@ operators may grep state.json for them, and the boss treats them as
   timeout.
 
 Plus two reasons written when rescue refuses upstream-classified bails
-(`gremlins.py:do_rescue`'s headless preflight, gated on
+(`pipeline/fleet.py:do_rescue`'s headless preflight, gated on
 `EXCLUDED_BAIL_CLASSES` and `RESCUE_CAP`):
 
 - `excluded_class:<bail_class>` — upstream wrote one of the three
@@ -462,11 +462,11 @@ Plus two reasons written when rescue refuses upstream-classified bails
 - `attempts_exhausted` — `rescue_count` exceeded the configured cap.
 
 Plus two written only in headless rescue mode for relaunch-step
-failures (the relaunch block in `gremlins.py:do_rescue` — preflight
-`os.access` check on the launcher, plus the `FileNotFoundError` and
-non-zero-exit paths around `subprocess.run([launcher, "--resume",
-gr_id])`; interactive rescue prints the error and returns without
-persisting a `bail_reason`):
+failures (the relaunch block in `pipeline/fleet.py:do_rescue` —
+preflight `os.access` check on the launcher, plus the
+`FileNotFoundError` and non-zero-exit paths around
+`subprocess.run([launcher, "--resume", gr_id])`; interactive rescue
+prints the error and returns without persisting a `bail_reason`):
 
 - `relaunch_launcher_missing` — `_bg/launch.sh --resume` is not present
   or not executable.
@@ -629,20 +629,25 @@ sweep's divergent/already-merged distinction.
 ## Out of scope for the migration
 
 - Changing the rescue marker JSON shape (the `{"status": "...",
-  "summary": "..."}` schema in `gremlins.py:548-561`). Phase 0 documents
-  it; the Phase 1–4 ports preserve byte compatibility.
+  "summary": "..."}` schema validated in
+  `pipeline/fleet.py:_read_rescue_marker`). Phase 0 documents it; the
+  Phase 1–4 ports preserve byte compatibility.
 - Changing `state.json` field names. The migration is a ref-onto-ref
   rename of pipeline implementation; the on-disk vocabulary stays
   stable so older gremlins resume cleanly under the new pipeline.
-- Migrating `gremlins.py` itself. The /gremlins skill stays as-is and
-  reads state.json the way it does today; only the pipeline code that
-  *writes* state.json moves.
 - Migrating `_bg/finish.sh`, `_bg/set-stage.sh`, `_bg/set-bail.sh`,
   `_bg/liveness.sh`, `_bg/session-summary.sh`. These remain shell
   scripts; the pipeline `state.py` shells out to them rather than
   reimplementing their logic, because they're also called by
   non-pipeline code paths (`session-summary.sh` is a hook;
-  `liveness.sh` is sourced by `gremlins.py`).
-- The relaunch step of headless rescue (`gremlins.py` invokes `launch.sh
-  --resume`). Phase 0 documents the launcher contract; the launcher
-  itself doesn't move.
+  `liveness.sh` is sourced by `session-summary.sh`).
+- The relaunch step of headless rescue (`pipeline/fleet.py` invokes
+  `launch.sh --resume`). Phase 0 documents the launcher contract; the
+  launcher itself doesn't move.
+
+Note (post-Phase 5): `gremlins.py` and `handoff.py` were folded into
+the pipeline package as `pipeline/fleet.py` and `pipeline/handoff.py`,
+exposed via `python -m pipeline.cli {fleet,handoff}`. The skill
+entrypoints (`skills/gremlins/gremlins.py`, `skills/handoff/handoff.py`)
+became thin shims, matching the pattern already used for
+`skills/localgremlin/`.
