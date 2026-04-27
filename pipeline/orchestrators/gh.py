@@ -25,7 +25,7 @@ import sys
 from typing import Dict, List, Optional
 
 from ..clients.claude import ClaudeClient, SubprocessClaudeClient
-from ..gh_utils import extract_gh_url, get_repo
+from ..gh_utils import extract_gh_url, get_repo, parse_issue_ref, view_issue
 from ..runner import install_signal_handlers, run_stages
 from ..stages.commit_pr import run_commit_pr_stage
 from ..stages.ghaddress import run_ghaddress_stage
@@ -131,21 +131,11 @@ def _read_state_field(sf: Optional[pathlib.Path], field: str) -> str:
         return ""
 
 
-def _parse_issue_ref(plan_source: str, repo: str):
-    """Parse an issue reference and return (target_repo, issue_ref_number) or (None, None)."""
-    m = re.match(r"^#?([0-9]+)$", plan_source)
-    if m:
-        return repo, m.group(1)
-    m = re.match(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$", plan_source)
-    if m:
-        return m.group(1), m.group(2)
-    m = re.match(
-        r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([0-9]+)(#.*)?$",
-        plan_source,
-    )
-    if m:
-        return m.group(1), m.group(2)
-    return None, None
+# Test compatibility shim — tests import _parse_issue_ref from this module
+# directly (and patch _fetch_issue_body below). The canonical implementation
+# lives in pipeline.gh_utils.parse_issue_ref so the boss orchestrator can
+# share it.
+_parse_issue_ref = parse_issue_ref
 
 
 def _fetch_issue_body(issue_num: str, repo: str) -> str:
@@ -260,22 +250,10 @@ def _resolve_plan_source(
         if target_repo is None:
             die(f"--plan: not a readable file or recognized issue reference: {plan_source}")
 
-        r = subprocess.run(
-            [
-                "gh", "issue", "view", issue_ref, "--repo", target_repo,
-                "--json", "number,url,body",
-            ],
-            capture_output=True, text=True, check=False,
-        )
-        if r.returncode != 0:
-            die(f"--plan: could not resolve issue {plan_source}: {r.stderr.strip()}")
         try:
-            issue_data = json.loads(r.stdout)
-        except json.JSONDecodeError:
-            die(
-                f"--plan: gh issue view returned invalid JSON for {plan_source}. "
-                f"stdout: {r.stdout.strip()} stderr: {r.stderr.strip()}"
-            )
+            issue_data = view_issue(issue_ref, target_repo)
+        except RuntimeError as exc:
+            die(f"--plan: {exc}")
         issue_body = issue_data.get("body") or ""
         if not issue_body:
             die(f"--plan: issue {plan_source} has an empty body")

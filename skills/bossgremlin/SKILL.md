@@ -1,7 +1,7 @@
 ---
 name: bossgremlin
 description: Run the end-to-end chained gremlin workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Chains multiple child gremlins serially: the handoff agent decides what to implement next, each child runs plan→implement→review→address, and the boss lands each one before proceeding. The launcher returns immediately; you'll be notified when the chain finishes.
-argument-hint: --plan <spec-path> --chain-kind local|gh [--model <model>]
+argument-hint: --plan <spec-path|issue-ref> --chain-kind local|gh [--model <model>]
 allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 ---
 
@@ -27,18 +27,25 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `bossgremlin` kind argument:
 
 ```
-~/.claude/skills/_bg/launch.sh --description "<phrase>" bossgremlin --plan <spec-path> --chain-kind <local|gh> [--model <model>]
+~/.claude/skills/_bg/launch.sh --description "<phrase>" bossgremlin --plan <spec-path|issue-ref> --chain-kind <local|gh> [--model <model>]
 ```
 
 Flags:
 
-- `--plan <spec-path>` — (required) absolute path to the top-level spec file describing the overall multi-step goal. Must be a non-empty file. This file is immutable for the life of the chain — the boss passes it to the first handoff agent and never reads it.
+- `--plan <spec-path|issue-ref>` — (required) the top-level spec describing the overall multi-step goal. Four forms, mirroring `/ghgremlin --plan`:
+    - **Local file path** — an absolute path to a non-empty spec file.
+    - **`42` or `#42`** — issue #42 in the current repo.
+    - **`owner/repo#42`** — issue #42 in a different repo (cross-repo spec source; the chain still runs against the current repo's `main`).
+    - **Full URL `https://github.com/owner/repo/issues/42`** — same cross-repo semantics. `github.com` only.
+
+  At chain start, the boss snapshots the spec into `<state-dir>/spec.md` and reads only the snapshot for the rest of the chain. The original input is never re-read, so a deleted file or mutated GitHub issue cannot perturb a running chain. On rescue, the snapshot is authoritative — no re-fetch.
 - `--chain-kind local|gh` — (required) whether children are `localgremlin` (local branch, squash-merged) or `ghgremlin` (GitHub PR, squash-merged to main). A chain is homogeneous — all children are the same kind.
 - `--model <model>` — model to use for handoff agent calls (default: `sonnet`).
 
 ## Where artifacts go
 
-- `~/.local/state/claude-gremlins/<boss-id>/boss_state.json` — ordered list of child ids with outcomes, per-handoff records (timestamps, plan paths, exit states), chain base ref.
+- `~/.local/state/claude-gremlins/<boss-id>/spec.md` — chain-start snapshot of the spec (file copy or fetched issue body). The handoff agent reads this; the original `--plan` input is never re-read.
+- `~/.local/state/claude-gremlins/<boss-id>/boss_state.json` — ordered list of child ids with outcomes, per-handoff records (timestamps, plan paths, exit states), chain base ref, plus `issue_url` / `issue_num` when `--plan` was an issue reference.
 - `~/.local/state/claude-gremlins/<boss-id>/handoff-001.md`, `handoff-002.md`, … — rolling plan documents produced by each handoff invocation, each containing only the work still remaining at that point. The sequence of files is the audit trail of progression.
 - `~/.local/state/claude-gremlins/<boss-id>/handoff-001-child.md`, … — child plans passed to each child gremlin.
 - `~/.local/state/claude-gremlins/<boss-id>/handoff-001.state.json`, … — handoff signal files recording exit_state and reason.
