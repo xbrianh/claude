@@ -78,7 +78,7 @@ def _load_core_principles() -> str:
 def _parse_local_args(argv: List[str]) -> argparse.Namespace:
     # Short-only model flags to preserve the bash `getopts "p:i:x:a:b:c:"`
     # contract — no `--plan-model` etc. leak in via argparse's default
-    # long-form expansion. Long-form flags: `--resume-from` (Phase B rescue)
+    # long-form expansion. Long-form flags: `--resume-from` (rescue relaunch step)
     # and `--plan` (skip the plan stage, read plan from a file instead).
     usage = (
         'usage: pipeline.cli local [-p <plan-model>] [-i <impl-model>] '

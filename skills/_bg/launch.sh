@@ -75,7 +75,7 @@ done
 
 # --resume branch: reuse an existing gremlin's state dir, worktree, and branch,
 # and relaunch the pipeline with --resume-from <failed-stage> so it skips
-# already-completed stages. Phase B of /gremlins rescue drives this path.
+# already-completed stages. The relaunch step of /gremlins rescue drives this path.
 if [[ -n "$RESUME_GR_ID" ]]; then
     [[ $# -eq 0 ]] || die "--resume does not take additional arguments"
     [[ -z "$DESCRIPTION" ]] || die "--resume is incompatible with --description"

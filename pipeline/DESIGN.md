@@ -410,16 +410,16 @@ The first three are in `EXCLUDED_BAIL_CLASSES` (`gremlins.py:54`);
 headless rescue refuses to run for them and writes a
 `bail_reason="excluded_class:<class>"` instead.
 
-### Rescue verdict vocabulary (Phase A agent marker file)
+### Rescue verdict vocabulary (diagnosis-step agent marker file)
 
 The headless rescue agent writes a JSON marker file that the rescue
 wrapper reads. The `status` field is one of four values
 (`gremlins.py:638`, `:672`):
 
 - `fixed` — agent edited `state.json` or pipeline source so the bug is
-  no longer present; rescue should proceed to Phase B (relaunch).
+  no longer present; rescue should proceed to the relaunch step.
 - `transient` — failure was a flake (network/tool timeout); rescue
-  should proceed to Phase B without code changes.
+  should proceed to the relaunch step without code changes.
 - `structural` — agent identified a real bug in pipeline source or a
   sibling artifact (e.g. a child plan) that requires a human edit.
   Rescue refuses to relaunch; logs the agent's summary as
@@ -431,19 +431,19 @@ The agent's `summary` field is copied into `bail_detail` for
 `structural` and `unsalvageable` outcomes so the boss can show it in
 its log (`bossgremlin.py:_summarize_for_log` at `:432-447`).
 
-### Marker-protocol bail reasons (Phase A failure modes)
+### Marker-protocol bail reasons (diagnosis-step failure modes)
 
-When the Phase A agent does not produce a usable marker, the rescue
-wrapper writes its own `bail_reason` describing why
+When the diagnosis-step agent does not produce a usable marker, the
+rescue wrapper writes its own `bail_reason` describing why
 (`gremlins.py:896-908`, `:953-988`). These reasons are byte-stable;
 operators may grep state.json for them, and the boss treats them as
 "rescue refused":
 
-- `phase_a_no_marker` — agent finished without writing the marker file.
-- `phase_a_bad_marker` — marker file exists but is malformed
+- `diagnosis_no_marker` — agent finished without writing the marker file.
+- `diagnosis_bad_marker` — marker file exists but is malformed
   (unparseable JSON, or `status` not in the verdict vocabulary).
-- `phase_a_claude_error` — `claude -p` itself returned non-zero.
-- `phase_a_timeout` — agent did not finish within the configured
+- `diagnosis_claude_error` — `claude -p` itself returned non-zero.
+- `diagnosis_timeout` — agent did not finish within the configured
   timeout.
 
 Plus two reasons written when rescue refuses upstream-classified bails
@@ -454,12 +454,12 @@ Plus two reasons written when rescue refuses upstream-classified bails
   `secrets`); rescue won't touch it.
 - `attempts_exhausted` — `rescue_count` exceeded the configured cap.
 
-Plus two written for Phase B failures
+Plus two written for relaunch-step failures
 (`gremlins.py:1010`, `:1024`, `:1031`):
 
-- `phase_b_launcher_missing` — `_bg/launch.sh --resume` is not present
+- `relaunch_launcher_missing` — `_bg/launch.sh --resume` is not present
   or not executable.
-- `phase_b_relaunch_failed` — `launch.sh --resume` returned non-zero.
+- `relaunch_failed` — `launch.sh --resume` returned non-zero.
 
 The migration must preserve every name above. `pipeline/state.py` may
 introduce typed enums for ergonomics inside the package, but the
@@ -632,6 +632,6 @@ sweep's divergent/already-merged distinction.
   reimplementing their logic, because they're also called by
   non-pipeline code paths (`session-summary.sh` is a hook;
   `liveness.sh` is sourced by `gremlins.py`).
-- Phase B of headless rescue (`gremlins.py` invokes `launch.sh
+- The relaunch step of headless rescue (`gremlins.py` invokes `launch.sh
   --resume`). Phase 0 documents the launcher contract; the launcher
   itself doesn't move.
