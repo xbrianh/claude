@@ -414,7 +414,7 @@ headless rescue refuses to run for them and writes a
 
 The headless rescue agent writes a JSON marker file that the rescue
 wrapper reads. The `status` field is one of four values
-(`gremlins.py:638`, `:672`):
+(validated in `gremlins.py:_read_rescue_marker`):
 
 - `fixed` — agent edited `state.json` or pipeline source so the bug is
   no longer present; rescue should proceed to the relaunch step.
@@ -434,8 +434,14 @@ its log (`bossgremlin.py:_summarize_for_log` at `:432-447`).
 ### Marker-protocol bail reasons (diagnosis-step failure modes)
 
 When the diagnosis-step agent does not produce a usable marker, the
-rescue wrapper writes its own `bail_reason` describing why
-(`gremlins.py:896-908`, `:953-988`). These reasons are byte-stable;
+rescue wrapper writes its own `bail_reason` describing why (the
+diagnosis-step bail ladder in `gremlins.py:do_rescue`, with the
+headless branch dispatching on `_run_headless_diagnosis`'s status —
+which wraps `_read_rescue_marker` plus the pre-marker `timeout` /
+`claude_exit` statuses that surface as `diagnosis_timeout` and
+`diagnosis_claude_error` below — and the interactive branch
+dispatching on `_read_rescue_marker`'s status directly). These
+reasons are byte-stable;
 operators may grep state.json for them, and the boss treats them as
 "rescue refused":
 
@@ -447,15 +453,20 @@ operators may grep state.json for them, and the boss treats them as
   timeout.
 
 Plus two reasons written when rescue refuses upstream-classified bails
-(`gremlins.py:785-794`):
+(`gremlins.py:do_rescue`'s headless preflight, gated on
+`EXCLUDED_BAIL_CLASSES` and `RESCUE_CAP`):
 
 - `excluded_class:<bail_class>` — upstream wrote one of the three
   excluded classes (`reviewer_requested_changes`, `security`,
   `secrets`); rescue won't touch it.
 - `attempts_exhausted` — `rescue_count` exceeded the configured cap.
 
-Plus two written for relaunch-step failures
-(`gremlins.py:1010`, `:1024`, `:1031`):
+Plus two written only in headless rescue mode for relaunch-step
+failures (the relaunch block in `gremlins.py:do_rescue` — preflight
+`os.access` check on the launcher, plus the `FileNotFoundError` and
+non-zero-exit paths around `subprocess.run([launcher, "--resume",
+gr_id])`; interactive rescue prints the error and returns without
+persisting a `bail_reason`):
 
 - `relaunch_launcher_missing` — `_bg/launch.sh --resume` is not present
   or not executable.
