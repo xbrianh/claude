@@ -149,6 +149,14 @@ if [[ -n "$RESUME_GR_ID" ]]; then
             KIND_SUBCOMMAND="local"
             USE_PIPELINE=1
             ;;
+        ghgremlin)
+            KIND_SUBCOMMAND="gh"
+            USE_PIPELINE=1
+            ;;
+        bossgremlin)
+            KIND_SUBCOMMAND="boss"
+            USE_PIPELINE=1
+            ;;
         *)
             for ext in py sh; do
                 candidate="$HOME/.claude/skills/$RESUME_KIND/$RESUME_KIND.$ext"
@@ -318,6 +326,10 @@ case "$KIND" in
         ;;
     ghgremlin)
         KIND_SUBCOMMAND="gh"
+        USE_PIPELINE=1
+        ;;
+    bossgremlin)
+        KIND_SUBCOMMAND="boss"
         USE_PIPELINE=1
         ;;
     *)
