@@ -254,3 +254,126 @@ def test_ghgremlin_resume_from_implement(tmp_path):
     # implement onward.
     assert "implement-gh" in stages
     assert "commit-pr" in stages
+
+
+def test_ghgremlin_resume_from_commit_pr(tmp_path):
+    """`--resume-from commit-pr` rewrites to `--resume-from implement`
+    (IMPL_SESSION is not persisted), so implement and later stages run."""
+    sh = setup_shell_env(tmp_path, with_gh=True, with_origin=True)
+    plan_file = sh.repo / "spec.md"
+    plan_file.write_text("# Plan commit-pr resume\n", encoding="utf-8")
+
+    r = _launch_gh(sh, "--plan", str(plan_file))
+    assert r.returncode == 0
+    gr_id = r.stdout.strip()
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    assert wait_for_finished(state_dir, timeout=120)
+
+    sh.fake_claude_log.write_text("", encoding="utf-8")
+    sh.env["GR_ID"] = gr_id
+    r = _run_shim_directly(
+        sh, "--plan", str(plan_file), "--resume-from", "commit-pr",
+        timeout=60,
+    )
+    assert r.returncode == 0, f"stderr:\n{r.stderr}\nstdout:\n{r.stdout}"
+    # The rewind note must appear in stderr.
+    assert "rewinding to implement" in r.stderr
+
+    log = read_fake_claude_log(sh.fake_claude_log)
+    stages = [e["stage"] for e in log]
+    assert "plan-title" not in stages, stages
+    # implement onward (commit-pr rewound → implement).
+    assert "implement-gh" in stages
+    assert "commit-pr" in stages
+    assert "ghreview" in stages
+    assert "ghaddress" in stages
+
+
+def test_ghgremlin_resume_from_request_copilot(tmp_path):
+    """`--resume-from request-copilot` skips plan/implement/commit-pr."""
+    sh = setup_shell_env(tmp_path, with_gh=True, with_origin=True)
+    plan_file = sh.repo / "spec.md"
+    plan_file.write_text("# Plan request-copilot resume\n", encoding="utf-8")
+
+    r = _launch_gh(sh, "--plan", str(plan_file))
+    assert r.returncode == 0
+    gr_id = r.stdout.strip()
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    assert wait_for_finished(state_dir, timeout=120)
+
+    sh.fake_claude_log.write_text("", encoding="utf-8")
+    sh.env["GR_ID"] = gr_id
+    r = _run_shim_directly(
+        sh, "--plan", str(plan_file), "--resume-from", "request-copilot",
+        timeout=60,
+    )
+    assert r.returncode == 0, f"stderr:\n{r.stderr}\nstdout:\n{r.stdout}"
+
+    log = read_fake_claude_log(sh.fake_claude_log)
+    stages = [e["stage"] for e in log]
+    assert "implement-gh" not in stages, f"resume should skip implement: {stages}"
+    assert "commit-pr" not in stages, f"resume should skip commit-pr: {stages}"
+    # request-copilot calls gh (not claude) so it's not in the claude log,
+    # but ghreview (and the parallel scope-review-pr it spawns) and ghaddress
+    # must have run.
+    assert "ghreview" in stages
+    assert "scope-review-pr" in stages
+    assert "ghaddress" in stages
+
+
+def test_ghgremlin_resume_from_wait_copilot(tmp_path):
+    """`--resume-from wait-copilot` skips through ghreview; ghaddress must run."""
+    sh = setup_shell_env(tmp_path, with_gh=True, with_origin=True)
+    plan_file = sh.repo / "spec.md"
+    plan_file.write_text("# Plan wait-copilot resume\n", encoding="utf-8")
+
+    r = _launch_gh(sh, "--plan", str(plan_file))
+    assert r.returncode == 0
+    gr_id = r.stdout.strip()
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    assert wait_for_finished(state_dir, timeout=120)
+
+    sh.fake_claude_log.write_text("", encoding="utf-8")
+    sh.env["GR_ID"] = gr_id
+    r = _run_shim_directly(
+        sh, "--plan", str(plan_file), "--resume-from", "wait-copilot",
+        timeout=60,
+    )
+    assert r.returncode == 0, f"stderr:\n{r.stderr}\nstdout:\n{r.stdout}"
+
+    log = read_fake_claude_log(sh.fake_claude_log)
+    stages = [e["stage"] for e in log]
+    assert "implement-gh" not in stages, f"resume should skip implement: {stages}"
+    assert "commit-pr" not in stages, f"resume should skip commit-pr: {stages}"
+    assert "ghreview" not in stages, f"resume should skip ghreview: {stages}"
+    assert "scope-review-pr" not in stages, f"resume should skip scope-review-pr: {stages}"
+    # wait-copilot calls gh (not claude), but ghaddress must have run.
+    assert "ghaddress" in stages
+
+
+def test_ghgremlin_resume_from_ghaddress(tmp_path):
+    """`--resume-from ghaddress` skips all earlier stages; only ghaddress runs."""
+    sh = setup_shell_env(tmp_path, with_gh=True, with_origin=True)
+    plan_file = sh.repo / "spec.md"
+    plan_file.write_text("# Plan ghaddress resume\n", encoding="utf-8")
+
+    r = _launch_gh(sh, "--plan", str(plan_file))
+    assert r.returncode == 0
+    gr_id = r.stdout.strip()
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    assert wait_for_finished(state_dir, timeout=120)
+
+    sh.fake_claude_log.write_text("", encoding="utf-8")
+    sh.env["GR_ID"] = gr_id
+    r = _run_shim_directly(
+        sh, "--plan", str(plan_file), "--resume-from", "ghaddress",
+        timeout=60,
+    )
+    assert r.returncode == 0, f"stderr:\n{r.stderr}\nstdout:\n{r.stdout}"
+
+    log = read_fake_claude_log(sh.fake_claude_log)
+    stages = [e["stage"] for e in log]
+    assert "implement-gh" not in stages, f"resume should skip implement: {stages}"
+    assert "commit-pr" not in stages, f"resume should skip commit-pr: {stages}"
+    assert "ghreview" not in stages, f"resume should skip ghreview: {stages}"
+    assert "ghaddress" in stages
