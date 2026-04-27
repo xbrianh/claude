@@ -8,7 +8,7 @@ Personal [Claude Code](https://claude.com/claude-code) configuration — global 
 CLAUDE.md             # repo-level doc for Claude, loaded when cwd is this repo (not synced)
 home/CLAUDE.md        # global preferences, synced to ~/.claude/CLAUDE.md
 settings.json         # harness settings: hooks, permissions, plugins
-gremlins/             # Python package: shared plan/implement/review/address stages, ClaudeClient protocol, orchestrators (local; gh/boss to come). Synced to ~/.claude/gremlins/.
+gremlins/             # Python package: shared plan/implement/review/address stages, ClaudeClient protocol, orchestrators for local/gh/boss pipelines, fleet manager, handoff agent. Synced to ~/.claude/gremlins/.
 skills/
   _bg/                # background-gremlin scripts: finish.sh, launch.sh, liveness.sh, session-summary.sh, set-stage.sh
   design/             # /design: chat-driven spec writer; produces /tmp/design-<slug>.md
@@ -17,8 +17,8 @@ skills/
   ghreview/           # /ghreview: review a PR and post inline comments
   ghaddress/          # /ghaddress: address review comments on a PR
   localgremlin/       # /localgremlin: thin shims that exec into `python -m gremlins.cli`; the orchestrator and stages live under gremlins/
-  localreview/        # /localreview: standalone triple-lens code review over local changes (foreground)
-  localaddress/       # /localaddress: standalone address-code stage over existing review files (foreground)
+  localreview/        # /localreview: standalone detail-only code review over local changes (foreground)
+  localaddress/       # /localaddress: standalone address-code stage over the detail review file (foreground)
   gremlins/           # /gremlins: thin shim into `python -m gremlins.cli fleet`; on-demand status + stop/rescue/rm/close/land subcommands (logic in gremlins/fleet.py)
   handoff/            # /handoff: thin shim into `python -m gremlins.cli handoff`; foreground chain-step decision agent (logic in gremlins/handoff.py)
   bossgremlin/        # /bossgremlin: chained serial gremlin workflow; runs multiple child gremlins via handoff agent
@@ -55,26 +55,26 @@ The skills cluster into a GitHub-issue-driven gremlin and a local gremlin (`/loc
 - [`/ghgremlin`](skills/ghgremlin/SKILL.md) — run the full gremlin run end-to-end via [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh).
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
-- [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → three parallel reviewers (holistic, detail, scope) → address-code locally via the [`gremlins`](gremlins/) package (`python -m gremlins.cli local`), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Orchestrator and stages live under [`gremlins/orchestrators/local.py`](gremlins/orchestrators/local.py) and [`gremlins/stages/`](gremlins/stages/); `/localreview` and `/localaddress` dispatch to the same code via `gremlins.cli review` and `gremlins.cli address`.
-- [`/localreview`](skills/localreview/SKILL.md) — standalone triple-lens code review (holistic, detail, scope) over local changes, foreground. Writes `review-code-*.md` files to `--dir` (defaults to cwd).
-- [`/localaddress`](skills/localaddress/SKILL.md) — standalone address-code stage that reads `review-code-*.md` files from `--dir` and applies actionable findings. Foreground. In a git repo, creates one `Address review feedback` commit (no push).
+- [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → detail review → address-code locally via the [`gremlins`](gremlins/) package (`python -m gremlins.cli local`), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Orchestrator and stages live under [`gremlins/orchestrators/local.py`](gremlins/orchestrators/local.py) and [`gremlins/stages/`](gremlins/stages/); `/localreview` and `/localaddress` dispatch to the same code via `gremlins.cli review` and `gremlins.cli address`.
+- [`/localreview`](skills/localreview/SKILL.md) — standalone detail-only code review over local changes, foreground. Writes `review-code-detail-*.md` to `--dir` (defaults to cwd).
+- [`/localaddress`](skills/localaddress/SKILL.md) — standalone address-code stage that reads the `review-code-detail-*.md` file from `--dir` and applies actionable findings. Foreground. In a git repo, creates one `Address review feedback` commit (no push).
 - [`/gremlins`](skills/gremlins/SKILL.md) — on-demand status of background gremlins. Subcommands: `stop <id>`, `rescue <id>`, `rm <id>`, `close <id>`, `land <id>` (squash-land a local gremlin or merge a gh PR). Flags include `--here`, `--running`, `--dead`, `--stalled`, `--kind`, `--since`, `--recent`, `--watch`.
 - [`/handoff`](skills/handoff/SKILL.md) — foreground chain-step decision agent. Reads the current plan and the diff landed so far, produces `next-plan` / `chain-done` / `bail`, and writes an updated plan plus a child plan for the next gremlin. Accepts `--plan <path> [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]`.
 - [`/bossgremlin`](skills/bossgremlin/SKILL.md) — background chained serial workflow. Requires `--plan <spec-path>` (immutable top-level spec) and `--chain-kind local|gh`. The boss invokes `/handoff` between child gremlins, lands each one before proceeding, and notifies when the chain finishes. Use `/gremlins` to monitor (`KIND=boss`) and `rescue <boss-id>` to resume a stalled chain.
 
-`skills/ghgremlin/ghgremlin.sh` chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude in parallel with a scope reviewer) → `/ghaddress`, producing a merged-ready PR from a single instruction.
+The gh pipeline (driven by `python -m gremlins.cli gh`) chains them: `/ghplan` → implement → `/ghreview` (Copilot + Claude) → `/ghaddress`, producing a merged-ready PR from a single instruction.
 
 ### Background execution
 
 Both `/ghgremlin` and `/localgremlin` run **in the background**. Their SKILL.md wrappers hand off to [`skills/_bg/launch.sh`](skills/_bg/launch.sh), which:
 
 - Creates an isolated worktree (via `git worktree add --detach` for git projects, `cp -a` otherwise) so concurrent invocations don't collide.
-- Dispatches to the right entry point per kind: `localgremlin` runs `python -m gremlins.cli local`; `ghgremlin` and `bossgremlin` still resolve their per-kind script under `skills/<kind>/<kind>.{py,sh}` until their own gremlins migrations land.
+- Dispatches per kind to the right `gremlins.cli` subcommand: `localgremlin` → `local`, `ghgremlin` → `gh`, `bossgremlin` → `boss`. The script-fallback path under `skills/<kind>/<kind>.{py,sh}` remains as a safety net for unmigrated kinds.
 - Spawns the gremlin detached (subshell + `nohup`), so it survives `Ctrl-C`, shell exit, and Claude Code quitting.
 - Records per-gremlin state under `~/.local/state/claude-gremlins/<id>/` — or `$XDG_STATE_HOME/claude-gremlins/<id>/` if `XDG_STATE_HOME` is set — (`state.json`, combined `log`, `finished` / `closed` markers), deliberately rooted outside `~/.claude/` so Claude Code's sensitive-file guardrail doesn't block subagent writes. [`skills/_bg/finish.sh`](skills/_bg/finish.sh) writes the terminal `status` / `exit_code` and drops the `finished` marker that `session-summary.sh` keys off.
 - Returns within ~1s with the gremlin id, workdir, log path, and state-file path.
 
-`/localgremlin` artifacts under `~/.local/state/claude-gremlins/<id>/artifacts/`: `plan.md`, `review-code-holistic-<model>.md`, `review-code-detail-<model>.md`, `review-code-scope-<model>.md`. If a spec file is passed as the first positional argument, it is also copied there as `spec.md`.
+`/localgremlin` artifacts under `~/.local/state/claude-gremlins/<id>/artifacts/`: `plan.md`, `review-code-detail-<model>.md`. If a spec file is passed as the first positional argument, it is also copied there as `spec.md`.
 
 A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes [`skills/_bg/session-summary.sh`](skills/_bg/session-summary.sh), which reports running and newly-finished gremlins for the current project so you're notified the next time you open Claude Code in that tree. Closed state dirs older than 14 days are pruned on the next hook firing.
 

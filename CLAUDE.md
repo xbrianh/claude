@@ -23,7 +23,7 @@ Create the file under the corresponding repo directory (`skills/<name>/SKILL.md`
 
 ## The `gh*` gremlin
 
-The `ghgremlin` skill invokes [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh) to run an end-to-end GitHub-issue-driven workflow: `/ghplan`, an implementation + PR creation stage, `/ghreview`, and `/ghaddress`. `--plan <path|issue-ref>` skips the `/ghplan` stage and uses the supplied file or existing issue as the plan instead.
+The `ghgremlin` skill runs an end-to-end GitHub-issue-driven workflow via the [`gremlins`](gremlins/) package (`python -m gremlins.cli gh`): `/ghplan`, an implementation + PR creation stage, `/ghreview`, and `/ghaddress`. Orchestrator and stage bodies live under [`gremlins/orchestrators/gh.py`](gremlins/orchestrators/gh.py) and [`gremlins/stages/`](gremlins/stages/). `--plan <path|issue-ref>` skips the `/ghplan` stage and uses the supplied file or existing issue as the plan instead.
 
 ## The local gremlin
 
