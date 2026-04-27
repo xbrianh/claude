@@ -633,7 +633,7 @@ def _write_bail(sf: str, wdir: str, bail_reason: str, bail_detail: str = "") -> 
 
 
 def write_rescue_report(wdir: str, report: dict) -> None:
-    """Write a Markdown rescue report to <wdir>/rescue-<UTC-ts>.md.
+    """Write a Markdown rescue report to <wdir>/rescue-<UTC-ts>-<pid>.md.
 
     Best-effort: never raises (same "never break a session" principle as the
     rest of the file). Lives in the state dir root alongside `log` /
@@ -647,12 +647,20 @@ def write_rescue_report(wdir: str, report: dict) -> None:
       - headless: bool
       - verdict: str (agent verdict, Phase A failure mode, or wrapper refusal)
       - summary: str (agent summary or wrapper-generated diagnostic)
+      - relaunch_attempted: bool (True iff a relaunch subprocess was actually
+        invoked; preflight failures like "launcher not executable" leave this
+        False even when relaunch_outcome is 'failed')
       - relaunch_outcome: str ('success' / 'failed' / 'skipped')
       - relaunch_reason: str (optional explanation for failed/skipped paths)
     """
     try:
-        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        path = os.path.join(wdir, f"rescue-{ts}.md")
+        # Match the marker_path uniqueness pattern (~290 lines below): include
+        # microseconds and PID so two rescue attempts within the same UTC
+        # second — wrapper-refusal paths return in well under a second, so a
+        # scripted retry loop or operator-driven back-to-back invocation can
+        # land in the same %S — don't silently overwrite each other.
+        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S_%fZ")
+        path = os.path.join(wdir, f"rescue-{ts}-{os.getpid()}.md")
         state = report.get("state") or {}
         gr_id = state.get("id") or os.path.basename(wdir)
         kind = state.get("kind") or ""
@@ -661,7 +669,9 @@ def write_rescue_report(wdir: str, report: dict) -> None:
         model = state.get("model")
         parent_id = state.get("parent_id") or ""
         attempt = int(report.get("attempt_number") or 0)
-        prior = max(attempt - 1, 0)
+        # rescue_count is normalized to a non-negative int upstream (see
+        # do_rescue), so attempt >= 1 and prior >= 0 by construction.
+        prior = attempt - 1
         headless = bool(report.get("headless"))
         verdict = report.get("verdict") or ""
         summary = report.get("summary") or ""
@@ -669,7 +679,13 @@ def write_rescue_report(wdir: str, report: dict) -> None:
         relaunch_reason = report.get("relaunch_reason") or ""
         ts_human = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        attempted = "yes" if relaunch_outcome in ("success", "failed") else "no"
+        # Prefer the explicit boolean recorded by do_rescue (set only when
+        # subprocess.run is actually invoked). Fall back to inferring from
+        # outcome if absent — older callers / unexpected report shapes.
+        if "relaunch_attempted" in report:
+            attempted = "yes" if bool(report.get("relaunch_attempted")) else "no"
+        else:
+            attempted = "yes" if relaunch_outcome in ("success", "failed") else "no"
 
         lines = [
             "# Rescue Attempt",
@@ -865,6 +881,12 @@ def do_rescue(target: str, headless: bool = False) -> bool:
         "headless": headless,
         "verdict": "",
         "summary": "",
+        # relaunch_attempted is flipped to True only when subprocess.run is
+        # actually invoked below — preflight refusals (launcher missing /
+        # not executable, exec failure) keep it False even though they set
+        # relaunch_outcome='failed'. This lets the report distinguish "we
+        # tried and the relaunch failed" from "we never made it to a relaunch".
+        "relaunch_attempted": False,
         "relaunch_outcome": "skipped",
         "relaunch_reason": "",
     }
@@ -1146,6 +1168,11 @@ def do_rescue(target: str, headless: bool = False) -> bool:
 
         print()
         print(f"Phase B: resuming gremlin {gr_id} in the background...")
+        # Flip relaunch_attempted before subprocess.run: even if the call
+        # raises FileNotFoundError or returns non-zero, we genuinely tried to
+        # spawn the launcher (vs. the preflight refusal path above, which
+        # short-circuits without ever invoking it).
+        report["relaunch_attempted"] = True
         try:
             resume_result = subprocess.run(
                 [launcher, "--resume", gr_id],
