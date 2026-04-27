@@ -146,7 +146,7 @@ def handle_implement(prompt: str, session_id: str) -> int:
     # Create a new file so review-code's diff is non-empty.
     target = pathlib.Path("fake_impl.txt")
     target.write_text("fake implementation\n", encoding="utf-8")
-    if os.environ.get("FAKE_CLAUDE_RENAME_PIPELINE") == "1":
+    if os.environ.get("FAKE_CLAUDE_RENAME_GREMLINS") == "1":
         pd = pathlib.Path("gremlins")
         if pd.is_dir():
             pd.rename("gremlins-renamed")

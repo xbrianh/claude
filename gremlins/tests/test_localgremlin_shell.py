@@ -121,7 +121,7 @@ def test_pipeline_survives_worktree_pipeline_rename(tmp_path):
         check=True, capture_output=True,
     )
 
-    sh.env["FAKE_CLAUDE_RENAME_PIPELINE"] = "1"
+    sh.env["FAKE_CLAUDE_RENAME_GREMLINS"] = "1"
     r = _launch_local(sh, "test gremlins rename regression")
     assert r.returncode == 0, r.stderr
     gr_id = r.stdout.strip()
