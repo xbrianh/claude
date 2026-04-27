@@ -130,18 +130,13 @@ def test_pipeline_survives_worktree_pipeline_rename(tmp_path):
 
     state_dir = sh.state_root / "claude-gremlins" / gr_id
     log_path = state_dir / "log"
-    log_tail = (
-        log_path.read_text(errors="replace")[-2000:]
-        if log_path.exists()
-        else "<log file missing>"
-    )
     assert wait_for_finished(state_dir, timeout=120), (
         f"pipeline did not finish; log:\n"
-        f"{log_tail}"
+        f"{log_path.read_text(errors='replace')[-2000:] if log_path.exists() else '<log file missing>'}"
     )
 
     state = read_state(state_dir / "state.json")
     assert state["exit_code"] == 0, (
         f"expected exit 0; log tail:\n"
-        f"{log_tail}"
+        f"{log_path.read_text(errors='replace')[-2000:] if log_path.exists() else '<log file missing>'}"
     )
