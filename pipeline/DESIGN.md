@@ -435,9 +435,13 @@ its log (`bossgremlin.py:_summarize_for_log` at `:432-447`).
 
 When the diagnosis-step agent does not produce a usable marker, the
 rescue wrapper writes its own `bail_reason` describing why (the
-diagnosis-step bail ladder in `gremlins.py:do_rescue`, both the
-headless and interactive branches, dispatching on
-`_read_rescue_marker`'s status). These reasons are byte-stable;
+diagnosis-step bail ladder in `gremlins.py:do_rescue`, with the
+headless branch dispatching on `_run_headless_diagnosis`'s status —
+which wraps `_read_rescue_marker` plus the pre-marker `timeout` /
+`claude_exit` statuses that surface as `diagnosis_timeout` and
+`diagnosis_claude_error` below — and the interactive branch
+dispatching on `_read_rescue_marker`'s status directly). These
+reasons are byte-stable;
 operators may grep state.json for them, and the boss treats them as
 "rescue refused":
 
@@ -457,10 +461,12 @@ Plus two reasons written when rescue refuses upstream-classified bails
   `secrets`); rescue won't touch it.
 - `attempts_exhausted` — `rescue_count` exceeded the configured cap.
 
-Plus two written for relaunch-step failures (the relaunch block in
-`gremlins.py:do_rescue` — preflight `os.access` check on the launcher,
-plus the `FileNotFoundError` and non-zero-exit paths around
-`subprocess.run([launcher, "--resume", gr_id])`):
+Plus two written only in headless rescue mode for relaunch-step
+failures (the relaunch block in `gremlins.py:do_rescue` — preflight
+`os.access` check on the launcher, plus the `FileNotFoundError` and
+non-zero-exit paths around `subprocess.run([launcher, "--resume",
+gr_id])`; interactive rescue prints the error and returns without
+persisting a `bail_reason`):
 
 - `relaunch_launcher_missing` — `_bg/launch.sh --resume` is not present
   or not executable.
