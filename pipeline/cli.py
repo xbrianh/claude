@@ -5,7 +5,7 @@ The first positional argument selects the subcommand:
 - ``local``   — full plan → implement → review-code → address-code chain
 - ``review``  — review-code stage only (was ``localreview.py``)
 - ``address`` — address-code stage only (was ``localaddress.py``)
-- ``gh``      — not yet implemented (Phase 3)
+- ``gh``      — full gh-issue-driven pipeline (Phase 3)
 - ``boss``    — not yet implemented (Phase 4)
 
 Remaining argv is forwarded to the chosen orchestrator entry point with
@@ -37,7 +37,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if sub == "address":
         from .orchestrators.local import address_main
         return address_main(rest)
-    if sub in ("gh", "boss"):
+    if sub == "gh":
+        from .orchestrators.gh import gh_main
+        return gh_main(rest)
+    if sub == "boss":
         sys.stderr.write(f"pipeline.cli {sub}: not yet implemented\n")
         return 1
     sys.stderr.write(f"unknown subcommand: {sub}\n")

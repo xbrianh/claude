@@ -316,6 +316,10 @@ case "$KIND" in
         KIND_SUBCOMMAND="local"
         USE_PIPELINE=1
         ;;
+    ghgremlin)
+        KIND_SUBCOMMAND="gh"
+        USE_PIPELINE=1
+        ;;
     *)
         for ext in py sh; do
             candidate="$HOME/.claude/skills/$KIND/$KIND.$ext"
