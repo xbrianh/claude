@@ -17,12 +17,12 @@ history.
 - `gh_utils.py` — `gh` CLI wrappers and stream-json URL extractors used by the gh orchestrator.
 - `clients/claude.py` — `ClaudeClient` Protocol + `SubprocessClaudeClient` (production).
 - `clients/fake.py` — `FakeClaudeClient` recording test double; replays canned stream-json from fixtures keyed by `label`.
-- `stages/` — per-stage bodies: `plan`, `implement`, `review_code`, `address_code`, `commit_pr`, `ghreview`, `ghaddress`, `wait_copilot`.
-- `orchestrators/local.py` — `local_main`, `review_main`, `address_main`. Ports `skills/localgremlin/localgremlin.py`.
-- `orchestrators/gh.py` — `gh_main`. Ports `skills/ghgremlin/ghgremlin.sh`.
-- `orchestrators/boss.py` — `boss_main`. Ports `skills/bossgremlin/bossgremlin.py`.
+- `stages/` — per-stage bodies: `plan`, `implement`, `review_code`, `address_code`, `commit_pr`, `ghreview`, `ghaddress`, `wait_copilot`. (The `request-copilot` stage body is inlined as a closure in `orchestrators/gh.py`.)
+- `orchestrators/local.py` — `local_main`, `review_main`, `address_main`. Implements the logic behind shim entrypoint `skills/localgremlin/localgremlin.py`.
+- `orchestrators/gh.py` — `gh_main`. Implements the logic behind shim entrypoint `skills/ghgremlin/ghgremlin.sh`.
+- `orchestrators/boss.py` — `boss_main`. Implements the logic behind shim entrypoint `skills/bossgremlin/bossgremlin.py`.
 - `prompts/` — externalized prompt templates (plan, implement, review lenses, etc).
-- `tests/` — pytest suite; fakes only, no subprocess spawn.
+- `tests/` — pytest suite; `claude` is always faked, but some tests still run local `git` subprocesses and typically stub `gh` at the `subprocess.run` level.
 
 ## Entry points
 
@@ -36,8 +36,9 @@ history.
 
 ## Testability seam: `ClaudeClient`
 
-Every stage takes a `client: ClaudeClient` (Protocol in `clients/claude.py`).
-Production code passes `SubprocessClaudeClient()`; tests pass
+Every stage that invokes `claude` takes an injected `client: ClaudeClient`
+(Protocol in `clients/claude.py`). Production code passes
+`SubprocessClaudeClient()` to those stages; tests pass
 `FakeClaudeClient(fixtures={label: <jsonl-or-list>})`. The fake records each
 `run(...)` call into `self.calls` for assertion. **Never have a stage
 spawn `claude -p` directly** — go through the injected client so tests can
@@ -52,9 +53,11 @@ distinct labels per phase.
 These values are persisted to `state.json` files and read by other
 writers (`session-summary.sh` hook, `liveness.sh` sourced from
 `gremlins.py`, the launcher, the rescue protocol). Renaming any of them
-silently breaks cross-process consumers. Source: constants in
-[`state.py`](state.py) and [`DESIGN.md`](DESIGN.md) §Bail-class
-vocabulary / §Marker-protocol bail reasons.
+silently breaks cross-process consumers. Source of truth: bail-class
+constants live in [`state.py`](state.py); local / gh stage-name vocab
+is defined and validated in the orchestrators; marker-protocol bail
+reasons live in [`DESIGN.md`](DESIGN.md) (§Marker-protocol bail
+reasons) and the `skills/_bg/` scripts.
 
 - **Bail classes** (`state.json.bail_class`): `reviewer_requested_changes`, `security`, `secrets`, `other`.
 - **Local stage names**: `plan`, `implement`, `review-code`, `address-code`.
