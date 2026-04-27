@@ -3,10 +3,12 @@
 Both helpers shell out to the canonical bash scripts under
 ``$HOME/.claude/skills/_bg/`` rather than reimplementing the state.json
 patching logic in Python. The bash scripts are also invoked by non-pipeline
-code paths (``session-summary.sh`` is a hook; ``liveness.sh`` is sourced by
-``pipeline/fleet.py`` for listing), so leaving them as the single source of
-truth keeps the on-disk vocabulary stable across pipeline and non-pipeline
-writers.
+code paths (``session-summary.sh`` is a hook that sources ``liveness.sh``
+to classify gremlins for the at-startup summary), so leaving them as the
+single source of truth keeps the on-disk vocabulary stable across pipeline
+and non-pipeline writers. ``pipeline/fleet.py`` reimplements the liveness
+classifier inline rather than sourcing ``liveness.sh``; the two must be
+kept in lockstep by hand.
 
 Both helpers are no-ops outside a gremlin context (no ``GR_ID``) and never
 raise — stage/bail bookkeeping must not break a running gremlin.

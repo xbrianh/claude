@@ -75,10 +75,10 @@ validated in the orchestrators; marker-protocol bail reasons live in
 `state.set_stage` and `state.emit_bail` shell out to
 `~/.claude/skills/_bg/set-stage.sh` and `set-bail.sh` rather than
 patching `state.json` in Python. Those scripts are **also** invoked by
-non-pipeline writers (`session-summary.sh` hook; `liveness.sh` sourced by
-the fleet manager when listing), so the bash scripts are the single source
-of truth for the on-disk format. Don't reimplement that bookkeeping in
-pure Python — forks would drift.
+non-pipeline writers (`session-summary.sh` hook, which sources
+`liveness.sh` for its at-startup gremlin summary), so the bash scripts
+are the single source of truth for the on-disk format. Don't reimplement
+that bookkeeping in pure Python — forks would drift.
 
 Both helpers no-op without `GR_ID` and never raise: stage / bail
 bookkeeping must not crash a running gremlin.

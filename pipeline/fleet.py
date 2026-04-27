@@ -6,7 +6,7 @@ gremlin. Subcommands (``stop``, ``rescue``, ``land``, ``rm``, ``close``, ``log``
 operate on a single gremlin by id-prefix.
 
 Exposed via ``python -m pipeline.cli fleet`` (the ``skills/gremlins/gremlins.py``
-entrypoint is now a thin shim that exec's into this module).
+entrypoint is now a thin shim that execs into this module).
 
 Exit 0 on the listing path even on unexpected errors: same "never break a
 session" principle as the session-summary hook.
@@ -2332,7 +2332,7 @@ def _dispatch_subcommand(argv: List[str]):
     return True, ok
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def _main_impl(argv: Optional[List[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     handled, ok = _dispatch_subcommand(argv)
@@ -2386,9 +2386,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     sys.exit(0)
 
 
-if __name__ == "__main__":
+def main(argv: Optional[List[str]] = None) -> int:
+    """Entry point. Wraps ``_main_impl`` in a top-level try/except so the
+    "exit 0 on the listing path even on unexpected errors" promise from the
+    module docstring holds regardless of how this is invoked — direct
+    ``python pipeline/fleet.py`` execution, ``python -m pipeline.cli fleet``
+    dispatch, or import + call from a test.
+
+    ``SystemExit`` is re-raised verbatim so deliberate ``sys.exit(N)`` calls
+    inside ``_main_impl`` (including ``sys.exit(1)`` for handled failures)
+    keep their intended exit codes; only unexpected exceptions are swallowed.
+    """
     try:
-        main()
+        return _main_impl(argv)
+    except SystemExit:
+        raise
     except Exception as exc:
         print(f"gremlins: unexpected error: {exc}", file=sys.stderr)
         sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

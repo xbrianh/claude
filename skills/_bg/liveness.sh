@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Shared helper: classify a background gremlin's liveness from its state.json.
-# Sourced by session-summary.sh (hook); the on-demand /gremlins listing
-# (pipeline/fleet.py) replicates the same classifier inline so its logic
-# stays in lockstep. Keeping one bash source of truth means the two
-# never disagree on whether a gremlin is running, dead, or stalled.
+# Sourced by session-summary.sh (hook). The on-demand /gremlins listing
+# (pipeline/fleet.py) reimplements the same classifier inline in Python
+# rather than sourcing this file, so the two implementations must be kept
+# in lockstep by hand — when you change one, mirror the change in the other.
 #
 # Requires: jq on PATH. If jq is missing the caller has bigger problems; this
 # file's functions will echo empty strings rather than fail loudly.
