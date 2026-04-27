@@ -41,8 +41,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         from .orchestrators.gh import gh_main
         return gh_main(rest)
     if sub == "boss":
-        sys.stderr.write(f"pipeline.cli {sub}: not yet implemented\n")
-        return 1
+        from .orchestrators.boss import boss_main
+        return boss_main(rest)
     sys.stderr.write(f"unknown subcommand: {sub}\n")
     return 1
 
