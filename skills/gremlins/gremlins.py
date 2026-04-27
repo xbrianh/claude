@@ -632,6 +632,84 @@ def _write_bail(sf: str, wdir: str, bail_reason: str, bail_detail: str = "") -> 
         pass
 
 
+def write_rescue_report(wdir: str, report: dict) -> None:
+    """Write a Markdown rescue report to <wdir>/rescue-<UTC-ts>.md.
+
+    Best-effort: never raises (same "never break a session" principle as the
+    rest of the file). Lives in the state dir root alongside `log` /
+    `state.json` / `finished` so it sits with the operational record rather
+    than mixed with plan/review outputs in `artifacts/`.
+
+    Expected keys in `report`:
+      - state: dict (gremlin state at the start of the attempt)
+      - attempt_number: int (rescue_count + 1; pre-increment, since
+        launch.sh --resume bumps the counter on relaunch — not do_rescue)
+      - headless: bool
+      - verdict: str (agent verdict, Phase A failure mode, or wrapper refusal)
+      - summary: str (agent summary or wrapper-generated diagnostic)
+      - relaunch_outcome: str ('success' / 'failed' / 'skipped')
+      - relaunch_reason: str (optional explanation for failed/skipped paths)
+    """
+    try:
+        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        path = os.path.join(wdir, f"rescue-{ts}.md")
+        state = report.get("state") or {}
+        gr_id = state.get("id") or os.path.basename(wdir)
+        kind = state.get("kind") or ""
+        description = state.get("description") or ""
+        stage = state.get("stage") or ""
+        model = state.get("model")
+        parent_id = state.get("parent_id") or ""
+        attempt = int(report.get("attempt_number") or 0)
+        prior = max(attempt - 1, 0)
+        headless = bool(report.get("headless"))
+        verdict = report.get("verdict") or ""
+        summary = report.get("summary") or ""
+        relaunch_outcome = report.get("relaunch_outcome") or ""
+        relaunch_reason = report.get("relaunch_reason") or ""
+        ts_human = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        attempted = "yes" if relaunch_outcome in ("success", "failed") else "no"
+
+        lines = [
+            "# Rescue Attempt",
+            "",
+            f"- Timestamp: {ts_human}",
+            f"- Attempt: #{attempt} (pre-increment of rescue_count={prior}; launch.sh --resume bumps the counter on relaunch)",
+            f"- Mode: {'headless' if headless else 'interactive'}",
+            "",
+            "## Gremlin Context",
+            "",
+            f"- ID: {gr_id}",
+            f"- Kind: {kind or '(unknown)'}",
+            f"- Description: {description or '(none)'}",
+            f"- Failed stage: {stage or '(unknown)'}",
+        ]
+        if model:
+            lines.append(f"- Model: {model}")
+        if parent_id:
+            lines.append(f"- Parent (boss) id: {parent_id}")
+        lines += [
+            "",
+            "## Diagnosis",
+            "",
+            f"- Verdict: {verdict or '(none)'}",
+            f"- Summary: {summary or '(none)'}",
+            "",
+            "## Relaunch",
+            "",
+            f"- Attempted: {attempted}",
+            f"- Outcome: {relaunch_outcome or '(unknown)'}",
+        ]
+        if relaunch_reason:
+            lines.append(f"- Reason: {relaunch_reason}")
+        lines.append("")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines))
+    except Exception:
+        pass
+
+
 def _read_rescue_marker(marker_path: str):
     """Read and validate the Phase A marker file. Returns (status, msg).
 
@@ -777,263 +855,326 @@ def do_rescue(target: str, headless: bool = False) -> bool:
 
     bail_class = state.get("bail_class") or ""
 
-    # Headless: hard-refuse on excluded class or exhausted attempts. Both
-    # paths write a fresh bail_reason (overwriting any prior one) so the
-    # most recent decision is what /gremlins listings show.
-    if headless:
-        if bail_class in EXCLUDED_BAIL_CLASSES:
-            reason = f"excluded_class:{bail_class}"
-            detail = state.get("bail_detail") \
-                or f"upstream stage bailed with bail_class={bail_class}"
-            _write_bail(sf, wdir, reason, detail)
-            print(f"headless rescue refused: {reason}")
-            return False
-        if rescue_count >= RESCUE_CAP:
-            reason = "attempts_exhausted"
-            detail = f"rescue_count={rescue_count} reached cap of {RESCUE_CAP}"
-            _write_bail(sf, wdir, reason, detail)
-            print(f"headless rescue refused: {reason}")
-            return False
-    else:
-        # Interactive: warn but let the human override. The cap is
-        # primarily a guardrail for autonomous callers; a person watching
-        # Phase A can decide for themselves whether attempt #4 is worth it.
-        if rescue_count >= RESCUE_CAP:
-            print(
-                f"warning: gremlin has been rescued {rescue_count} times "
-                f"(cap is {RESCUE_CAP}); proceeding because this is interactive — "
-                f"Ctrl-C to abort."
-            )
+    # Build a mutable report context so each terminal path can populate the
+    # diagnosis/relaunch fields and the finally block emits a single Markdown
+    # report into <wdir>/rescue-<UTC-ts>.md. Defaults assume "skipped" so any
+    # unexpected exit produces an interpretable record.
+    report = {
+        "state": state,
+        "attempt_number": rescue_count + 1,
+        "headless": headless,
+        "verdict": "",
+        "summary": "",
+        "relaunch_outcome": "skipped",
+        "relaunch_reason": "",
+    }
+    aborted = [False]
 
-    stage = state.get("stage") or "unknown"
-
-    log_path = os.path.join(wdir, "log")
-    log_tail = ""
-    if os.path.isfile(log_path):
-        try:
-            with open(log_path, encoding="utf-8", errors="replace") as fh:
-                lines = fh.readlines()
-                log_tail = "".join(lines[-200:])
-        except OSError:
-            log_tail = "(could not read log)"
-
-    # Marker file is the contract between the agent and this wrapper for
-    # both interactive and headless modes. Pre-create the artifacts dir so
-    # the agent doesn't need to mkdir it themselves — one less thing to
-    # get wrong. If we can't make/use it, bail with a wrapper-specific
-    # reason rather than letting Phase A run and inevitably trip
-    # phase_a_no_marker (which would incorrectly attribute the failure to
-    # the agent).
-    artifacts_dir = os.path.join(wdir, "artifacts")
-    artifacts_dir_error = None
     try:
-        os.makedirs(artifacts_dir, exist_ok=True)
-    except OSError as exc:
-        artifacts_dir_error = exc
-    if (
-        not os.path.isdir(artifacts_dir)
-        or not os.access(artifacts_dir, os.W_OK | os.X_OK)
-    ):
-        reason = "wrapper_artifacts_dir_unavailable"
-        if artifacts_dir_error is not None:
-            detail = (
-                f"could not prepare artifacts dir {artifacts_dir!r}: "
-                f"{artifacts_dir_error}"
-            )
-        elif not os.path.isdir(artifacts_dir):
-            detail = f"artifacts dir {artifacts_dir!r} does not exist after setup"
-        else:
-            detail = f"artifacts dir {artifacts_dir!r} is not writable"
+        # Headless: hard-refuse on excluded class or exhausted attempts. Both
+        # paths write a fresh bail_reason (overwriting any prior one) so the
+        # most recent decision is what /gremlins listings show.
         if headless:
-            _write_bail(sf, wdir, reason, detail)
-            print(f"headless rescue refused: {reason}: {detail}")
+            if bail_class in EXCLUDED_BAIL_CLASSES:
+                reason = f"excluded_class:{bail_class}"
+                detail = state.get("bail_detail") \
+                    or f"upstream stage bailed with bail_class={bail_class}"
+                _write_bail(sf, wdir, reason, detail)
+                print(f"headless rescue refused: {reason}")
+                report["verdict"] = reason
+                report["summary"] = detail
+                return False
+            if rescue_count >= RESCUE_CAP:
+                reason = "attempts_exhausted"
+                detail = f"rescue_count={rescue_count} reached cap of {RESCUE_CAP}"
+                _write_bail(sf, wdir, reason, detail)
+                print(f"headless rescue refused: {reason}")
+                report["verdict"] = reason
+                report["summary"] = detail
+                return False
         else:
-            print(f"rescue refused: {reason}: {detail}")
-        return False
-    # Include microseconds and PID so two rescue attempts in the same UTC
-    # second (e.g. operator hits Ctrl-C and immediately reruns) don't collide
-    # on the same marker_path — without uniqueness, the new run could read a
-    # stale marker from the prior attempt and treat it as the new agent's
-    # output.
-    ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S_%fZ")
-    marker_path = os.path.join(artifacts_dir, f"rescue-{ts}-{os.getpid()}.done")
-    # Best-effort unlink: even though the timestamp is unique per run, removing
-    # any pre-existing marker at this path is cheap insurance against weird
-    # filesystem clock edge cases.
-    try:
-        os.unlink(marker_path)
-    except OSError:
-        pass
-
-    # Create a scratch dir so Phase A runs isolated from the worktree.
-    # The log tail is written there as a readable file; state.json is passed
-    # by absolute path as the only file the agent may edit.
-    # mkdtemp is inside the try so any subsequent exception triggers cleanup.
-    scratch_dir = None
-    try:
-        scratch_dir = tempfile.mkdtemp(prefix="gremlin-rescue-")
-        scratch_log = os.path.join(scratch_dir, "gremlin.log")
-        try:
-            with open(scratch_log, "w", encoding="utf-8") as fh:
-                fh.write(log_tail)
-        except OSError:
-            scratch_log = log_path  # fallback: reference the original log path
-
-        prompt = build_rescue_prompt(state, log_tail, sf, scratch_log, marker_path)
-
-        print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
-        print(f"Gremlin workdir: {workdir}")
-        print(f"Agent scratch dir: {scratch_dir}")
-
-        if headless:
-            print(
-                f"Phase A (headless): running diagnosis agent "
-                f"(timeout: {HEADLESS_PHASE_A_TIMEOUT_SECS}s, marker: {marker_path})..."
-            )
-            status, err_msg = _run_headless_phase_a(scratch_dir, prompt, marker_path)
-
-            if status == "timeout":
-                _write_bail(sf, wdir, "phase_a_timeout", err_msg)
-                print(f"Phase A timed out: {err_msg}")
-                return False
-            if status == "claude_exit":
-                _write_bail(sf, wdir, "phase_a_claude_error", err_msg)
-                print(f"Phase A claude error: {err_msg}")
-                return False
-            if status == "no_marker":
-                _write_bail(sf, wdir, "phase_a_no_marker", err_msg)
-                print(f"Phase A produced no marker file: {err_msg}")
-                return False
-            if status == "bad_marker":
-                _write_bail(sf, wdir, "phase_a_bad_marker", err_msg)
-                print(f"Phase A marker file invalid: {err_msg}")
-                return False
-            if status == "structural":
-                _write_bail(sf, wdir, "structural", err_msg)
+            # Interactive: warn but let the human override. The cap is
+            # primarily a guardrail for autonomous callers; a person watching
+            # Phase A can decide for themselves whether attempt #4 is worth it.
+            if rescue_count >= RESCUE_CAP:
                 print(
-                    f"Phase A: agent flagged a structural problem in the pipeline "
-                    f"or sibling artifacts that requires a human edit ({err_msg})"
+                    f"warning: gremlin has been rescued {rescue_count} times "
+                    f"(cap is {RESCUE_CAP}); proceeding because this is interactive — "
+                    f"Ctrl-C to abort."
                 )
-                return False
-            if status == "unsalvageable":
-                _write_bail(sf, wdir, "unsalvageable", err_msg)
-                if err_msg:
-                    print(f"Phase A: agent declared the failure unsalvageable ({err_msg})")
-                else:
-                    print("Phase A: agent declared the failure unsalvageable.")
-                return False
-            # status == "fixed" or "transient" → proceed to Phase B. Both count
-            # as a rescue attempt; the launcher increments rescue_count when it
-            # actually relaunches. err_msg carries the agent's summary on the
-            # success path so a post-mortem reader can see WHAT was diagnosed.
-            if err_msg:
-                print(f"Phase A complete (status: {status}, diagnosis: {err_msg}); handing off to Phase B...")
-            else:
-                print(f"Phase A complete (status: {status}); handing off to Phase B...")
-        else:
-            print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
-            print(f"Marker: {marker_path}")
-            print()
+
+        stage = state.get("stage") or "unknown"
+
+        log_path = os.path.join(wdir, "log")
+        log_tail = ""
+        if os.path.isfile(log_path):
             try:
-                result = subprocess.run(["claude", "-p", prompt], cwd=scratch_dir)
-            except FileNotFoundError:
-                print("error: 'claude' CLI not found in PATH")
-                return False
-            except KeyboardInterrupt:
-                # Operator's deliberate interrupt — preserve state with no
-                # bail so they can rerun /gremlins rescue without first
-                # having to clear a bail_reason.
-                print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
-                return False
+                with open(log_path, encoding="utf-8", errors="replace") as fh:
+                    lines = fh.readlines()
+                    log_tail = "".join(lines[-200:])
+            except OSError:
+                log_tail = "(could not read log)"
 
-            print()
-
-            if result.returncode != 0:
-                detail = f"claude -p exited {result.returncode}"
-                _write_bail(sf, wdir, "phase_a_claude_error", detail)
-                print(f"Phase A: rescue agent exited with code {result.returncode}.")
-                print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
-                return False
-
-            # Zero exit: the marker is the source of truth. Without it the
-            # agent is presumed to have abdicated the protocol — bail rather
-            # than silently launching Phase B into the same broken state.
-            status, msg = _read_rescue_marker(marker_path)
-            if status == "structural":
-                _write_bail(sf, wdir, "structural", msg)
-                print(
-                    f"Phase A: agent flagged a structural problem in the pipeline "
-                    f"or sibling artifacts that requires a human edit ({msg})"
+        # Marker file is the contract between the agent and this wrapper for
+        # both interactive and headless modes. Pre-create the artifacts dir so
+        # the agent doesn't need to mkdir it themselves — one less thing to
+        # get wrong. If we can't make/use it, bail with a wrapper-specific
+        # reason rather than letting Phase A run and inevitably trip
+        # phase_a_no_marker (which would incorrectly attribute the failure to
+        # the agent).
+        artifacts_dir = os.path.join(wdir, "artifacts")
+        artifacts_dir_error = None
+        try:
+            os.makedirs(artifacts_dir, exist_ok=True)
+        except OSError as exc:
+            artifacts_dir_error = exc
+        if (
+            not os.path.isdir(artifacts_dir)
+            or not os.access(artifacts_dir, os.W_OK | os.X_OK)
+        ):
+            reason = "wrapper_artifacts_dir_unavailable"
+            if artifacts_dir_error is not None:
+                detail = (
+                    f"could not prepare artifacts dir {artifacts_dir!r}: "
+                    f"{artifacts_dir_error}"
                 )
-                print("Gremlin marked dead:bailed:structural — rerun /gremlins rescue after fixing the named pipeline file or sibling plan.")
-                return False
-            if status == "unsalvageable":
-                _write_bail(sf, wdir, "unsalvageable", msg)
-                if msg:
-                    print(f"Phase A: agent declared the failure unsalvageable ({msg})")
+            elif not os.path.isdir(artifacts_dir):
+                detail = f"artifacts dir {artifacts_dir!r} does not exist after setup"
+            else:
+                detail = f"artifacts dir {artifacts_dir!r} is not writable"
+            if headless:
+                _write_bail(sf, wdir, reason, detail)
+                print(f"headless rescue refused: {reason}: {detail}")
+            else:
+                print(f"rescue refused: {reason}: {detail}")
+            report["verdict"] = reason
+            report["summary"] = detail
+            return False
+        # Include microseconds and PID so two rescue attempts in the same UTC
+        # second (e.g. operator hits Ctrl-C and immediately reruns) don't collide
+        # on the same marker_path — without uniqueness, the new run could read a
+        # stale marker from the prior attempt and treat it as the new agent's
+        # output.
+        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S_%fZ")
+        marker_path = os.path.join(artifacts_dir, f"rescue-{ts}-{os.getpid()}.done")
+        # Best-effort unlink: even though the timestamp is unique per run, removing
+        # any pre-existing marker at this path is cheap insurance against weird
+        # filesystem clock edge cases.
+        try:
+            os.unlink(marker_path)
+        except OSError:
+            pass
+
+        # Create a scratch dir so Phase A runs isolated from the worktree.
+        # The log tail is written there as a readable file; state.json is passed
+        # by absolute path as the only file the agent may edit.
+        # mkdtemp is inside the try so any subsequent exception triggers cleanup.
+        scratch_dir = None
+        try:
+            scratch_dir = tempfile.mkdtemp(prefix="gremlin-rescue-")
+            scratch_log = os.path.join(scratch_dir, "gremlin.log")
+            try:
+                with open(scratch_log, "w", encoding="utf-8") as fh:
+                    fh.write(log_tail)
+            except OSError:
+                scratch_log = log_path  # fallback: reference the original log path
+
+            prompt = build_rescue_prompt(state, log_tail, sf, scratch_log, marker_path)
+
+            print(f"Rescuing gremlin {gr_id} (stage: {stage}, liveness: {live})")
+            print(f"Gremlin workdir: {workdir}")
+            print(f"Agent scratch dir: {scratch_dir}")
+
+            if headless:
+                print(
+                    f"Phase A (headless): running diagnosis agent "
+                    f"(timeout: {HEADLESS_PHASE_A_TIMEOUT_SECS}s, marker: {marker_path})..."
+                )
+                status, err_msg = _run_headless_phase_a(scratch_dir, prompt, marker_path)
+
+                if status == "timeout":
+                    _write_bail(sf, wdir, "phase_a_timeout", err_msg)
+                    print(f"Phase A timed out: {err_msg}")
+                    report["verdict"] = "phase_a_timeout"
+                    report["summary"] = err_msg
+                    return False
+                if status == "claude_exit":
+                    _write_bail(sf, wdir, "phase_a_claude_error", err_msg)
+                    print(f"Phase A claude error: {err_msg}")
+                    report["verdict"] = "phase_a_claude_error"
+                    report["summary"] = err_msg
+                    return False
+                if status == "no_marker":
+                    _write_bail(sf, wdir, "phase_a_no_marker", err_msg)
+                    print(f"Phase A produced no marker file: {err_msg}")
+                    report["verdict"] = "phase_a_no_marker"
+                    report["summary"] = err_msg
+                    return False
+                if status == "bad_marker":
+                    _write_bail(sf, wdir, "phase_a_bad_marker", err_msg)
+                    print(f"Phase A marker file invalid: {err_msg}")
+                    report["verdict"] = "phase_a_bad_marker"
+                    report["summary"] = err_msg
+                    return False
+                if status == "structural":
+                    _write_bail(sf, wdir, "structural", err_msg)
+                    print(
+                        f"Phase A: agent flagged a structural problem in the pipeline "
+                        f"or sibling artifacts that requires a human edit ({err_msg})"
+                    )
+                    report["verdict"] = "structural"
+                    report["summary"] = err_msg
+                    return False
+                if status == "unsalvageable":
+                    _write_bail(sf, wdir, "unsalvageable", err_msg)
+                    if err_msg:
+                        print(f"Phase A: agent declared the failure unsalvageable ({err_msg})")
+                    else:
+                        print("Phase A: agent declared the failure unsalvageable.")
+                    report["verdict"] = "unsalvageable"
+                    report["summary"] = err_msg
+                    return False
+                # status == "fixed" or "transient" → proceed to Phase B. Both count
+                # as a rescue attempt; the launcher increments rescue_count when it
+                # actually relaunches. err_msg carries the agent's summary on the
+                # success path so a post-mortem reader can see WHAT was diagnosed.
+                if err_msg:
+                    print(f"Phase A complete (status: {status}, diagnosis: {err_msg}); handing off to Phase B...")
                 else:
-                    print("Phase A: agent declared the failure unsalvageable.")
-                # The bail is recorded but interactive callers can still rerun
-                # /gremlins rescue (do_rescue's preflight only refuses
-                # running/finished/stalled), so make that explicit — the
-                # `dead:bailed:unsalvageable` liveness can otherwise look
-                # terminal at a glance.
-                print("Gremlin marked dead:bailed:unsalvageable — rerun /gremlins rescue if you want to try again.")
-                return False
-            if status == "no_marker":
-                _write_bail(sf, wdir, "phase_a_no_marker", msg)
-                print(f"Phase A produced no marker file: {msg}")
-                return False
-            if status == "bad_marker":
-                _write_bail(sf, wdir, "phase_a_bad_marker", msg)
-                print(f"Phase A marker file invalid: {msg}")
-                return False
-            # status ∈ {"fixed", "transient"} → proceed to Phase B.
-            if msg:
-                print(f"Phase A summary: {msg}")
-            print(f"Phase A complete (status: {status}); handing off to Phase B...")
+                    print(f"Phase A complete (status: {status}); handing off to Phase B...")
+                report["verdict"] = status
+                report["summary"] = err_msg
+            else:
+                print("Phase A: running diagnosis agent inline — Ctrl-C to abort.")
+                print(f"Marker: {marker_path}")
+                print()
+                try:
+                    result = subprocess.run(["claude", "-p", prompt], cwd=scratch_dir)
+                except FileNotFoundError:
+                    print("error: 'claude' CLI not found in PATH")
+                    report["verdict"] = "phase_a_claude_error"
+                    report["summary"] = "'claude' CLI not found in PATH"
+                    return False
+                except KeyboardInterrupt:
+                    # Operator's deliberate interrupt — preserve state with no
+                    # bail so they can rerun /gremlins rescue without first
+                    # having to clear a bail_reason. Skip the report too: nothing
+                    # was decided, the gremlin is exactly as it was.
+                    print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
+                    aborted[0] = True
+                    return False
+
+                print()
+
+                if result.returncode != 0:
+                    detail = f"claude -p exited {result.returncode}"
+                    _write_bail(sf, wdir, "phase_a_claude_error", detail)
+                    print(f"Phase A: rescue agent exited with code {result.returncode}.")
+                    print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
+                    report["verdict"] = "phase_a_claude_error"
+                    report["summary"] = detail
+                    return False
+
+                # Zero exit: the marker is the source of truth. Without it the
+                # agent is presumed to have abdicated the protocol — bail rather
+                # than silently launching Phase B into the same broken state.
+                status, msg = _read_rescue_marker(marker_path)
+                if status == "structural":
+                    _write_bail(sf, wdir, "structural", msg)
+                    print(
+                        f"Phase A: agent flagged a structural problem in the pipeline "
+                        f"or sibling artifacts that requires a human edit ({msg})"
+                    )
+                    print("Gremlin marked dead:bailed:structural — rerun /gremlins rescue after fixing the named pipeline file or sibling plan.")
+                    report["verdict"] = "structural"
+                    report["summary"] = msg
+                    return False
+                if status == "unsalvageable":
+                    _write_bail(sf, wdir, "unsalvageable", msg)
+                    if msg:
+                        print(f"Phase A: agent declared the failure unsalvageable ({msg})")
+                    else:
+                        print("Phase A: agent declared the failure unsalvageable.")
+                    # The bail is recorded but interactive callers can still rerun
+                    # /gremlins rescue (do_rescue's preflight only refuses
+                    # running/finished/stalled), so make that explicit — the
+                    # `dead:bailed:unsalvageable` liveness can otherwise look
+                    # terminal at a glance.
+                    print("Gremlin marked dead:bailed:unsalvageable — rerun /gremlins rescue if you want to try again.")
+                    report["verdict"] = "unsalvageable"
+                    report["summary"] = msg
+                    return False
+                if status == "no_marker":
+                    _write_bail(sf, wdir, "phase_a_no_marker", msg)
+                    print(f"Phase A produced no marker file: {msg}")
+                    report["verdict"] = "phase_a_no_marker"
+                    report["summary"] = msg
+                    return False
+                if status == "bad_marker":
+                    _write_bail(sf, wdir, "phase_a_bad_marker", msg)
+                    print(f"Phase A marker file invalid: {msg}")
+                    report["verdict"] = "phase_a_bad_marker"
+                    report["summary"] = msg
+                    return False
+                # status ∈ {"fixed", "transient"} → proceed to Phase B.
+                if msg:
+                    print(f"Phase A summary: {msg}")
+                print(f"Phase A complete (status: {status}); handing off to Phase B...")
+                report["verdict"] = status
+                report["summary"] = msg
+        finally:
+            if scratch_dir is not None:
+                shutil.rmtree(scratch_dir, ignore_errors=True)
+
+        # Phase B: hand off to launch.sh --resume so the remaining stages run in the
+        # background under the same GR_ID. launch.sh patches state.json, clears the
+        # finished/summarized markers, increments rescue_count, and relaunches the
+        # pipeline with --resume-from <stage>.
+        launcher = os.path.expanduser("~/.claude/skills/_bg/launch.sh")
+        # os.access(..., X_OK) rather than os.path.isfile: an un-chmod'd launcher
+        # (e.g. after a manual edit) would pass the existence check and then fail
+        # with a PermissionError inside subprocess.run, which isn't caught by the
+        # FileNotFoundError handler below.
+        if not os.access(launcher, os.X_OK):
+            if headless:
+                _write_bail(sf, wdir, "phase_b_launcher_missing",
+                            f"launcher not executable at {launcher}")
+            print(f"error: launcher not executable at {launcher} — cannot resume in background")
+            report["relaunch_outcome"] = "failed"
+            report["relaunch_reason"] = f"launcher not executable at {launcher}"
+            return False
+
+        print()
+        print(f"Phase B: resuming gremlin {gr_id} in the background...")
+        try:
+            resume_result = subprocess.run(
+                [launcher, "--resume", gr_id],
+                cwd=workdir,
+            )
+        except FileNotFoundError:
+            if headless:
+                _write_bail(sf, wdir, "phase_b_launcher_missing",
+                            f"could not exec launcher at {launcher}")
+            print(f"error: could not exec launcher at {launcher}")
+            report["relaunch_outcome"] = "failed"
+            report["relaunch_reason"] = f"could not exec launcher at {launcher}"
+            return False
+
+        if resume_result.returncode != 0:
+            if headless:
+                _write_bail(sf, wdir, "phase_b_relaunch_failed",
+                            f"launcher exit {resume_result.returncode}")
+            print(f"error: background resume failed (launcher exit {resume_result.returncode})")
+            report["relaunch_outcome"] = "failed"
+            report["relaunch_reason"] = f"launcher exit {resume_result.returncode}"
+            return False
+
+        report["relaunch_outcome"] = "success"
+        report["relaunch_reason"] = "launcher exit 0"
+        return True
     finally:
-        if scratch_dir is not None:
-            shutil.rmtree(scratch_dir, ignore_errors=True)
-
-    # Phase B: hand off to launch.sh --resume so the remaining stages run in the
-    # background under the same GR_ID. launch.sh patches state.json, clears the
-    # finished/summarized markers, increments rescue_count, and relaunches the
-    # pipeline with --resume-from <stage>.
-    launcher = os.path.expanduser("~/.claude/skills/_bg/launch.sh")
-    # os.access(..., X_OK) rather than os.path.isfile: an un-chmod'd launcher
-    # (e.g. after a manual edit) would pass the existence check and then fail
-    # with a PermissionError inside subprocess.run, which isn't caught by the
-    # FileNotFoundError handler below.
-    if not os.access(launcher, os.X_OK):
-        if headless:
-            _write_bail(sf, wdir, "phase_b_launcher_missing",
-                        f"launcher not executable at {launcher}")
-        print(f"error: launcher not executable at {launcher} — cannot resume in background")
-        return False
-
-    print()
-    print(f"Phase B: resuming gremlin {gr_id} in the background...")
-    try:
-        resume_result = subprocess.run(
-            [launcher, "--resume", gr_id],
-            cwd=workdir,
-        )
-    except FileNotFoundError:
-        if headless:
-            _write_bail(sf, wdir, "phase_b_launcher_missing",
-                        f"could not exec launcher at {launcher}")
-        print(f"error: could not exec launcher at {launcher}")
-        return False
-
-    if resume_result.returncode != 0:
-        if headless:
-            _write_bail(sf, wdir, "phase_b_relaunch_failed",
-                        f"launcher exit {resume_result.returncode}")
-        print(f"error: background resume failed (launcher exit {resume_result.returncode})")
-        return False
-
-    return True
+        if not aborted[0]:
+            write_rescue_report(wdir, report)
 
 
 def do_close(target: str) -> bool:
@@ -1965,6 +2106,15 @@ def do_drill_in(target: str):
             fpath = os.path.join(artifacts_dir, fname)
             if os.path.isfile(fpath):
                 artifact_paths.append(fpath)
+    rescue_reports = []
+    try:
+        for fname in sorted(os.listdir(wdir)):
+            if fname.startswith("rescue-") and fname.endswith(".md"):
+                fpath = os.path.join(wdir, fname)
+                if os.path.isfile(fpath):
+                    rescue_reports.append(fpath)
+    except OSError:
+        pass
     has_log = os.path.isfile(log_path)
     if has_log:
         print(f"    log: {log_path}")
@@ -1972,8 +2122,12 @@ def do_drill_in(target: str):
         print("    artifacts:")
         for fpath in artifact_paths:
             print(f"      {fpath}")
-    if not has_log and not artifact_paths:
-        print("    (no log or artifacts)")
+    if rescue_reports:
+        print("    rescue reports:")
+        for fpath in rescue_reports:
+            print(f"      {fpath}")
+    if not has_log and not artifact_paths and not rescue_reports:
+        print("    (no log, artifacts, or rescue reports)")
 
 
 # ---------------------------------------------------------------------------
