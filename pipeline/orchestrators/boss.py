@@ -52,6 +52,7 @@ def _pipeline_cli_env() -> dict:
     env["PYTHONPATH"] = (
         f"{_PIPELINE_PARENT}{os.pathsep}{existing}" if existing else _PIPELINE_PARENT
     )
+    env["PYTHONSAFEPATH"] = "1"
     return env
 
 POLL_INTERVAL = 5  # seconds between finished-marker polls
