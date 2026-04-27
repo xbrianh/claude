@@ -314,8 +314,10 @@ def test_ghgremlin_resume_from_request_copilot(tmp_path):
     assert "implement-gh" not in stages, f"resume should skip implement: {stages}"
     assert "commit-pr" not in stages, f"resume should skip commit-pr: {stages}"
     # request-copilot calls gh (not claude) so it's not in the claude log,
-    # but ghreview and ghaddress must have run.
+    # but ghreview (and the parallel scope-review-pr it spawns) and ghaddress
+    # must have run.
     assert "ghreview" in stages
+    assert "scope-review-pr" in stages
     assert "ghaddress" in stages
 
 
@@ -344,6 +346,7 @@ def test_ghgremlin_resume_from_wait_copilot(tmp_path):
     assert "implement-gh" not in stages, f"resume should skip implement: {stages}"
     assert "commit-pr" not in stages, f"resume should skip commit-pr: {stages}"
     assert "ghreview" not in stages, f"resume should skip ghreview: {stages}"
+    assert "scope-review-pr" not in stages, f"resume should skip scope-review-pr: {stages}"
     # wait-copilot calls gh (not claude), but ghaddress must have run.
     assert "ghaddress" in stages
 
