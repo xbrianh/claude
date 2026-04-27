@@ -1215,7 +1215,7 @@ def do_log(target: str) -> bool:
     gr_id, sf, wdir = match
     log_path = os.path.join(wdir, "log")
     if not os.path.isfile(log_path):
-        print(f"error: no log file for gremlin {gr_id} at {log_path}")
+        sys.stderr.write(f"error: no log file for gremlin {gr_id} at {log_path}\n")
         return False
 
     # Print the path to stderr so it survives even if the operator is piping
@@ -1227,7 +1227,10 @@ def do_log(target: str) -> bool:
     try:
         os.execvp("tail", ["tail", "-F", log_path])
     except FileNotFoundError:
-        print("error: tail not found in PATH")
+        sys.stderr.write("error: tail not found in PATH\n")
+        return False
+    except OSError as e:
+        sys.stderr.write(f"error: could not exec tail: {e}\n")
         return False
 
 
