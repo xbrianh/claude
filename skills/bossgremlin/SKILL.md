@@ -33,7 +33,7 @@ Pass it as `--description "<phrase>"` before the `bossgremlin` kind argument:
 Flags:
 
 - `--plan <spec-path|issue-ref>` — (required) the top-level spec describing the overall multi-step goal. Four forms, mirroring `/ghgremlin --plan`:
-    - **Local file path** — an absolute path to a non-empty spec file.
+    - **Local file path** — an absolute or relative path to a non-empty spec file.
     - **`42` or `#42`** — issue #42 in the current repo.
     - **`owner/repo#42`** — issue #42 in a different repo (cross-repo spec source; the chain still runs against the current repo's `main`).
     - **Full URL `https://github.com/owner/repo/issues/42`** — same cross-repo semantics. `github.com` only.

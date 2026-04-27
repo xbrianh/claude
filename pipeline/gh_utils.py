@@ -54,19 +54,32 @@ def parse_issue_ref(
     return None, None
 
 
+VIEW_ISSUE_TIMEOUT = 30  # seconds; bounds `gh issue view` shell-out
+
+
 def view_issue(issue_ref: str, repo: str) -> dict:
     """Fetch ``number``, ``url``, ``body`` for an issue via ``gh issue view``.
 
-    Returns the parsed JSON dict. Raises ``RuntimeError`` when ``gh`` fails or
-    returns unparseable output.
+    Returns the parsed JSON dict. Raises ``RuntimeError`` when ``gh`` fails,
+    times out, or returns unparseable output. The timeout is bounded so a
+    hung ``gh`` (network stall, credential prompt) cannot block chain start
+    indefinitely.
     """
-    r = subprocess.run(
-        [
-            "gh", "issue", "view", issue_ref, "--repo", repo,
-            "--json", "number,url,body",
-        ],
-        capture_output=True, text=True, check=False,
-    )
+    try:
+        r = subprocess.run(
+            [
+                "gh", "issue", "view", issue_ref, "--repo", repo,
+                "--json", "number,url,body",
+            ],
+            capture_output=True, text=True, check=False,
+            timeout=VIEW_ISSUE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"timed out after {VIEW_ISSUE_TIMEOUT}s while resolving issue "
+            f"{issue_ref!r} in {repo!r} via `gh issue view`; check GitHub "
+            f"CLI authentication, prompts, and network connectivity"
+        ) from exc
     if r.returncode != 0:
         raise RuntimeError(
             f"could not resolve issue {issue_ref!r} in {repo!r}: {r.stderr.strip()}"

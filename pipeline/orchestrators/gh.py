@@ -139,13 +139,11 @@ _parse_issue_ref = parse_issue_ref
 
 
 def _fetch_issue_body(issue_num: str, repo: str) -> str:
-    r = subprocess.run(
-        ["gh", "issue", "view", issue_num, "--repo", repo, "--json", "body", "--jq", ".body"],
-        capture_output=True, text=True, check=False,
-    )
-    if r.returncode != 0:
-        die(f"could not fetch issue #{issue_num} body: {r.stderr.strip()}")
-    body = r.stdout.strip()
+    try:
+        issue_data = view_issue(issue_num, repo)
+    except RuntimeError as exc:
+        die(f"could not fetch issue #{issue_num} body: {exc}")
+    body = (issue_data.get("body") or "").strip()
     if not body:
         die(f"issue #{issue_num} has an empty body")
     return body

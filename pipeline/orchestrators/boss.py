@@ -491,27 +491,58 @@ def _resolve_plan_source(plan: str, state_dir: str) -> Tuple[str, str, str]:
     spec_dest = os.path.join(state_dir, "spec.md")
 
     if os.path.isfile(spec_dest) and os.path.getsize(spec_dest) > 0:
+        # Rescue path: a previous run already wrote the snapshot. Recover any
+        # issue_url / issue_num it persisted to state.json so the rescue
+        # doesn't silently strip the issue link from boss_state.json. (We
+        # avoid re-fetching from GitHub — the snapshot is authoritative.)
         log(f"reusing existing spec snapshot: {spec_dest}")
-        return spec_dest, "", ""
+        recovered_url = ""
+        recovered_num = ""
+        try:
+            state_data = load_json(os.path.join(state_dir, "state.json"))
+            recovered_url = state_data.get("issue_url") or ""
+            recovered_num = state_data.get("issue_num") or ""
+        except Exception:
+            pass
+        return spec_dest, recovered_url, recovered_num
+
+    # Classify the input shape *before* shelling out to `gh repo view`. For a
+    # typo like `--plan not-a-ref`, this lets us fail fast with a clear error
+    # instead of forcing the caller to be inside a gh-recognized repo first.
+    target_repo, issue_ref = parse_issue_ref(plan, "")
 
     if os.path.isfile(plan):
-        if os.path.getsize(plan) == 0:
-            die(f"--plan: file is empty: {plan}")
-        shutil.copyfile(plan, spec_dest)
+        try:
+            if os.path.getsize(plan) == 0:
+                die(f"--plan: file is empty: {plan}")
+            shutil.copyfile(plan, spec_dest)
+        except OSError as exc:
+            die(f"--plan: failed to read/copy local plan file {plan!r}: {exc}")
         log(f"plan source (file): {plan} → {spec_dest}")
         return spec_dest, "", ""
+
+    if target_repo is None and issue_ref is None:
+        # parse_issue_ref returned (None, None) for the bare-number form
+        # only because we passed an empty repo. Re-check by looking for the
+        # bare-number shape directly so the error message is accurate.
+        if not re.match(r"^#?[0-9]+$", plan):
+            die(f"--plan: not a readable file or recognized issue reference: {plan}")
 
     if shutil.which("gh") is None:
         die(f"--plan: gh CLI not found; required to resolve issue reference {plan!r}")
 
-    try:
-        repo = get_repo()
-    except RuntimeError as exc:
-        die(f"--plan: {exc}")
-
-    target_repo, issue_ref = parse_issue_ref(plan, repo)
-    if target_repo is None:
-        die(f"--plan: not a readable file or recognized issue reference: {plan}")
+    # Resolve the bare-number form against the current repo; cross-repo
+    # forms (`owner/name#42` or full URLs) already carry their own repo.
+    if target_repo is None or target_repo == "":
+        try:
+            target_repo = get_repo()
+        except RuntimeError as exc:
+            die(f"--plan: {exc}")
+        # Re-parse against the resolved repo to populate issue_ref for the
+        # bare-number form.
+        target_repo, issue_ref = parse_issue_ref(plan, target_repo)
+        if target_repo is None:
+            die(f"--plan: not a readable file or recognized issue reference: {plan}")
 
     try:
         issue_data = view_issue(issue_ref, target_repo)
@@ -527,6 +558,9 @@ def _resolve_plan_source(plan: str, state_dir: str) -> Tuple[str, str, str]:
 
     with open(spec_dest, "w", encoding="utf-8") as f:
         f.write(body + "\n")
+    # Persist the issue identifiers to state.json immediately so a crash
+    # between this point and init_boss_state() doesn't strip them on rescue.
+    patch_state(issue_url=issue_url, issue_num=issue_num)
     log(f"plan source (issue {target_repo}#{issue_ref}): {issue_url} → {spec_dest}")
     return spec_dest, issue_url, issue_num
 
@@ -549,10 +583,11 @@ def _maybe_set_description_from_spec(state_dir: str) -> None:
     if data.get("description_explicit"):
         return
     try:
+        # Read up to 50 lines; .splitlines() stops at EOF, so short specs
+        # still yield their leading lines (the prior list-comprehension
+        # form raised StopIteration on short files and dropped the H1).
         with open(spec_file, encoding="utf-8") as f:
-            head_lines = [next(f) for _ in range(50)]
-    except StopIteration:
-        head_lines = []
+            head_lines = f.read().splitlines()[:50]
     except Exception:
         return
     h1 = ""

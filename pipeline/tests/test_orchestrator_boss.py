@@ -846,6 +846,65 @@ def test_resolve_plan_source_idempotent(tmp_path, monkeypatch):
     assert fetch_called == []
 
 
+def test_resolve_plan_source_idempotent_recovers_issue_metadata(tmp_path, monkeypatch):
+    """On rescue, issue_url / issue_num are recovered from state.json so the
+    issue link survives the snapshot-already-exists short-circuit. Regression
+    for the bug where the idempotent path always returned empty strings."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "spec.md").write_text("# Already snapshotted\n")
+    (state_dir / "state.json").write_text(json.dumps({
+        "issue_url": "https://github.com/owner/repo/issues/77",
+        "issue_num": "77",
+    }))
+
+    monkeypatch.setattr(
+        boss_mod, "view_issue",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not refetch")),
+    )
+
+    spec_path, issue_url, issue_num = _resolve_plan_source("77", str(state_dir))
+
+    assert spec_path == str(state_dir / "spec.md")
+    assert issue_url == "https://github.com/owner/repo/issues/77"
+    assert issue_num == "77"
+
+
+def test_resolve_plan_source_persists_issue_metadata_on_first_fetch(
+    tmp_path, monkeypatch
+):
+    """First-run issue-ref path persists issue_url / issue_num to state.json
+    so a crash before init_boss_state still leaves the rescue path able to
+    recover the link."""
+    xdg_home = tmp_path / "xdg"
+    state_root = xdg_home / "claude-gremlins"
+    state_dir = state_root / "test-boss-persist-aa1122"
+    state_dir.mkdir(parents=True)
+    (state_dir / "state.json").write_text(json.dumps({"id": "test-boss-persist-aa1122"}))
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg_home))
+    monkeypatch.setenv("GR_ID", "test-boss-persist-aa1122")
+
+    monkeypatch.setattr(boss_mod, "get_repo", lambda: "owner/repo")
+    monkeypatch.setattr(
+        boss_mod, "view_issue",
+        lambda ref, repo: {
+            "number": 99,
+            "url": "https://github.com/owner/repo/issues/99",
+            "body": "# Spec\nbody.\n",
+        },
+    )
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda n: "/fake/gh" if n == "gh" else None)
+
+    spec_path, issue_url, issue_num = _resolve_plan_source("99", str(state_dir))
+
+    assert issue_url == "https://github.com/owner/repo/issues/99"
+    assert issue_num == "99"
+    state_data = json.loads((state_dir / "state.json").read_text())
+    assert state_data.get("issue_url") == "https://github.com/owner/repo/issues/99"
+    assert state_data.get("issue_num") == "99"
+
+
 # ---------------------------------------------------------------------------
 # boss_main smoke test: --plan <issue-ref> end-to-end snapshot
 # ---------------------------------------------------------------------------
@@ -853,8 +912,16 @@ def test_resolve_plan_source_idempotent(tmp_path, monkeypatch):
 def test_boss_main_plan_issue_ref_snapshots_spec(tmp_path, monkeypatch):
     """boss_main with --plan <issue-ref> fetches the issue and snapshots spec.md."""
     gr_id = "test-boss-issue-aabb12"
-    state_dir, project_root, workdir = _make_gremlin_state(tmp_path, gr_id)
-    _common_boss_patches(monkeypatch, tmp_path, gr_id)
+    # Arrange XDG_STATE_HOME so boss_mod.STATE_ROOT and patch_state's
+    # XDG-derived state file path agree, otherwise the description fill
+    # would silently no-op and the assertion below would always pass.
+    xdg_home = tmp_path / "xdg"
+    state_root = xdg_home / "claude-gremlins"
+    state_root.mkdir(parents=True)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg_home))
+
+    state_dir, project_root, workdir = _make_gremlin_state(state_root, gr_id)
+    _common_boss_patches(monkeypatch, state_root, gr_id)
 
     monkeypatch.setattr(boss_mod, "get_repo", lambda: "owner/repo")
     monkeypatch.setattr(
@@ -900,3 +967,9 @@ def test_boss_main_plan_issue_ref_snapshots_spec(tmp_path, monkeypatch):
     assert final_state["spec_path"] == str(snapshot)
     assert final_state["issue_url"] == "https://github.com/owner/repo/issues/80"
     assert final_state["issue_num"] == "80"
+
+    # _maybe_set_description_from_spec should have filled state.json's
+    # description from the snapshot's first H1 — this confirms the H1 read
+    # works for short specs (regression coverage for the StopIteration bug).
+    state_data = json.loads((state_dir / "state.json").read_text())
+    assert state_data.get("description") == "Plan from issue"
