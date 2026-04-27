@@ -17,21 +17,19 @@ MINIMAL_EVENTS = [
     {"type": "result", "subtype": "success"},
 ]
 
-# Labels the triple review emits (default sonnet models). Shared so the
+# Label the detail reviewer emits (default sonnet model). Shared so the
 # orchestrator smoke tests and the GR_ID-isolation regression tests stay
 # in sync if the label scheme changes.
 REVIEW_LABELS = {
-    "review-code:holistic:sonnet",
     "review-code:detail:sonnet",
-    "review-code:scope:sonnet",
 }
 
 
 class ReviewCreatingClient(FakeClaudeClient):
     """FakeClaudeClient that writes the review output file when a review-code
     label is called. Extracts the output path from the prompt so it lands at
-    exactly the path run_triple_review expects to exist after the workers
-    finish. Shared between test_orchestrator_local and test_state_isolation."""
+    exactly the path run_review_code_stage expects to exist after the reviewer
+    finishes. Shared between test_orchestrator_local and test_state_isolation."""
 
     def run(self, prompt, *, label, **kwargs):
         if label.startswith("review-code:"):
@@ -49,7 +47,6 @@ def common_local_patches(monkeypatch):
     monkeypatch.setattr(
         "pipeline.orchestrators.local.install_signal_handlers", lambda c: None
     )
-    monkeypatch.setattr("pipeline.stages.review_code.time.sleep", lambda s: None)
 
 
 @pytest.fixture(autouse=True)

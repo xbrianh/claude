@@ -105,13 +105,8 @@ def test_implement_stage_raises_on_empty_diff(tmp_path, monkeypatch):
 
 def test_address_code_stage_calls_client_with_review_content(tmp_path):
     session_dir = tmp_path
-    review_content = {
-        "holistic": "# Holistic Review\n\n## Findings\nLooks good.\n",
-        "detail": "# Detail Review\n\n## Findings\nLooks good.\n",
-        "scope": "# Scope Review\n\n## Findings\nLooks good.\n",
-    }
-    for lens, text in review_content.items():
-        (session_dir / f"review-code-{lens}-sonnet.md").write_text(text)
+    review_text = "# Detail Review\n\n## Findings\nLooks good.\n"
+    (session_dir / "review-code-detail-sonnet.md").write_text(review_text)
 
     client = FakeClaudeClient(fixtures={"address-code": MINIMAL_EVENTS})
     run_address_code_stage(
@@ -125,7 +120,4 @@ def test_address_code_stage_calls_client_with_review_content(tmp_path):
     call = client.calls[0]
     assert call.label == "address-code"
     assert call.model == "sonnet"
-    # Prompt should incorporate all three review bodies.
-    assert "Holistic Review" in call.prompt
     assert "Detail Review" in call.prompt
-    assert "Scope Review" in call.prompt

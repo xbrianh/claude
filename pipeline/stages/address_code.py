@@ -1,8 +1,8 @@
 """Address-code stage.
 
-Globs for the three review files in ``session_dir``, builds the address
+Globs for the detail review file in ``session_dir``, builds the address
 prompt from ``pipeline/prompts/address_code.md``, and invokes ``claude -p``.
-On any failure (missing/ambiguous review files, malformed model name in a
+On any failure (missing/ambiguous review file, malformed model name in a
 filename, claude crash) records ``bail_class=other`` so headless rescue
 sees a usable bail marker rather than having to grep the log.
 """
@@ -13,7 +13,6 @@ import glob
 import os
 import pathlib
 import re
-from typing import Dict
 
 from ..clients.claude import ClaudeClient
 from ..state import emit_bail
@@ -26,7 +25,7 @@ def _model_from(path: pathlib.Path, lens: str) -> str:
     """Extract the reviewer model name from ``review-code-<lens>-<model>.md``.
 
     Validate against MODEL_RE so a malformed filename (e.g.
-    ``review-code-holistic-.md``, or one with unexpected characters)
+    ``review-code-detail-.md``, or one with unexpected characters)
     fails loudly instead of producing an empty/garbled prompt label.
     """
     stem = path.stem  # review-code-<lens>-<model>
@@ -57,34 +56,27 @@ def run_address_code_stage(
     # exit without ever calling emit_bail, and headless rescue would have
     # no bail_class to act on.
     try:
-        review_files: Dict[str, pathlib.Path] = {}
-        for lens in ("holistic", "detail", "scope"):
-            matches = sorted(glob.glob(str(session_dir / f"review-code-{lens}-*.md")))
-            if not matches:
-                raise FileNotFoundError(
-                    f"no review-code-{lens}-*.md file found in {session_dir}"
-                )
-            if len(matches) > 1:
-                raise RuntimeError(
-                    f"multiple review-code-{lens}-*.md files in {session_dir}: "
-                    f"{', '.join(matches)}"
-                )
-            review_files[lens] = pathlib.Path(matches[0])
+        matches = sorted(glob.glob(str(session_dir / "review-code-detail-*.md")))
+        if not matches:
+            raise FileNotFoundError(
+                f"no review-code-detail-*.md file found in {session_dir}"
+            )
+        if len(matches) > 1:
+            raise RuntimeError(
+                f"multiple review-code-detail-*.md files in {session_dir}: "
+                f"{', '.join(matches)}"
+            )
+        review_file = pathlib.Path(matches[0])
 
-        model_a = _model_from(review_files["holistic"], "holistic")
-        model_b = _model_from(review_files["detail"], "detail")
-        model_c = _model_from(review_files["scope"], "scope")
-
-        text_a = review_files["holistic"].read_text(encoding="utf-8")
-        text_b = review_files["detail"].read_text(encoding="utf-8")
-        text_c = review_files["scope"].read_text(encoding="utf-8")
+        model = _model_from(review_file, "detail")
+        text = review_file.read_text(encoding="utf-8")
 
         address_commit_instr = ""
         if is_git:
             address_commit_instr = (
                 "After making all fixes, stage the changed files by name and "
                 "create a single git commit titled 'Address review feedback' whose "
-                "body references all three review files. Do not push."
+                "body references the review file. Do not push."
             )
 
         # Only attached when running under a gremlin so direct invocations
@@ -102,12 +94,8 @@ Do not call this helper if you successfully addressed every actionable finding.
 
         template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
         address_prompt = template.format(
-            model_a=model_a,
-            model_b=model_b,
-            model_c=model_c,
-            text_a=text_a,
-            text_b=text_b,
-            text_c=text_c,
+            model=model,
+            text=text,
             address_commit_instr=address_commit_instr,
             bail_section=bail_section,
         )

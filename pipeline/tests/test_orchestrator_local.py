@@ -48,8 +48,8 @@ def test_local_main_plan_mode(tmp_path, monkeypatch):
 
     labels = [c.label for c in client.calls]
     assert labels[0] == "implement"
-    assert set(labels[1:4]) == _REVIEW_LABELS
-    assert labels[4] == "address-code"
+    assert labels[1] == "review-code:detail:sonnet"
+    assert labels[2] == "address-code"
 
 
 # ---------------------------------------------------------------------------
@@ -74,10 +74,9 @@ def test_review_main_calls_client(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_address_main_calls_client(tmp_path, monkeypatch):
-    for lens in ("holistic", "detail", "scope"):
-        (tmp_path / f"review-code-{lens}-sonnet.md").write_text(
-            f"# {lens.title()} Review\n\n## Findings\nNone.\n"
-        )
+    (tmp_path / "review-code-detail-sonnet.md").write_text(
+        "# Detail Review\n\n## Findings\nNone.\n"
+    )
 
     _common_patches(monkeypatch)
     monkeypatch.setattr("pipeline.orchestrators.local.in_git_repo", lambda: False)

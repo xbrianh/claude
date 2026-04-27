@@ -29,7 +29,7 @@ def _launch_local(sh, *args, timeout=15):
 
 
 def test_localgremlin_full_pipeline_via_launch(tmp_path):
-    """plan → implement → review × 3 → address all run, in order, exactly once."""
+    """plan → implement → review → address all run, in order, exactly once."""
     sh = setup_shell_env(tmp_path)
     r = _launch_local(sh, "test full pipeline")
     assert r.returncode == 0, r.stderr
@@ -50,16 +50,14 @@ def test_localgremlin_full_pipeline_via_launch(tmp_path):
     stages = [e["stage"] for e in log]
     assert stages[0] == "plan", stages
     assert stages[1] == "implement-local", stages
-    # Three review calls in the middle (any order — they run in parallel).
-    review_count = sum(1 for s in stages if s == "review")
-    assert review_count == 3, f"expected 3 review calls, got {review_count}: {stages}"
-    assert stages[-1] == "address", stages
+    assert stages[2] == "review", stages
+    assert stages[3] == "address", stages
 
     # Artifacts exist in the session dir.
     artifacts = state_dir / "artifacts"
     assert (artifacts / "plan.md").exists()
     review_files = list(artifacts.glob("review-code-*.md"))
-    assert len(review_files) == 3, [p.name for p in review_files]
+    assert len(review_files) == 1, [p.name for p in review_files]
 
 
 def test_localgremlin_model_flags_forwarded(tmp_path):

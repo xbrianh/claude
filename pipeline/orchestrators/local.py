@@ -82,17 +82,14 @@ def _parse_local_args(argv: List[str]) -> argparse.Namespace:
     # and `--plan` (skip the plan stage, read plan from a file instead).
     usage = (
         'usage: pipeline.cli local [-p <plan-model>] [-i <impl-model>] '
-        '[-x <address-model>] [-a <holistic-review-model>] '
-        '[-b <detail-review-model>] [-c <scope-review-model>] '
+        '[-x <address-model>] [-b <detail-review-model>] '
         '[--resume-from <stage>] [--plan <path>] "<instructions>"'
     )
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("-p", dest="plan_model", default="sonnet")
     parser.add_argument("-i", dest="impl", default="sonnet")
     parser.add_argument("-x", dest="address", default="sonnet")
-    parser.add_argument("-a", dest="holistic", default="sonnet")
     parser.add_argument("-b", dest="detail", default="sonnet")
-    parser.add_argument("-c", dest="scope", default="sonnet")
     parser.add_argument("--resume-from", dest="resume_from", default=None,
                         choices=VALID_RESUME_STAGES)
     parser.add_argument("--plan", dest="plan_path", default=None)
@@ -111,7 +108,7 @@ def _parse_local_args(argv: List[str]) -> argparse.Namespace:
     else:
         if not args.instructions:
             die(usage)
-    for m in (args.plan_model, args.impl, args.address, args.holistic, args.detail, args.scope):
+    for m in (args.plan_model, args.impl, args.address, args.detail):
         if not MODEL_RE.match(m):
             die(f"invalid model: {m}")
     return args
@@ -130,9 +127,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
 
     session_dir = resolve_session_dir()
     plan_file = session_dir / "plan.md"
-    review_code_a = session_dir / f"review-code-holistic-{args.holistic}.md"
-    review_code_b = session_dir / f"review-code-detail-{args.detail}.md"
-    review_code_c = session_dir / f"review-code-scope-{args.scope}.md"
+    review_code_file = session_dir / f"review-code-detail-{args.detail}.md"
 
     print(f"==> session: {session_dir}", flush=True)
 
@@ -194,9 +189,8 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
                 if not has_files:
                     die(f"--resume-from {args.resume_from} requires implementation changes in the worktree")
         if start_idx >= VALID_RESUME_STAGES.index("address-code"):
-            for rf in (review_code_a, review_code_b, review_code_c):
-                if not rf.exists() or rf.stat().st_size == 0:
-                    die(f"--resume-from {args.resume_from} requires existing {rf}")
+            if not review_code_file.exists() or review_code_file.stat().st_size == 0:
+                die(f"--resume-from {args.resume_from} requires existing {review_code_file}")
 
     # Stage callables. plan_text is read just-in-time so a mid-stage failure
     # plus resume picks up whatever the plan stage produced.
@@ -240,22 +234,17 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
         plan_text = plan_text_holder.get("text") or plan_file.read_text(encoding="utf-8")
         set_stage("review-code")
         print(
-            f"==> [3/4] reviewing code in parallel "
-            f"(models: {args.holistic}, {args.detail}, {args.scope})",
+            f"==> [3/4] reviewing code (model: {args.detail})",
             flush=True,
         )
-        a, b, c = run_review_code_stage(
+        review_file = run_review_code_stage(
             client=client,
             session_dir=session_dir,
             plan_text=plan_text,
-            holistic=args.holistic,
             detail=args.detail,
-            scope=args.scope,
             is_git=is_git,
         )
-        print(f"    holistic code review ({args.holistic}): {a}", flush=True)
-        print(f"    detail code review   ({args.detail}): {b}", flush=True)
-        print(f"    scope code review    ({args.scope}): {c}", flush=True)
+        print(f"    detail code review ({args.detail}): {review_file}", flush=True)
 
     def stage_address_code() -> None:
         set_stage("address-code")
@@ -287,18 +276,15 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
 def _parse_review_args(argv: List[str]) -> argparse.Namespace:
     usage = (
         "usage: pipeline.cli review [--dir <path>] [--plan <path>] "
-        "[-a <holistic-model>] [-b <detail-model>] [-c <scope-model>]"
+        "[-b <detail-model>]"
     )
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("--dir", dest="dir", default=".")
     parser.add_argument("--plan", dest="plan", default=None)
-    parser.add_argument("-a", dest="holistic", default="sonnet")
     parser.add_argument("-b", dest="detail", default="sonnet")
-    parser.add_argument("-c", dest="scope", default="sonnet")
     args = parser.parse_args(argv)
-    for m in (args.holistic, args.detail, args.scope):
-        if not MODEL_RE.match(m):
-            die(f"invalid model: {m}")
+    if not MODEL_RE.match(args.detail):
+        die(f"invalid model: {args.detail}")
     return args
 
 
@@ -356,22 +342,17 @@ def review_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> in
             die("nothing to review: HEAD~1..HEAD has no changes and working tree is clean")
 
     print(
-        f"==> reviewing code in parallel "
-        f"(models: {args.holistic}, {args.detail}, {args.scope})",
+        f"==> reviewing code (model: {args.detail})",
         flush=True,
     )
-    review_a, review_b, review_c = run_review_code_stage(
+    review_file = run_review_code_stage(
         client=client,
         session_dir=session_dir,
         plan_text=plan_text,
-        holistic=args.holistic,
         detail=args.detail,
-        scope=args.scope,
         is_git=is_git,
     )
-    print(f"    holistic code review ({args.holistic}): {review_a}", flush=True)
-    print(f"    detail code review   ({args.detail}): {review_b}", flush=True)
-    print(f"    scope code review    ({args.scope}): {review_c}", flush=True)
+    print(f"    detail code review ({args.detail}): {review_file}", flush=True)
     return 0
 
 

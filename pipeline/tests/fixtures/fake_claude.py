@@ -255,7 +255,7 @@ def classify_stage(prompt: str) -> str:
         return "ghplan"
     if "Create a detailed implementation plan" in prompt:
         return "plan"
-    if "Three independent code reviews" in prompt:
+    if "A code review of the most recent implementation follows" in prompt:
         return "address"
     if "is the canonical and required location for your review output" in prompt:
         return "review"
