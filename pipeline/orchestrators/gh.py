@@ -296,10 +296,13 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
 
     print(f"==> session: {session_dir}", flush=True)
 
-    # Restore model from state.json when --model not supplied (resume path).
+    # Restore model from state.json when --model not supplied (resume path),
+    # then fall back to "sonnet" for fresh launches without an explicit --model.
+    # Argparse keeps default=None so the resume-restore step can detect "user
+    # didn't pass --model" and prefer the persisted value over the fresh default.
     model = args.model
     if model is None:
-        model = _read_state_field(state_file, "model") or None
+        model = _read_state_field(state_file, "model") or "sonnet"
     if model:
         patch_state(model=model)
 
