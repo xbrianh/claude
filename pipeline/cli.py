@@ -6,7 +6,7 @@ The first positional argument selects the subcommand:
 - ``review``  — review-code stage only (was ``localreview.py``)
 - ``address`` — address-code stage only (was ``localaddress.py``)
 - ``gh``      — full gh-issue-driven pipeline (Phase 3)
-- ``boss``    — not yet implemented (Phase 4)
+- ``boss``    — chained serial workflow driven by a top-level spec (Phase 4)
 
 Remaining argv is forwarded to the chosen orchestrator entry point with
 its own argparse contract preserved byte-stable from the old skill scripts.

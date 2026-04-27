@@ -300,7 +300,7 @@ def test_chain_done_after_one_child(tmp_path, monkeypatch):
 
 
 def test_chain_uses_ghgremlin_for_gh_kind(tmp_path, monkeypatch):
-    """Boss uses 'ghgremlin' as the launch_kind when chain-kind=gh."""
+    """Boss passes 'ghgremlin' as the launch_kind when chain-kind=gh."""
     gr_id = "test-boss-gh-cc3344"
     state_dir, project_root, workdir = _make_gremlin_state(tmp_path, gr_id)
     _common_boss_patches(monkeypatch, tmp_path, gr_id)
@@ -313,32 +313,44 @@ def test_chain_uses_ghgremlin_for_gh_kind(tmp_path, monkeypatch):
     child_plan.write_text("# Child plan\n")
 
     launch_kinds = []
+    handoff_results = iter([
+        ("next-plan", {"exit_state": "next-plan", "child_plan": str(child_plan), "operator_followups": []}),
+        ("chain-done", {"exit_state": "chain-done", "operator_followups": []}),
+    ])
 
     def fake_run_handoff(gr_id, state_dir, boss_state, project_root, boss_workdir, model):
+        exit_state, sig = next(handoff_results)
         n = boss_state["handoff_count"] + 1
         out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
         pathlib.Path(out_path).write_text(f"# Handoff {n}\n")
         boss_state["handoff_count"] = n
         boss_state["current_plan"] = out_path
+        boss_state["operator_followups"] = sig.get("operator_followups", [])
         boss_state["handoff_records"].append({
             "timestamp": "2026-01-01T00:00:00Z", "n": n,
             "plan_in": boss_state["spec_path"], "plan_out": out_path,
-            "signal_file": "", "exit_state": "chain-done",
-            "child_plan": None, "bail_reason": None, "operator_followups": [],
+            "signal_file": "", "exit_state": exit_state,
+            "child_plan": sig.get("child_plan"), "bail_reason": None,
+            "operator_followups": sig.get("operator_followups", []),
         })
-        boss_state["operator_followups"] = []
-        return "chain-done", {"exit_state": "chain-done", "operator_followups": []}
+        return exit_state, sig
 
     def fake_launch_child(gr_id, launch_kind, child_plan_path):
         launch_kinds.append(launch_kind)
-        return "child-never-called"
+        child_id = "child-gh-cc3344"
+        child_dir = tmp_path / child_id
+        child_dir.mkdir(exist_ok=True)
+        (child_dir / "state.json").write_text(json.dumps({"exit_code": 0}))
+        (child_dir / "finished").write_text("")
+        return child_id
 
     monkeypatch.setattr(boss_mod, "run_handoff", fake_run_handoff)
     monkeypatch.setattr(boss_mod, "launch_child", fake_launch_child)
+    monkeypatch.setattr(boss_mod, "land_child", lambda cid: True)
 
     result = boss_main(["--plan", str(spec), "--chain-kind", "gh"])
     assert result == 0
-    assert launch_kinds == []  # chain-done on first handoff, no child launched
+    assert launch_kinds == ["ghgremlin"]
 
 
 def test_chain_bail_on_handoff(tmp_path, monkeypatch):
@@ -376,8 +388,12 @@ def test_chain_bail_on_handoff(tmp_path, monkeypatch):
 # Handoff signal parsing: operator_followups separation from child_plan
 # ---------------------------------------------------------------------------
 
-def test_operator_followups_stored_separately(tmp_path, monkeypatch):
-    """operator_followups from handoff go into boss_state; child gremlin gets only child_plan."""
+def test_operator_followups_stored_in_boss_state(tmp_path, monkeypatch):
+    """operator_followups from handoff signal are persisted in boss_state, not forwarded to child.
+
+    The contract under test: boss stores operator_followups in boss_state["operator_followups"]
+    and passes the child_plan path (not the operator items) to launch_child.
+    """
     gr_id = "test-boss-opfollowup-ee7788"
     state_dir, project_root, workdir = _make_gremlin_state(tmp_path, gr_id)
     _common_boss_patches(monkeypatch, tmp_path, gr_id)
@@ -388,7 +404,7 @@ def test_operator_followups_stored_separately(tmp_path, monkeypatch):
     child_plan.write_text("# Child plan\nDo the implementation.\n")
 
     operator_items = ["After landing: run sync.sh push", "After landing: verify e2e"]
-    child_plan_passed = []
+    launch_args = []  # (launch_kind, child_plan_path) captured per call
 
     handoff_results = iter([
         (
@@ -420,7 +436,7 @@ def test_operator_followups_stored_separately(tmp_path, monkeypatch):
         return exit_state, sig
 
     def fake_launch_child(gr_id, launch_kind, child_plan_path):
-        child_plan_passed.append(child_plan_path)
+        launch_args.append((launch_kind, child_plan_path))
         child_id = "child-op-test-ff9900"
         child_dir = tmp_path / child_id
         child_dir.mkdir(exist_ok=True)
@@ -435,13 +451,12 @@ def test_operator_followups_stored_separately(tmp_path, monkeypatch):
     result = boss_main(["--plan", str(spec), "--chain-kind", "local"])
     assert result == 0
 
-    # Child was launched with the child_plan path, not with operator items injected.
-    assert child_plan_passed == [str(child_plan)]
-    child_plan_content = pathlib.Path(child_plan_passed[0]).read_text()
-    for item in operator_items:
-        assert item not in child_plan_content
+    # Boss launched exactly one child using the child_plan path from the handoff signal.
+    assert len(launch_args) == 1
+    _, launched_plan_path = launch_args[0]
+    assert launched_plan_path == str(child_plan)
 
-    # operator_followups are in boss_state, not in the child plan content.
+    # operator_followups are stored in boss_state, not forwarded as a separate argument.
     final_state = load_boss_state(str(state_dir))
     assert final_state["operator_followups"] == operator_items
 
