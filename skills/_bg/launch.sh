@@ -137,9 +137,9 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         die "gremlin $RESUME_GR_ID finished successfully — nothing to resume"
     fi
 
-    # Per-kind dispatch resolution. Migrated kinds run via `pipeline.cli`;
+    # Per-kind dispatch resolution. Migrated kinds run via `gremlins.cli`;
     # not-yet-migrated kinds still resolve a per-kind script. Phases 3 and 4
-    # flip ghgremlin and bossgremlin to the pipeline path; the loop fallback
+    # flip ghgremlin and bossgremlin to the gremlins path; the loop fallback
     # disappears entirely once all three kinds are migrated.
     PIPELINE=""
     KIND_SUBCOMMAND=""
@@ -254,11 +254,11 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         if [[ $USE_PIPELINE -eq 1 ]]; then
             if [[ $_has_plan -eq 1 ]]; then
                 PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" PYTHONSAFEPATH=1 \
-                nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                nohup bash -c 'python3 -m gremlins.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
                     -- "$KIND_SUBCOMMAND" "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" </dev/null >>"$STATE_DIR/log" 2>&1 &
             else
                 PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" PYTHONSAFEPATH=1 \
-                nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+                nohup bash -c 'python3 -m gremlins.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
                     -- "$KIND_SUBCOMMAND" "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
             fi
         else
@@ -312,9 +312,9 @@ if [[ "$KIND" == "ghgremlin" ]]; then
     command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 fi
 
-# Per-kind dispatch resolution. Migrated kinds run via `pipeline.cli`;
+# Per-kind dispatch resolution. Migrated kinds run via `gremlins.cli`;
 # not-yet-migrated kinds still resolve a per-kind script. Phases 3 and 4
-# flip ghgremlin and bossgremlin to the pipeline path; the loop fallback
+# flip ghgremlin and bossgremlin to the gremlins path; the loop fallback
 # disappears entirely once all three kinds are migrated.
 PIPELINE=""
 KIND_SUBCOMMAND=""
@@ -654,7 +654,7 @@ export PIPELINE GR_ID
     cd "$WORKDIR"
     if [[ $USE_PIPELINE -eq 1 ]]; then
         PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" PYTHONSAFEPATH=1 \
-        nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
+        nohup bash -c 'python3 -m gremlins.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
             -- "$KIND_SUBCOMMAND" "$@" </dev/null >"$STATE_DIR/log" 2>&1 &
     else
         nohup bash -c '"$PIPELINE" "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \

@@ -9,7 +9,7 @@ You are running the `gremlins` status command. It reads the persistent state und
 
 ## What to do
 
-Run the script and print its output verbatim to the user — do not paraphrase or summarize. The entry point is a thin shim that execs into `python -m pipeline.cli fleet`; the fleet-manager logic lives in `pipeline/fleet.py`:
+Run the script and print its output verbatim to the user — do not paraphrase or summarize. The entry point is a thin shim that execs into `python -m gremlins.cli fleet`; the fleet-manager logic lives in `gremlins/fleet.py`:
 
 ```
 ~/.claude/skills/gremlins/gremlins.py $ARGUMENTS

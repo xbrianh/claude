@@ -1,0 +1,9 @@
+[project]
+name = "gremlins"
+version = "0.1.0"
+description = "Shared plan/implement/review/address orchestration for the Claude gremlin skills."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
