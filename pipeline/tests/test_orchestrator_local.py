@@ -1,45 +1,13 @@
-import pathlib
-import re
-
 import pytest
 
-from conftest import MINIMAL_EVENTS
+from conftest import (
+    MINIMAL_EVENTS,
+    REVIEW_LABELS as _REVIEW_LABELS,
+    ReviewCreatingClient as _ReviewCreatingClient,
+    common_local_patches as _common_patches,
+)
 from pipeline.clients.fake import FakeClaudeClient
 from pipeline.orchestrators.local import address_main, local_main, review_main
-
-# Labels the triple review emits (default sonnet models).
-_REVIEW_LABELS = {
-    "review-code:holistic:sonnet",
-    "review-code:detail:sonnet",
-    "review-code:scope:sonnet",
-}
-
-
-class _ReviewCreatingClient(FakeClaudeClient):
-    """FakeClaudeClient that writes the review output file when a review-code
-    label is called. Extracts the output path from the prompt so it lands at
-    exactly the path run_triple_review expects to exist after the workers finish."""
-
-    def run(self, prompt, *, label, **kwargs):
-        if label.startswith("review-code:"):
-            m = re.search(r"`([^`]+\.md)`\s+is the canonical", prompt)
-            assert m, f"regex did not match review-code prompt for label {label!r}"
-            out = pathlib.Path(m.group(1))
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text("# Review\n\n## Findings\nNone.\n")
-        return super().run(prompt, label=label, **kwargs)
-
-
-def _common_patches(monkeypatch):
-    """Apply monkeypatches shared across orchestrator smoke tests."""
-    import shutil
-    monkeypatch.setattr(shutil, "which", lambda n: "/fake/claude" if n == "claude" else None)
-    monkeypatch.setattr(
-        "pipeline.orchestrators.local.install_signal_handlers", lambda c: None
-    )
-    monkeypatch.setattr(
-        "pipeline.stages.review_code.time.sleep", lambda s: None
-    )
 
 
 # ---------------------------------------------------------------------------

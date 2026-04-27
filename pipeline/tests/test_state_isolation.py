@@ -9,84 +9,119 @@ dangerous for any rescue-flow logic that branches on `stage`.
 The fix is the autouse `_isolate_gr_id` fixture in conftest.py, which
 delenv's GR_ID before every test. These tests verify both layers:
 
-- test_autouse_isolate_gr_id_unsets_gr_id: direct check that the autouse
-  fixture is in effect and GR_ID is unset inside the test body.
-- test_orchestrators_do_not_clobber_external_state: end-to-end check that
-  running the local orchestrator entry points does not write to a
-  pre-existing parent gremlin state.json under XDG_STATE_HOME.
+- test_autouse_isolate_gr_id_unsets_gr_id_under_inherited_env: spawns a
+  pytest subprocess with GR_ID set in its environment and asserts the
+  autouse fixture removes it inside the test body. Without the subprocess
+  hop, this test would pass trivially in any clean CI environment (no
+  GR_ID inherited) regardless of whether the autouse fixture was present.
+- test_*_does_not_clobber_external_state: per-orchestrator end-to-end
+  checks that running each entry point does not invoke set-stage.sh
+  against a pre-staged parent gremlin's state.json. Each orchestrator is
+  exercised in its own test so a regression message names the offender.
+
+Coverage envelope: with GR_ID unset (the post-fix invariant), set_stage
+early-returns before subprocess.run, so these tests verify that guard
+plus the autouse fixture's delenv. They do NOT catch hypothetical future
+code paths that resolve GR_ID from somewhere other than os.environ (a
+config file, a passed-in arg) — those bypass the autouse delenv. To
+make any leak that *does* hit subprocess.run deterministic regardless of
+whether ~/.claude/skills/_bg/set-stage.sh exists on the test machine,
+the orchestrator tests monkeypatch pipeline.state.SET_STAGE_SH to a
+real executable in tmp_path.
 """
 
 import json
 import os
 import pathlib
-import re
-import shutil
+import subprocess
+import sys
+import textwrap
 
-from conftest import MINIMAL_EVENTS
+from conftest import (
+    MINIMAL_EVENTS,
+    REVIEW_LABELS as _REVIEW_LABELS,
+    ReviewCreatingClient as _ReviewCreatingClient,
+    common_local_patches as _common_patches,
+)
 from pipeline.clients.fake import FakeClaudeClient
 from pipeline.orchestrators.local import address_main, local_main, review_main
 
 
-_REVIEW_LABELS = {
-    "review-code:holistic:sonnet",
-    "review-code:detail:sonnet",
-    "review-code:scope:sonnet",
-}
+def test_autouse_isolate_gr_id_unsets_gr_id_under_inherited_env(tmp_path):
+    # Spawn a pytest subprocess with GR_ID set in env. The autouse fixture
+    # must remove it inside the inner test body. Without the subprocess hop
+    # this would pass trivially in any environment that doesn't already
+    # have GR_ID set, so removing the autouse fixture wouldn't trip the
+    # regression.
+    #
+    # Place a conftest.py next to the inner test that imports the real
+    # autouse fixture from pipeline.tests.conftest so we are exercising
+    # the actual fixture under test, not a re-implementation.
+    inner_conftest = tmp_path / "conftest.py"
+    inner_conftest.write_text(textwrap.dedent("""
+        # Re-export the autouse _isolate_gr_id fixture from the real
+        # pipeline.tests.conftest so the inner pytest run picks it up.
+        # importlib avoids the name collision pytest sees when this
+        # conftest.py tries to `from conftest import ...`.
+        import importlib.util as _u, os, pathlib as _p
+        _src = _p.Path(os.environ["PIPELINE_TESTS_DIR"]) / "conftest.py"
+        _spec = _u.spec_from_file_location("pipeline_tests_conftest", _src)
+        _mod = _u.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _isolate_gr_id = _mod._isolate_gr_id
+    """))
+    test_file = tmp_path / "test_inner.py"
+    test_file.write_text(textwrap.dedent("""
+        import os
 
-
-def test_autouse_isolate_gr_id_unsets_gr_id():
-    # If pytest is invoked from inside a gremlin's implement stage, GR_ID is
-    # inherited from the parent. The autouse fixture in conftest.py must
-    # remove it; otherwise pipeline.state.set_stage will shell out to
-    # set-stage.sh against the parent's state.json.
-    assert os.environ.get("GR_ID") is None
-
-
-class _ReviewCreatingClient(FakeClaudeClient):
-    """Mirrors test_orchestrator_local._ReviewCreatingClient: writes a stub
-    review file when a review-code label is invoked, so the triple-review
-    wait-for-files loop completes."""
-
-    def run(self, prompt, *, label, **kwargs):
-        if label.startswith("review-code:"):
-            m = re.search(r"`([^`]+\.md)`\s+is the canonical", prompt)
-            assert m, f"regex did not match review-code prompt for label {label!r}"
-            out = pathlib.Path(m.group(1))
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text("# Review\n\n## Findings\nNone.\n")
-        return super().run(prompt, label=label, **kwargs)
-
-
-def _common_patches(monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda n: "/fake/claude" if n == "claude" else None)
-    monkeypatch.setattr(
-        "pipeline.orchestrators.local.install_signal_handlers", lambda c: None
+        def test_gr_id_unset_inside_pytest():
+            assert os.environ.get("GR_ID") is None, (
+                "autouse _isolate_gr_id fixture failed to remove inherited "
+                f"GR_ID={os.environ.get('GR_ID')!r}"
+            )
+    """))
+    tests_dir = pathlib.Path(__file__).resolve().parent
+    repo_root = tests_dir.parent.parent
+    env = dict(os.environ)
+    env["GR_ID"] = "fake-parent-gremlin-deadbeef"
+    env["PIPELINE_TESTS_DIR"] = str(tests_dir)
+    env["PYTHONPATH"] = str(repo_root) + os.pathsep + str(tests_dir)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test_file), "-q", "-p", "no:cacheprovider"],
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
     )
-    monkeypatch.setattr("pipeline.stages.review_code.time.sleep", lambda s: None)
+    assert result.returncode == 0, (
+        f"inner pytest failed (autouse fixture not isolating GR_ID?):\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
 
 
-def test_orchestrators_do_not_clobber_external_state(tmp_path, monkeypatch):
-    # Stub pipeline.state.subprocess.run with a recorder so we can detect any
-    # set-stage.sh invocation regardless of whether the bash helper actually
-    # exists on the test machine, and without depending on the leaked GR_ID
-    # value matching a pre-created state file.
-    recorded_calls = []
-    real_run = __import__("subprocess").run
+def _recording_run(recorded_calls):
+    """Build a subprocess.run replacement that records each call's argv and
+    returns a successful CompletedProcess. Module-scope helper so we don't
+    rebuild the closure target type on every recorded call."""
 
     def recording_run(*args, **kwargs):
         recorded_calls.append(args[0] if args else kwargs.get("args"))
-        # Return a successful CompletedProcess shape so callers don't choke.
-        class _R:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-        return _R()
+        return subprocess.CompletedProcess(
+            args=args[0] if args else (),
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
 
-    monkeypatch.setattr("pipeline.state.subprocess.run", recording_run)
+    return recording_run
 
-    # Simulate the parent gremlin's state directory under XDG_STATE_HOME so
-    # any direct (non-set-stage.sh) write path that resolves through
-    # XDG_STATE_HOME would still land in tmp_path and corrupt the file.
+
+def _stage_parent_state(tmp_path, monkeypatch):
+    """Pre-create a parent gremlin's state.json under XDG_STATE_HOME and
+    install a fake set-stage.sh so any leak deterministically hits the
+    recorded subprocess.run. Returns (parent_state_file, original_content,
+    parent_mtime, recorded_calls).
+    """
     xdg = tmp_path / "xdg"
     parent_id = "parent-gremlin-deadbeef"
     parent_state_dir = xdg / "claude-gremlins" / parent_id
@@ -95,18 +130,50 @@ def test_orchestrators_do_not_clobber_external_state(tmp_path, monkeypatch):
     original_content = json.dumps({"id": parent_id, "stage": "implement"})
     parent_state_file.write_text(original_content)
     parent_mtime = parent_state_file.stat().st_mtime_ns
-
     monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
-    # GR_ID intentionally NOT set here — the autouse _isolate_gr_id fixture
-    # in conftest.py has removed it. With Layer 1 in place this test asserts
-    # the orchestrators are quiet: set_stage no-ops because GR_ID is empty,
-    # so subprocess.run is never invoked against set-stage.sh. If a future
-    # change reintroduces the leak (e.g. a stage that re-reads GR_ID from
-    # somewhere other than os.environ, or autouse delenv being removed when
-    # pytest runs from a parent gremlin), the recorded_calls assertion below
-    # fires.
 
-    # ---- local_main (--plan mode) ----
+    # Install a fake set-stage.sh executable so pipeline.state.set_stage's
+    # exists()/access(X_OK) preflight succeeds. Without this, a future
+    # regression that re-leaked GR_ID could still silently pass on a CI
+    # machine that has no ~/.claude/skills/_bg/set-stage.sh, because the
+    # preflight would early-return before our recorded subprocess.run hook.
+    fake_helper = tmp_path / "set-stage.sh"
+    fake_helper.write_text("#!/bin/sh\nexit 0\n")
+    fake_helper.chmod(0o755)
+    monkeypatch.setattr("pipeline.state.SET_STAGE_SH", fake_helper)
+
+    recorded_calls = []
+    monkeypatch.setattr("pipeline.state.subprocess.run", _recording_run(recorded_calls))
+
+    # GR_ID intentionally NOT set here — the autouse _isolate_gr_id fixture
+    # in conftest.py has removed it. With Layer 1 in place, set_stage
+    # no-ops because GR_ID is empty, so subprocess.run is never invoked
+    # against set-stage.sh. If autouse delenv is removed AND GR_ID is
+    # inherited from the parent env, the recorded_calls assertion fires.
+    return parent_state_file, original_content, parent_mtime, recorded_calls
+
+
+def _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls):
+    # File byte-equality covers any direct write path that resolves through
+    # XDG_STATE_HOME (the asserts on stage / sub_stage that used to live
+    # here were redundant — they're implied by content equality).
+    assert parent_state_file.stat().st_mtime_ns == parent_mtime
+    assert parent_state_file.read_text() == original_content
+
+    leaked = [
+        c for c in recorded_calls
+        if c and len(c) >= 1 and "set-stage.sh" in str(c[0])
+    ]
+    assert not leaked, (
+        f"orchestrator leaked set-stage.sh calls under unset GR_ID: {leaked}"
+    )
+
+
+def test_local_main_does_not_clobber_external_state(tmp_path, monkeypatch):
+    parent_state_file, original_content, parent_mtime, recorded_calls = (
+        _stage_parent_state(tmp_path, monkeypatch)
+    )
+
     session_dir = tmp_path / "session-local"
     session_dir.mkdir()
     plan_file = tmp_path / "plan.md"
@@ -124,53 +191,49 @@ def test_orchestrators_do_not_clobber_external_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "pipeline.stages.implement.changes_outside_git", lambda s, d: True
     )
-    client_local = _ReviewCreatingClient(
+
+    client = _ReviewCreatingClient(
         fixtures={
             "implement": MINIMAL_EVENTS,
             **{lbl: MINIMAL_EVENTS for lbl in _REVIEW_LABELS},
             "address-code": MINIMAL_EVENTS,
         }
     )
-    assert local_main(["--plan", str(plan_file)], client=client_local) == 0
+    assert local_main(["--plan", str(plan_file)], client=client) == 0
+    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls)
 
-    # ---- review_main ----
+
+def test_review_main_does_not_clobber_external_state(tmp_path, monkeypatch):
+    parent_state_file, original_content, parent_mtime, recorded_calls = (
+        _stage_parent_state(tmp_path, monkeypatch)
+    )
+
     review_dir = tmp_path / "review-dir"
     review_dir.mkdir()
     monkeypatch.chdir(review_dir)
-    client_review = _ReviewCreatingClient(
+    _common_patches(monkeypatch)
+    monkeypatch.setattr("pipeline.orchestrators.local.in_git_repo", lambda: False)
+    client = _ReviewCreatingClient(
         fixtures={lbl: MINIMAL_EVENTS for lbl in _REVIEW_LABELS}
     )
-    assert review_main(["--dir", str(review_dir)], client=client_review) == 0
+    assert review_main(["--dir", str(review_dir)], client=client) == 0
+    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls)
 
-    # ---- address_main ----
+
+def test_address_main_does_not_clobber_external_state(tmp_path, monkeypatch):
+    parent_state_file, original_content, parent_mtime, recorded_calls = (
+        _stage_parent_state(tmp_path, monkeypatch)
+    )
+
     address_dir = tmp_path / "address-dir"
     address_dir.mkdir()
     for lens in ("holistic", "detail", "scope"):
         (address_dir / f"review-code-{lens}-sonnet.md").write_text(
             f"# {lens.title()} Review\n\n## Findings\nNone.\n"
         )
-    client_addr = FakeClaudeClient(fixtures={"address-code": MINIMAL_EVENTS})
-    assert address_main(["--dir", str(address_dir)], client=client_addr) == 0
-
-    # The parent gremlin's state.json must not have been touched by any of
-    # the orchestrators above (covers any direct write path that uses
-    # XDG_STATE_HOME).
-    assert parent_state_file.stat().st_mtime_ns == parent_mtime
-    assert parent_state_file.read_text() == original_content
-    state = json.loads(parent_state_file.read_text())
-    assert state["stage"] == "implement"
-    assert "sub_stage" not in state
-
-    # No orchestrator stage may invoke set-stage.sh — with GR_ID unset (the
-    # post-fix invariant), pipeline.state.set_stage early-returns and never
-    # shells out. Recording subprocess.run catches the leak even when the
-    # bash helper isn't on disk in the test environment, and even if a
-    # future write path computes a state file under a different gr_id than
-    # the one staged above.
-    leaked = [
-        c for c in recorded_calls
-        if c and len(c) >= 1 and "set-stage.sh" in str(c[0])
-    ]
-    assert not leaked, (
-        f"orchestrators leaked set-stage.sh calls under unset GR_ID: {leaked}"
-    )
+    monkeypatch.chdir(address_dir)
+    _common_patches(monkeypatch)
+    monkeypatch.setattr("pipeline.orchestrators.local.in_git_repo", lambda: False)
+    client = FakeClaudeClient(fixtures={"address-code": MINIMAL_EVENTS})
+    assert address_main(["--dir", str(address_dir)], client=client) == 0
+    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls)
