@@ -464,6 +464,48 @@ def test_model_forwarded_to_all_stages(tmp_path, monkeypatch):
         assert call.model == "claude-opus-4-7", f"stage {call.label!r} got model={call.model!r}"
 
 
+def test_gh_main_defaults_model_to_sonnet(tmp_path, monkeypatch):
+    """Regression: ghgremlin must default --model to sonnet, not fall through
+    to claude's runtime default (which inherits the calling session's model
+    and silently runs every stage on opus when launched from an opus session).
+    """
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    session_dir, state_file = _patch_common(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        subprocess, "run",
+        _make_gh_subprocess(issue_body="# Plan\nDo stuff.\n"),
+    )
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_ghreview_stage", lambda **kw: None)
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_wait_copilot_stage", lambda **kw: "APPROVED")
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_request_copilot_stage", lambda **kw: None)
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_ghaddress_stage", lambda **kw: None)
+
+    client = _CommittingClient(
+        git_dir=tmp_path,
+        fixtures={
+            "implement": IMPL_EVENTS,
+            "commit-pr": _pr_events(),
+        },
+    )
+
+    # Invoke with NO --model.
+    result = gh_main(["--plan", "42"], client=client)
+    assert result == 0
+
+    # Every recorded run must have model == "sonnet". Asserting on every call
+    # (not just calls[0]) catches the case where one stage is fixed but
+    # another is overlooked.
+    assert client.calls, "expected at least one client call"
+    bad = [c for c in client.calls if c.model != "sonnet"]
+    assert not bad, (
+        f"{len(bad)} stage(s) ran on a non-sonnet model: "
+        f"{[(c.label, c.model) for c in bad]}"
+    )
+
+
 def test_resume_from_implement(tmp_path, monkeypatch):
     """--resume-from implement reloads issue_url from state.json and runs implement onward."""
     _init_git_repo(tmp_path)
