@@ -16,15 +16,17 @@ contract this layer protects:
 
 Out of scope for this layer — writability restriction:
   The plan target "only ``state.json`` is writable, ``unsalvageable``
-  declared for anything outside that" is **not testable here**.  The
-  constraint is enforced by the prompt text sent to Claude (listing
-  "permitted edits"), not by any wrapper-level file-system gate.  In
-  headless mode the wrapper runs with ``--permission-mode
-  bypassPermissions``, so Claude's own permission system doesn't gate
-  writes either.  A fake binary can write anything it likes; nothing in
-  the wrapper observes or reacts to unauthorized writes.  Testing this
-  contract would require either running a real Claude agent or adding
-  a wrapper-level enforcement mechanism — neither of which exists today.
+  declared for anything outside that" is **not implemented or testable
+  here**.  This wrapper does not enforce any file-system restriction.
+  The rescue prompt's "permitted edits" text is guidance only, and the
+  current prompt wording allows edits to files in the gremlin worktree
+  as well as ``state.json``.  In headless mode the wrapper runs with
+  ``--permission-mode bypassPermissions``, so Claude's own permission
+  system doesn't gate writes either.  A fake binary can write anything
+  it likes; nothing in the wrapper observes or reacts to unauthorized
+  writes.  Testing this contract would require either running a real
+  Claude agent or adding a wrapper-level enforcement mechanism —
+  neither of which exists today.
 """
 
 from __future__ import annotations
