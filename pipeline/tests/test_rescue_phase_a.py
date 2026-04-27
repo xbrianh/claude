@@ -17,14 +17,10 @@ contract this layer protects:
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import json
-import os
 import pathlib
-import subprocess
-import sys
-
-import pytest
 
 from fixtures.shell_env import (
     REPO_ROOT,
@@ -62,7 +58,7 @@ def _make_failed_gremlin(state_root: pathlib.Path, workdir: pathlib.Path,
         "workdir": str(workdir),
         "project_root": str(workdir.parent),
         "description": "test gremlin",
-        "started_at": "2026-04-27T00:00:00Z",
+        "started_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "rescue_count": 0,
     }
     (state_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")

@@ -14,11 +14,8 @@ Covers the contracts the GitHub issue calls out:
 
 from __future__ import annotations
 
-import json
-import pathlib
+import os
 import subprocess
-
-import pytest
 
 from fixtures.shell_env import (
     REPO_ROOT,
@@ -58,10 +55,9 @@ def _run_shim_directly(sh, *args, timeout=30):
     The shim execs `python -m pipeline.cli gh "$@"`, so this exercises the
     arg-forwarding contract end-to-end without the worktree+state machinery.
     """
-    env = {
-        **sh.env,
-        "PYTHONPATH": f"{PIPELINE_PARENT}{':' + sh.env['PYTHONPATH'] if 'PYTHONPATH' in sh.env else ''}",
-    }
+    existing = sh.env.get("PYTHONPATH", "")
+    new_pp = f"{PIPELINE_PARENT}{os.pathsep + existing if existing else ''}"
+    env = {**sh.env, "PYTHONPATH": new_pp}
     return subprocess.run(
         [str(SHIM_SH), *args],
         cwd=str(sh.repo), env=env,
@@ -174,6 +170,11 @@ def test_ghgremlin_model_forwarded_to_all_stages(tmp_path):
     log = read_fake_claude_log(sh.fake_claude_log)
     # Every recorded claude call must carry the model flag.
     pipeline_stages = {"implement-gh", "commit-pr", "ghreview", "ghaddress", "scope-review-pr"}
+    observed_stages = {e["stage"] for e in log}
+    # Fail fast if any expected stage was silently skipped — otherwise the
+    # per-stage loop below would vacuously pass on a missing stage.
+    assert pipeline_stages.issubset(observed_stages), \
+        f"missing expected stages: {pipeline_stages - observed_stages}; observed: {observed_stages}"
     for entry in log:
         if entry["stage"] in pipeline_stages:
             assert entry["model"] == "claude-opus-4-7", \

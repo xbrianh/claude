@@ -21,7 +21,6 @@ import pathlib
 import re
 import subprocess
 import sys
-import time
 import uuid
 
 
@@ -82,11 +81,22 @@ def log_invocation(record: dict) -> None:
     log_path = os.environ.get("FAKE_CLAUDE_LOG")
     if not log_path:
         return
+    # Atomic append: a single os.write() of one bytes payload avoids
+    # interleaved/corrupted lines under the parallel review workers
+    # (3 concurrent claude subprocesses write to this log).
+    payload = (json.dumps(record) + "\n").encode("utf-8")
+    fd = None
     try:
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        fd = os.open(log_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
+        os.write(fd, payload)
     except OSError:
         pass
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def maybe_fail_at(stage: str) -> None:
@@ -206,7 +216,7 @@ def handle_rescue_diagnosis(prompt: str) -> int:
     object. Default verdict is "fixed" — tests override via env to exercise
     other branches.
     """
-    m = re.search(r"\b(/[^\s`]+\.done)\b", prompt)
+    m = re.search(r"(/[^\s`]+\.done)\b", prompt)
     marker_path = m.group(1) if m else ""
     status = os.environ.get("FAKE_CLAUDE_RESCUE_VERDICT", "fixed")
     summary = os.environ.get("FAKE_CLAUDE_RESCUE_SUMMARY", "fake diagnosis")
@@ -219,26 +229,6 @@ def handle_rescue_diagnosis(prompt: str) -> int:
             )
         except OSError:
             pass
-    # Probe writability of paths the spec says should be denied. The probe
-    # records observations to FAKE_CLAUDE_LOG so tests can assert what the
-    # diagnosis agent sees from inside the scratch dir.
-    workdir_probe = os.environ.get("FAKE_CLAUDE_RESCUE_WORKDIR_PROBE")
-    if workdir_probe:
-        probe_file = pathlib.Path(workdir_probe) / ".fake_diagnosis_probe"
-        try:
-            probe_file.write_text("probe", encoding="utf-8")
-            log_invocation({
-                "stage": "rescue-probe",
-                "workdir_probe_path": str(probe_file),
-                "workdir_probe_succeeded": True,
-            })
-        except OSError as exc:
-            log_invocation({
-                "stage": "rescue-probe",
-                "workdir_probe_path": str(probe_file),
-                "workdir_probe_succeeded": False,
-                "error": str(exc),
-            })
     return 0
 
 
@@ -328,10 +318,10 @@ def main(argv):
     h = handlers.get(stage)
     if h is None:
         sys.stderr.write(f"fake claude: unrecognized stage for prompt head: {prompt[:120]!r}\n")
-        emit_minimal_stream(session_id)
-        return 0
-    if stage == "rescue-diagnosis":
-        return h(prompt, session_id)
+        if os.environ.get("FAKE_CLAUDE_ALLOW_UNKNOWN_STAGE") == "1":
+            emit_minimal_stream(session_id)
+            return 0
+        return 1
     return h(prompt, session_id)
 
 

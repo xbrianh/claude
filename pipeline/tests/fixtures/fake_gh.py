@@ -33,11 +33,21 @@ def log_invocation(argv) -> None:
     log_path = os.environ.get("FAKE_GH_LOG")
     if not log_path:
         return
+    # Atomic append: a single os.write() of one bytes payload avoids
+    # interleaved/corrupted lines if the log is ever shared across processes.
+    payload = (json.dumps({"argv": list(argv)}) + "\n").encode("utf-8")
+    fd = None
     try:
-        with open(log_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"argv": list(argv)}) + "\n")
+        fd = os.open(log_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
+        os.write(fd, payload)
     except OSError:
         pass
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def main(argv):
@@ -63,7 +73,9 @@ def main(argv):
         url = os.environ.get(
             "FAKE_GH_ISSUE_URL", "https://github.com/owner/repo/issues/42"
         )
-        sys.stdout.write(f"Creating issue\n{url}\n")
+        # Match real `gh issue create`, which writes only the URL to stdout
+        # so callers can use `URL=$(gh issue create ...)` directly.
+        sys.stdout.write(f"{url}\n")
         return 0
 
     if sub == "issue" and len(argv) >= 2 and argv[1] == "view":

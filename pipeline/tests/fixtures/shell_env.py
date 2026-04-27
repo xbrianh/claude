@@ -8,12 +8,13 @@ paths the test needs to assert against.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import time
-from typing import Optional
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
 FIXTURES_DIR = pathlib.Path(__file__).resolve().parent
@@ -35,8 +36,10 @@ class ShellEnv:
 def install_fake_bin(bin_dir: pathlib.Path, name: str, target: pathlib.Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrapper = bin_dir / name
+    # Quote both paths in case sys.executable or target contains spaces
+    # (e.g. macOS framework Pythons or custom install locations).
     wrapper.write_text(
-        f"#!/usr/bin/env bash\nexec {sys.executable} {target} \"$@\"\n",
+        f"#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} {shlex.quote(str(target))} \"$@\"\n",
         encoding="utf-8",
     )
     wrapper.chmod(0o755)
@@ -109,7 +112,8 @@ def setup_shell_env(
         # Strip caller's PYTHONPATH; launch.sh will set its own.
     }
     env.pop("PYTHONPATH", None)
-    # Suppress git's hint output so tests get clean stderr.
+    # Disable git's optional locks to reduce lock contention across parallel
+    # test runs (e.g. read-only commands like `git status` skip the index lock).
     env["GIT_OPTIONAL_LOCKS"] = "0"
     return ShellEnv(
         home=home, bin_dir=bin_dir, state_root=state_root, repo=repo,
@@ -138,12 +142,11 @@ def read_fake_claude_log(log_path: pathlib.Path) -> list:
         if not line:
             continue
         try:
-            out.append(__import__("json").loads(line))
+            out.append(json.loads(line))
         except Exception:
             continue
     return out
 
 
 def read_state(state_file: pathlib.Path) -> dict:
-    import json
     return json.loads(state_file.read_text(encoding="utf-8"))

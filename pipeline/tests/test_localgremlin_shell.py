@@ -7,11 +7,7 @@ git repo. Verifies stage ordering and per-stage artifacts on disk.
 
 from __future__ import annotations
 
-import json
-import pathlib
 import subprocess
-
-import pytest
 
 from fixtures.shell_env import (
     REPO_ROOT,

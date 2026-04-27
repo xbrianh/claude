@@ -13,9 +13,6 @@ import json
 import os
 import pathlib
 import subprocess
-import time
-
-import pytest
 
 from fixtures.shell_env import (
     REPO_ROOT,
