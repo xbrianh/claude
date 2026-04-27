@@ -97,3 +97,46 @@ def test_localgremlin_plan_mode_skips_plan_stage(tmp_path):
     snapshot = state_dir / "artifacts" / "plan.md"
     assert snapshot.exists()
     assert snapshot.read_text(encoding="utf-8") == plan.read_text(encoding="utf-8")
+
+
+def test_pipeline_survives_worktree_pipeline_rename(tmp_path):
+    """Regression: pipeline completes even when implement renames worktree's pipeline/.
+
+    Without PYTHONSAFEPATH=1, python -m pipeline.cli imports from the worktree
+    (cwd). Renaming pipeline/ during implement then causes FileNotFoundError in
+    later stages because PROMPTS_DIR is __file__-relative and the directory is
+    gone. With the fix, python loads pipeline from HOME/.claude/pipeline/ and the
+    worktree rename is harmless.
+    """
+    sh = setup_shell_env(tmp_path)
+
+    # Add a pipeline/ stub to the repo so the worktree shadows $HOME/.claude/pipeline/.
+    pipeline_stub = sh.repo / "pipeline"
+    pipeline_stub.mkdir()
+    (pipeline_stub / "__init__.py").write_text("# stub\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(sh.repo), "add", "pipeline"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(sh.repo), "commit", "-m", "add pipeline stub"],
+        check=True, capture_output=True,
+    )
+
+    sh.env["FAKE_CLAUDE_RENAME_PIPELINE"] = "1"
+    r = _launch_local(sh, "test pipeline rename regression")
+    assert r.returncode == 0, r.stderr
+    gr_id = r.stdout.strip()
+
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    log_path = state_dir / "log"
+    assert wait_for_finished(state_dir, timeout=120), (
+        f"pipeline did not finish; log:\n"
+        f"{log_path.read_text(errors='replace')[-2000:] if log_path.exists() else '<log file missing>'}"
+    )
+
+    state = read_state(state_dir / "state.json")
+    assert state["exit_code"] == 0, (
+        f"expected exit 0; log tail:\n"
+        f"{log_path.read_text(errors='replace')[-2000:] if log_path.exists() else '<log file missing>'}"
+    )

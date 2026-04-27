@@ -253,11 +253,11 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         cd "$WORKDIR"
         if [[ $USE_PIPELINE -eq 1 ]]; then
             if [[ $_has_plan -eq 1 ]]; then
-                PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" \
+                PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" PYTHONSAFEPATH=1 \
                 nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
                     -- "$KIND_SUBCOMMAND" "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" </dev/null >>"$STATE_DIR/log" 2>&1 &
             else
-                PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" \
+                PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" PYTHONSAFEPATH=1 \
                 nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
                     -- "$KIND_SUBCOMMAND" "${PIPELINE_ARGS[@]}" --resume-from "$STAGE" "$INSTRUCTIONS" </dev/null >>"$STATE_DIR/log" 2>&1 &
             fi
@@ -653,7 +653,7 @@ export PIPELINE GR_ID
 (
     cd "$WORKDIR"
     if [[ $USE_PIPELINE -eq 1 ]]; then
-        PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" \
+        PYTHONPATH="$HOME/.claude${PYTHONPATH:+:$PYTHONPATH}" PYTHONSAFEPATH=1 \
         nohup bash -c 'python3 -m pipeline.cli "$@"; EC=$?; "$HOME/.claude/skills/_bg/finish.sh" "$GR_ID" "$EC"' \
             -- "$KIND_SUBCOMMAND" "$@" </dev/null >"$STATE_DIR/log" 2>&1 &
     else
