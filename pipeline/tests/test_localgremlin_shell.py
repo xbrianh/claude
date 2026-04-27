@@ -1,0 +1,99 @@
+"""Shell integration tests for the localgremlin pipeline.
+
+Drives the full plan → implement → review (parallel) → address chain
+via ``launch.sh localgremlin`` with a fake `claude` on PATH and a real
+git repo. Verifies stage ordering and per-stage artifacts on disk.
+"""
+
+from __future__ import annotations
+
+import subprocess
+
+from fixtures.shell_env import (
+    REPO_ROOT,
+    read_fake_claude_log,
+    read_state,
+    setup_shell_env,
+    wait_for_finished,
+)
+
+LAUNCH_SH = REPO_ROOT / "skills" / "_bg" / "launch.sh"
+
+
+def _launch_local(sh, *args, timeout=15):
+    return subprocess.run(
+        [str(LAUNCH_SH), "--print-id", "localgremlin", *args],
+        cwd=str(sh.repo), env=sh.env,
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def test_localgremlin_full_pipeline_via_launch(tmp_path):
+    """plan → implement → review × 3 → address all run, in order, exactly once."""
+    sh = setup_shell_env(tmp_path)
+    r = _launch_local(sh, "test full pipeline")
+    assert r.returncode == 0, r.stderr
+    gr_id = r.stdout.strip()
+
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    assert wait_for_finished(state_dir, timeout=120), \
+        f"pipeline did not finish; log:\n{(state_dir / 'log').read_text(errors='replace')[-2000:]}"
+
+    state = read_state(state_dir / "state.json")
+    assert state["status"] == "done", \
+        f"expected done, got {state.get('status')}; log tail:\n" \
+        f"{(state_dir / 'log').read_text(errors='replace')[-2000:]}"
+    assert state["exit_code"] == 0
+
+    # Verify stage ordering from the fake claude log.
+    log = read_fake_claude_log(sh.fake_claude_log)
+    stages = [e["stage"] for e in log]
+    assert stages[0] == "plan", stages
+    assert stages[1] == "implement-local", stages
+    # Three review calls in the middle (any order — they run in parallel).
+    review_count = sum(1 for s in stages if s == "review")
+    assert review_count == 3, f"expected 3 review calls, got {review_count}: {stages}"
+    assert stages[-1] == "address", stages
+
+    # Artifacts exist in the session dir.
+    artifacts = state_dir / "artifacts"
+    assert (artifacts / "plan.md").exists()
+    review_files = list(artifacts.glob("review-code-*.md"))
+    assert len(review_files) == 3, [p.name for p in review_files]
+
+
+def test_localgremlin_model_flags_forwarded(tmp_path):
+    """`-i <model>` reaches the implement stage's claude invocation."""
+    sh = setup_shell_env(tmp_path)
+    r = _launch_local(sh, "-i", "haiku", "test model forwarding")
+    assert r.returncode == 0
+    gr_id = r.stdout.strip()
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    assert wait_for_finished(state_dir, timeout=120)
+
+    log = read_fake_claude_log(sh.fake_claude_log)
+    impl_calls = [e for e in log if e["stage"] == "implement-local"]
+    assert len(impl_calls) == 1
+    assert impl_calls[0]["model"] == "haiku", impl_calls[0]
+
+
+def test_localgremlin_plan_mode_skips_plan_stage(tmp_path):
+    """`--plan <path>` copies the plan file and skips the plan claude call."""
+    sh = setup_shell_env(tmp_path)
+    plan = sh.repo / "given-plan.md"
+    plan.write_text("# Provided Plan\n\n## Tasks\n- [ ] Stuff\n", encoding="utf-8")
+
+    r = _launch_local(sh, "--plan", str(plan))
+    assert r.returncode == 0
+    gr_id = r.stdout.strip()
+    state_dir = sh.state_root / "claude-gremlins" / gr_id
+    assert wait_for_finished(state_dir, timeout=120)
+
+    log = read_fake_claude_log(sh.fake_claude_log)
+    stages = [e["stage"] for e in log]
+    assert "plan" not in stages, f"plan stage should have been skipped: {stages}"
+    assert "implement-local" in stages
+    # The supplied plan was snapshot into the artifacts dir.
+    snapshot = state_dir / "artifacts" / "plan.md"
+    assert snapshot.exists()
+    assert snapshot.read_text(encoding="utf-8") == plan.read_text(encoding="utf-8")
