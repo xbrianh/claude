@@ -1,7 +1,7 @@
 ---
 name: gremlins
 description: On-demand status of background gremlins launched by /localgremlin and /ghgremlin. Reads every ~/.local/state/claude-gremlins/<id>/state.json on the machine and prints one line per active gremlin with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed gremlins, close finished ones, stop a running gremlin, rescue a dead/stalled one, or land a finished gremlin onto its target branch. Not a project filter by default — set --here to restrict to the current repo.
-argument-hint: [stop|rescue [--headless]|rm|close|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh|boss] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
+argument-hint: [stop|rescue [--headless]|rm|close|log|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh|boss] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
 allowed-tools: Bash(~/.claude/skills/gremlins/gremlins.py:*)
 ---
 
@@ -54,6 +54,7 @@ The script produces a small table. Each row is one gremlin:
   Each rescue attempt — interactive or headless, success or bail (Ctrl-C aborts excepted) — also writes a Markdown report to `<state-dir>/rescue-<UTC-ts>-<pid>.md` capturing the attempt number, gremlin context, diagnosis verdict + summary, and relaunch outcome. Multiple attempts accumulate (microsecond-resolution timestamp + PID keep each filename unique even for back-to-back invocations in the same UTC second). Reports are listed in their own section under the drill-in view (`/gremlins <id>`).
 
   The bail-class vocabulary the upstream stages may write is documented in `~/.claude/skills/_bg/set-bail.sh`. The current set is `reviewer_requested_changes`, `security`, `secrets`, `other` — only `other` is attempted by headless rescue.
+- `log <id>`: tail the gremlin's log file with `tail -F`. Prints the resolved log path on stderr, then execs tail so Ctrl-C exits cleanly. The log already contains only the human-readable trace lines (stage markers `==> ...` from the orchestrator and per-event `[<label>] tool: ...` / `result: ...` / `text: ...` lines from `pipeline.clients.claude._emit_event`); raw stream-json is split out to separate `*.jsonl` files under the state dir's artifacts. Works regardless of gremlin liveness — useful for watching a long-running implement stage in real time, or post-mortem reading on a dead gremlin.
 - `rm <id>`: delete a dead or finished gremlin's state directory from disk (the log, plan, reviews, and `state.json`). Refuses with an error if the gremlin is still running or stalled — use `stop` first, then `rm`. This is permanent; use when you want to fully clean up a gremlin rather than just hide it with `close`.
 - `close <id>`: mark a dead or finished gremlin as closed (hides it from the default list view). Artifacts, logs, state directory, and branch remain on disk until `rm` is run. If the gremlin is still running or stalled, `close` will refuse and suggest using `stop` first.
 - `land <id>`: land a finished gremlin onto its target branch, then clean up. Preserves the state directory (`artifacts/plan.md`, review artifacts under `artifacts/`, `log`, `state.json`) so you can inspect the gremlin's record after merge — use `rm <id>` for full cleanup. Behavior depends on gremlin kind:

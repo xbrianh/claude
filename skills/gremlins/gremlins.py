@@ -1204,6 +1204,36 @@ def do_rescue(target: str, headless: bool = False) -> bool:
             write_rescue_report(wdir, report)
 
 
+def do_log(target: str) -> bool:
+    """Tail the gremlin's log file. Execs ``tail -F`` so Ctrl-C handling and
+    rotation/truncation behavior are whatever tail provides — the wrapper just
+    resolves the id and prints the path."""
+    match = resolve_gremlin(target)
+    if match is None:
+        return False
+
+    gr_id, sf, wdir = match
+    log_path = os.path.join(wdir, "log")
+    if not os.path.isfile(log_path):
+        sys.stderr.write(f"error: no log file for gremlin {gr_id} at {log_path}\n")
+        return False
+
+    # Print the path to stderr so it survives even if the operator is piping
+    # tail's stdout into another tool. Flush immediately so the header isn't
+    # interleaved after tail starts writing.
+    sys.stderr.write(f"==> log: {log_path}\n")
+    sys.stderr.flush()
+
+    try:
+        os.execvp("tail", ["tail", "-F", log_path])
+    except FileNotFoundError:
+        sys.stderr.write("error: tail not found in PATH\n")
+        return False
+    except OSError as e:
+        sys.stderr.write(f"error: could not exec tail: {e}\n")
+        return False
+
+
 def do_close(target: str) -> bool:
     match = resolve_gremlin(target)
     if match is None:
@@ -2174,6 +2204,7 @@ def parse_args(argv=None):
             "                bail_reason to state.json on bail.\n"
             "  rm <id>       Delete a dead/finished gremlin's state directory, worktree, and branch.\n"
             "  close <id>    Mark a dead/finished gremlin as closed (hides it from the default view).\n"
+            "  log <id>      Tail the gremlin's log file (`tail -F`). Ctrl-C exits.\n"
             "  land <id>     Land a finished gremlin onto the current branch, then clean up.\n"
             "                Default mode: localgremlin → --squash, bossgremlin → --ff.\n"
             "                gh → merges the PR (mode flags not applicable).\n"
@@ -2253,7 +2284,7 @@ def _dispatch_subcommand():
     """
     raw = sys.argv[1:]
     non_flags = [a for a in raw if not a.startswith("-")]
-    if not non_flags or non_flags[0] not in ("stop", "rescue", "rm", "close", "land"):
+    if not non_flags or non_flags[0] not in ("stop", "rescue", "rm", "close", "land", "log"):
         return False, False
 
     subcommand = non_flags[0]
@@ -2275,6 +2306,8 @@ def _dispatch_subcommand():
         ok = do_rm(target)
     elif subcommand == "close":
         ok = do_close(target)
+    elif subcommand == "log":
+        ok = do_log(target)
     elif subcommand == "land":
         force = "--force" in raw
         squash_flag = "--squash" in raw
