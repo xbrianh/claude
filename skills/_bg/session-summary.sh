@@ -10,7 +10,7 @@
 set -u
 
 # Opt-out for callers that invoke `claude -p` for structured text output (e.g.
-# commit-message synthesis in pipeline/fleet.py `land`). The hook's "surface
+# commit-message synthesis in gremlins/fleet.py `land`). The hook's "surface
 # this verbatim" directive otherwise prepends the status block to the model's
 # reply and corrupts the caller's parse. Repo-scoped prefix (not `CLAUDE_`)
 # so we don't collide with Claude Code's own env-var namespace.
@@ -23,7 +23,7 @@ STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins"
 [[ -d "$STATE_ROOT" ]] || exit 0
 
 # Source the shared liveness classifier. Both this hook and the on-demand
-# `/gremlins` listing (`pipeline/fleet.py`, which inlines an equivalent
+# `/gremlins` listing (`gremlins/fleet.py`, which inlines an equivalent
 # classifier) should agree on "is this gremlin still alive". Degrade
 # gracefully if the library isn't installed yet — hooks must never break a
 # session.

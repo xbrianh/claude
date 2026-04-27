@@ -36,5 +36,5 @@ jobs:
         run: python -m pip install --upgrade pip pytest
 
       - name: Run pipeline tests
-        working-directory: pipeline
+        working-directory: gremlins
         run: PYTHONPATH=. python -m pytest

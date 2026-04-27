@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helper: classify a background gremlin's liveness from its state.json.
 # Sourced by session-summary.sh (hook). The on-demand /gremlins listing
-# (pipeline/fleet.py) reimplements the same classifier inline in Python
+# (gremlins/fleet.py) reimplements the same classifier inline in Python
 # rather than sourcing this file, so the two implementations must be kept
 # in lockstep by hand — when you change one, mirror the change in the other.
 #

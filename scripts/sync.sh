@@ -2,7 +2,7 @@
 # Bidirectional sync between the user's home config and this repo.
 # Tracks:
 #   ~/.claude/CLAUDE.md, ~/.claude/settings.json
-#   ~/.claude/skills/, ~/.claude/agents/, ~/.claude/commands/, ~/.claude/pipeline/
+#   ~/.claude/skills/, ~/.claude/agents/, ~/.claude/commands/, ~/.claude/gremlins/
 # Excludes: settings.local.json (local-only)
 
 set -euo pipefail
@@ -23,7 +23,7 @@ DIR_PAIRS=(
     "skills:$CLAUDE_DIR/skills"
     "agents:$CLAUDE_DIR/agents"
     "commands:$CLAUDE_DIR/commands"
-    "pipeline:$CLAUDE_DIR/pipeline"
+    "gremlins:$CLAUDE_DIR/gremlins"
 )
 
 help_text() {
