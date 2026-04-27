@@ -10,10 +10,10 @@
 set -u
 
 # Opt-out for callers that invoke `claude -p` for structured text output (e.g.
-# commit-message synthesis in gremlins.py `land`). The hook's "surface this
-# verbatim" directive otherwise prepends the status block to the model's reply
-# and corrupts the caller's parse. Repo-scoped prefix (not `CLAUDE_`) so we
-# don't collide with Claude Code's own env-var namespace.
+# commit-message synthesis in pipeline/fleet.py `land`). The hook's "surface
+# this verbatim" directive otherwise prepends the status block to the model's
+# reply and corrupts the caller's parse. Repo-scoped prefix (not `CLAUDE_`)
+# so we don't collide with Claude Code's own env-var namespace.
 [[ "${GREMLIN_SKIP_SUMMARY:-0}" == "1" ]] && exit 0
 
 # Missing jq → nothing to report, so exit quietly.
@@ -22,9 +22,11 @@ command -v jq >/dev/null 2>&1 || exit 0
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins"
 [[ -d "$STATE_ROOT" ]] || exit 0
 
-# Source the shared liveness classifier. Both this hook and `gremlins.py`
-# should agree on "is this gremlin still alive". Degrade gracefully if the
-# library isn't installed yet — hooks must never break a session.
+# Source the shared liveness classifier. Both this hook and the on-demand
+# `/gremlins` listing (`pipeline/fleet.py`, which inlines an equivalent
+# classifier) should agree on "is this gremlin still alive". Degrade
+# gracefully if the library isn't installed yet — hooks must never break a
+# session.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/liveness.sh" ]]; then
     # shellcheck disable=SC1090,SC1091

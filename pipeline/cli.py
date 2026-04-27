@@ -7,6 +7,10 @@ The first positional argument selects the subcommand:
 - ``address`` — address-code stage only (was ``localaddress.py``)
 - ``gh``      — full gh-issue-driven pipeline (Phase 3)
 - ``boss``    — chained serial workflow driven by a top-level spec (Phase 4)
+- ``fleet``   — fleet-manager subcommands (status / stop / rescue / land /
+                close / rm / log) — was ``skills/gremlins/gremlins.py``
+- ``handoff`` — chain-step decision agent (next-plan / chain-done / bail) —
+                was ``skills/handoff/handoff.py``
 
 Remaining argv is forwarded to the chosen orchestrator entry point with
 its own argparse contract preserved byte-stable from the old skill scripts.
@@ -23,7 +27,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         argv = sys.argv[1:]
     if not argv:
         sys.stderr.write(
-            "usage: python -m pipeline.cli {local|review|address|gh|boss} [args...]\n"
+            "usage: python -m pipeline.cli "
+            "{local|review|address|gh|boss|fleet|handoff} [args...]\n"
         )
         return 1
     sub = argv[0]
@@ -43,6 +48,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if sub == "boss":
         from .orchestrators.boss import boss_main
         return boss_main(rest)
+    if sub == "fleet":
+        from .fleet import main as fleet_main
+        return fleet_main(rest)
+    if sub == "handoff":
+        from .handoff import main as handoff_main
+        return handoff_main(rest)
     sys.stderr.write(f"unknown subcommand: {sub}\n")
     return 1
 

@@ -19,8 +19,8 @@ skills/
   localgremlin/       # /localgremlin: thin shims that exec into `python -m pipeline.cli`; the orchestrator and stages live under pipeline/
   localreview/        # /localreview: standalone triple-lens code review over local changes (foreground)
   localaddress/       # /localaddress: standalone address-code stage over existing review files (foreground)
-  gremlins/           # /gremlins: on-demand status of background gremlins; supports stop/rescue/rm/close/land subcommands
-  handoff/            # /handoff: foreground chain-step decision agent; decides next-plan/chain-done/bail and writes child plan
+  gremlins/           # /gremlins: thin shim into `python -m pipeline.cli fleet`; on-demand status + stop/rescue/rm/close/land subcommands (logic in pipeline/fleet.py)
+  handoff/            # /handoff: thin shim into `python -m pipeline.cli handoff`; foreground chain-step decision agent (logic in pipeline/handoff.py)
   bossgremlin/        # /bossgremlin: chained serial gremlin workflow; runs multiple child gremlins via handoff agent
 agents/
   pragmatic-developer.md

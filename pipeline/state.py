@@ -4,8 +4,9 @@ Both helpers shell out to the canonical bash scripts under
 ``$HOME/.claude/skills/_bg/`` rather than reimplementing the state.json
 patching logic in Python. The bash scripts are also invoked by non-pipeline
 code paths (``session-summary.sh`` is a hook; ``liveness.sh`` is sourced by
-``gremlins.py``), so leaving them as the single source of truth keeps the
-on-disk vocabulary stable across pipeline and non-pipeline writers.
+``pipeline/fleet.py`` for listing), so leaving them as the single source of
+truth keeps the on-disk vocabulary stable across pipeline and non-pipeline
+writers.
 
 Both helpers are no-ops outside a gremlin context (no ``GR_ID``) and never
 raise — stage/bail bookkeeping must not break a running gremlin.
