@@ -395,9 +395,6 @@ def test_plan_mode_skips_plan_stage(tmp_path, monkeypatch):
         _make_gh_subprocess(issue_body="# Plan\nDo stuff.\n"),
     )
 
-    scope_lens = (tmp_path / "lenses")
-    scope_lens.mkdir(parents=True, exist_ok=True)
-    # scope_review_pr.md is read by ghreview stage; patch the whole stage instead
     monkeypatch.setattr(
         "pipeline.orchestrators.gh.run_ghreview_stage",
         lambda **kw: None,

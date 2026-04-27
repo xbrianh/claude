@@ -429,12 +429,11 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
     def stage_ghreview() -> None:
         _ensure_pr_url()
         set_stage("ghreview")
-        print("==> [4/6] running reviews in parallel (/ghreview + scope)", flush=True)
+        print("==> [4/6] running /ghreview", flush=True)
         run_ghreview_stage(
             client=client,
             model=model,
             pr_url=pr_url_holder["url"],
-            issue_body=issue_body,
             artifacts_dir=session_dir,
         )
 

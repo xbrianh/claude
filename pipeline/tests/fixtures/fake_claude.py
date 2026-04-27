@@ -249,8 +249,6 @@ def classify_stage(prompt: str) -> str:
         return "ghreview"
     if prompt.startswith("/ghaddress "):
         return "ghaddress"
-    if "You are a scope reviewer for a pull request" in prompt:
-        return "scope-review-pr"
     if prompt.startswith("/ghplan") or "/ghplan" in prompt[:20]:
         return "ghplan"
     if "Create a detailed implementation plan" in prompt:
@@ -316,7 +314,6 @@ def main(argv):
         "ghplan": handle_ghplan,
         "ghreview": lambda p, s: (emit_minimal_stream(s), 0)[1],
         "ghaddress": lambda p, s: (emit_minimal_stream(s), 0)[1],
-        "scope-review-pr": lambda p, s: (emit_minimal_stream(s), 0)[1],
         "rescue-diagnosis": lambda p, s: handle_rescue_diagnosis(p),
     }
     h = handlers.get(stage)

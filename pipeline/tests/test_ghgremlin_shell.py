@@ -169,7 +169,7 @@ def test_ghgremlin_model_forwarded_to_all_stages(tmp_path):
 
     log = read_fake_claude_log(sh.fake_claude_log)
     # Every recorded claude call must carry the model flag.
-    pipeline_stages = {"implement-gh", "commit-pr", "ghreview", "ghaddress", "scope-review-pr"}
+    pipeline_stages = {"implement-gh", "commit-pr", "ghreview", "ghaddress"}
     observed_stages = {e["stage"] for e in log}
     # Fail fast if any expected stage was silently skipped — otherwise the
     # per-stage loop below would vacuously pass on a missing stage.
@@ -314,10 +314,8 @@ def test_ghgremlin_resume_from_request_copilot(tmp_path):
     assert "implement-gh" not in stages, f"resume should skip implement: {stages}"
     assert "commit-pr" not in stages, f"resume should skip commit-pr: {stages}"
     # request-copilot calls gh (not claude) so it's not in the claude log,
-    # but ghreview (and the parallel scope-review-pr it spawns) and ghaddress
-    # must have run.
+    # but ghreview and ghaddress must have run.
     assert "ghreview" in stages
-    assert "scope-review-pr" in stages
     assert "ghaddress" in stages
 
 
@@ -346,7 +344,6 @@ def test_ghgremlin_resume_from_wait_copilot(tmp_path):
     assert "implement-gh" not in stages, f"resume should skip implement: {stages}"
     assert "commit-pr" not in stages, f"resume should skip commit-pr: {stages}"
     assert "ghreview" not in stages, f"resume should skip ghreview: {stages}"
-    assert "scope-review-pr" not in stages, f"resume should skip scope-review-pr: {stages}"
     # wait-copilot calls gh (not claude), but ghaddress must have run.
     assert "ghaddress" in stages
 

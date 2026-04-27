@@ -107,7 +107,6 @@ pipeline/
     review_code.md                # currently inline in _core.run_review (header + structure)
     commit_pr_handoff.md          # currently inline in ghgremlin.sh stage 2b (handoff path)
     commit_pr_fresh.md            # currently inline in ghgremlin.sh stage 2b (fresh path)
-    scope_review_pr.md            # currently inline in ghgremlin.sh stage 4 (scope reviewer)
     lenses/
       holistic.md                 # moves from skills/localgremlin/lens-holistic-code.md
       detail.md                   # moves from skills/localgremlin/lens-detail-code.md
@@ -145,7 +144,7 @@ Derived from actual usage in `_core.run_claude` (`skills/localgremlin/_core.py:2
 and the six logical `claude -p` invocation sites in `ghgremlin.sh`
 (title-generation at `skills/ghgremlin/ghgremlin.sh:209-212`, plan stage
 at `:381/:383`, implement at `:434-444`, commit-pr at `:578-579`,
-parallel `/ghreview` + scope reviewer at `:609/:615`, `/ghaddress` at
+`/ghreview` at `:609`, `/ghaddress` at
 `:664`). The plan and review pairs are each one logical site — plan's
 `if [[ -n "$PLAN_OUT_FILE" ]]` if/else collapses to one call, and
 ghreview/scope are spawned as a parallel pair from the same stage —
