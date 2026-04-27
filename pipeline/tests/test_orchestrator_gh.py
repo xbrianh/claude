@@ -506,6 +506,67 @@ def test_gh_main_defaults_model_to_sonnet(tmp_path, monkeypatch):
     )
 
 
+def test_gh_main_resume_prefers_persisted_model_over_sonnet_default(tmp_path, monkeypatch):
+    """Regression: on resume with no --model, a persisted state.json.model must
+    win over the fresh-launch "sonnet" fallback. Locks in the other half of the
+    invariant called out in gh.py — a future refactor that switched argparse to
+    default="sonnet" would silently break this precedence and only the
+    fresh-launch test would still pass.
+    """
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    state_data = {
+        "issue_url": "https://github.com/owner/repo/issues/99",
+        "issue_num": "99",
+        "model": "claude-opus-4-7",
+    }
+    session_dir, state_file = _patch_common(monkeypatch, tmp_path, state_data=state_data)
+
+    monkeypatch.setattr(
+        subprocess, "run",
+        _make_gh_subprocess(issue_body="# Resumed Plan\nDo more stuff.\n"),
+    )
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_ghreview_stage", lambda **kw: None)
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_wait_copilot_stage", lambda **kw: "APPROVED")
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_request_copilot_stage", lambda **kw: None)
+    monkeypatch.setattr("pipeline.orchestrators.gh.run_ghaddress_stage", lambda **kw: None)
+
+    client = _CommittingClient(
+        git_dir=tmp_path,
+        fixtures={
+            "implement": IMPL_EVENTS,
+            "commit-pr": _pr_events(),
+        },
+    )
+
+    import pipeline.orchestrators.gh as _gh_mod
+
+    def _fake_read(sf, field):
+        if field == "issue_url":
+            return "https://github.com/owner/repo/issues/99"
+        if field == "issue_num":
+            return "99"
+        if field == "model":
+            return "claude-opus-4-7"
+        return ""
+
+    monkeypatch.setattr(_gh_mod, "_read_state_field", _fake_read)
+    monkeypatch.setattr(_gh_mod, "_fetch_issue_body", lambda num, repo: "# Resumed Plan\nDo stuff.\n")
+
+    # Invoke with NO --model — resume path should restore "claude-opus-4-7"
+    # from state.json rather than falling through to the "sonnet" default.
+    result = gh_main(["--plan", "99", "--resume-from", "implement"], client=client)
+    assert result == 0
+
+    assert client.calls, "expected at least one client call"
+    bad = [c for c in client.calls if c.model != "claude-opus-4-7"]
+    assert not bad, (
+        f"{len(bad)} stage(s) ignored persisted state.json model: "
+        f"{[(c.label, c.model) for c in bad]}"
+    )
+
+
 def test_resume_from_implement(tmp_path, monkeypatch):
     """--resume-from implement reloads issue_url from state.json and runs implement onward."""
     _init_git_repo(tmp_path)
