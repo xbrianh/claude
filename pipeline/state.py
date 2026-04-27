@@ -141,9 +141,11 @@ def patch_state(**fields) -> None:
     try:
         data = json.loads(sf.read_text(encoding="utf-8"))
         data.update(fields)
-        tmp = sf.with_suffix(".tmp")
+        tmp = sf.with_name(
+            f"{sf.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        )
         tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.rename(sf)
+        os.replace(tmp, sf)
     except Exception:
         pass
 

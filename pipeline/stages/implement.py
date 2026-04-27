@@ -17,6 +17,7 @@ import dataclasses
 import os
 import pathlib
 import subprocess
+import sys
 from typing import Optional
 
 from ..clients.claude import ClaudeClient, CompletedRun
@@ -211,12 +212,17 @@ def _run_implement_gh(
             "committed work to hand off"
         )
 
+    if completed.session_id is None:
+        raise RuntimeError(
+            "implement stage did not produce a session_id; "
+            "commit-pr cannot resume the session"
+        )
+
     handoff_branch = ""
     if isinstance(outcome, HeadAdvanced):
         handoff_branch = create_handoff_branch(pre_state, cwd=cwd)
         reset_pre_branch(pre_state, cwd=cwd)
         sweep_stale_handoff_branches(handoff_branch, cwd=cwd)
-        import sys
         commit_count = outcome.commit_count
         pre_branch_note = f" and reset {pre_state.branch}" if pre_state.branch else ""
         sys.stdout.write(

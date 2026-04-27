@@ -233,7 +233,8 @@ def _resolve_plan_source(
             model=model,
             output_format="text",
         )
-        issue_title = (completed.text_result or "").strip().splitlines()[0][:80] if completed.text_result else ""
+        parts = (completed.text_result or "").strip().splitlines()
+        issue_title = parts[0][:80] if parts else ""
         if not issue_title:
             die("--plan: title agent returned empty output")
 
@@ -268,7 +269,13 @@ def _resolve_plan_source(
         )
         if r.returncode != 0:
             die(f"--plan: could not resolve issue {plan_source}: {r.stderr.strip()}")
-        issue_data = json.loads(r.stdout)
+        try:
+            issue_data = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            die(
+                f"--plan: gh issue view returned invalid JSON for {plan_source}. "
+                f"stdout: {r.stdout.strip()} stderr: {r.stderr.strip()}"
+            )
         issue_body = issue_data.get("body") or ""
         if not issue_body:
             die(f"--plan: issue {plan_source} has an empty body")

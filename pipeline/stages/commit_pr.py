@@ -9,6 +9,7 @@ did the implementation also creates the branch and opens the PR.
 from __future__ import annotations
 
 import pathlib
+import subprocess
 from typing import Optional
 
 from ..clients.claude import ClaudeClient, CompletedRun
@@ -39,7 +40,6 @@ def run_commit_pr_stage(
     # Action clause: which of the three shapes the agent should take.
     if isinstance(outcome, HeadAdvanced):
         # Check whether the worktree is also dirty.
-        import subprocess
         status_r = subprocess.run(
             ["git", "status", "--porcelain"],
             capture_output=True, text=True, check=False,

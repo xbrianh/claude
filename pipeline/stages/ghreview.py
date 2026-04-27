@@ -93,7 +93,8 @@ def run_ghreview_stage(
 
     t_ghreview.join()
     if "ghreview" in errors:
-        t_scope.join(timeout=5)
+        client.reap_all()
+        t_scope.join()
         raise RuntimeError(f"/ghreview failed: {errors['ghreview']}")
 
     t_scope.join()

@@ -52,5 +52,5 @@ def run_wait_copilot_stage(
         if state:
             return state
         if time.time() >= deadline:
-            raise RuntimeError("Copilot review timed out after 10 min")
+            raise RuntimeError(f"Copilot review timed out after {timeout}s")
         time.sleep(interval)
