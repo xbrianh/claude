@@ -7,8 +7,21 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Cancel superseded PR runs; keep main-branch runs independent so push-to-main
+# CI history has no gaps.
+concurrency:
+  group: pipeline-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least-privilege: this workflow only checks out code and runs tests.
+permissions:
+  contents: read
+
 jobs:
   pipeline-tests:
+    # Explicit `name:` locks the displayed status-check name to `pipeline-tests`
+    # for branch-protection required-checks wiring, even if the job key is
+    # later renamed.
     name: pipeline-tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -20,7 +33,9 @@ jobs:
           python-version: '3.9'
 
       - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+        # Pin pytest below 8.4 — pytest 8.4+ drops Python 3.9 support, which
+        # would silently break this workflow once released.
+        run: python -m pip install --upgrade pip "pytest<8.4"
 
       - name: Run pipeline tests
         working-directory: pipeline
