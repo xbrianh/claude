@@ -6,10 +6,11 @@ live here so the stage modules stay focused on orchestration.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 
 def get_repo() -> str:
@@ -23,6 +24,73 @@ def get_repo() -> str:
             f"not in a gh-recognized repo: {r.stderr.strip() or r.stdout.strip()}"
         )
     return r.stdout.strip()
+
+
+def parse_issue_ref(
+    plan_source: str, repo: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """Parse an issue reference string into ``(target_repo, issue_num)``.
+
+    Recognized shapes (matching ghgremlin's --plan contract):
+      * ``42`` / ``#42``                              → (repo, "42")
+      * ``owner/name#42``                             → ("owner/name", "42")
+      * ``https://github.com/owner/name/issues/42``   → ("owner/name", "42")
+
+    Returns ``(None, None)`` when ``plan_source`` doesn't match any shape so
+    the caller can distinguish issue refs from local file paths.
+    """
+    m = re.match(r"^#?([0-9]+)$", plan_source)
+    if m:
+        return repo, m.group(1)
+    m = re.match(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$", plan_source)
+    if m:
+        return m.group(1), m.group(2)
+    m = re.match(
+        r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([0-9]+)(#.*)?$",
+        plan_source,
+    )
+    if m:
+        return m.group(1), m.group(2)
+    return None, None
+
+
+VIEW_ISSUE_TIMEOUT = 30  # seconds; bounds `gh issue view` shell-out
+
+
+def view_issue(issue_ref: str, repo: str) -> dict:
+    """Fetch ``number``, ``url``, ``body`` for an issue via ``gh issue view``.
+
+    Returns the parsed JSON dict. Raises ``RuntimeError`` when ``gh`` fails,
+    times out, or returns unparseable output. The timeout is bounded so a
+    hung ``gh`` (network stall, credential prompt) cannot block chain start
+    indefinitely.
+    """
+    try:
+        r = subprocess.run(
+            [
+                "gh", "issue", "view", issue_ref, "--repo", repo,
+                "--json", "number,url,body",
+            ],
+            capture_output=True, text=True, check=False,
+            timeout=VIEW_ISSUE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"timed out after {VIEW_ISSUE_TIMEOUT}s while resolving issue "
+            f"{issue_ref!r} in {repo!r} via `gh issue view`; check GitHub "
+            f"CLI authentication, prompts, and network connectivity"
+        ) from exc
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"could not resolve issue {issue_ref!r} in {repo!r}: {r.stderr.strip()}"
+        )
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"gh issue view returned invalid JSON for {issue_ref!r} in {repo!r}. "
+            f"stdout: {r.stdout.strip()} stderr: {r.stderr.strip()}"
+        ) from exc
 
 
 def extract_gh_url(

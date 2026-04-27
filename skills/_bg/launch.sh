@@ -417,9 +417,10 @@ fi
 # Early validation for localgremlin --plan <path>: the arg is always a local
 # file path (localgremlin has no issue-ref form), so we can fail fast here
 # (before state dir creation) on missing/empty files instead of deferring to
-# localgremlin.py. ghgremlin's --plan accepts issue refs whose validity
-# depends on the network, so its validation stays inside ghgremlin.sh.
-if [[ ( "$KIND" == "localgremlin" || "$KIND" == "bossgremlin" ) && -n "$_plan_arg" ]]; then
+# localgremlin.py. ghgremlin's and bossgremlin's --plan accept issue refs
+# whose validity depends on the network, so their validation stays inside
+# the orchestrators (which can also snapshot the issue body).
+if [[ "$KIND" == "localgremlin" && -n "$_plan_arg" ]]; then
     if [[ ! -f "$_plan_arg" ]]; then
         die "--plan: file not found: $_plan_arg"
     fi
@@ -500,19 +501,20 @@ SLUG=$(slugify "$SLUG_SOURCE")
 # Description fallback: explicit --description wins; otherwise prefer the
 # --plan file's H1 (when the plan arg is a local file), and finally fall back
 # to a truncated slice of the raw instructions. For a --plan issue-ref where
-# launch.sh can't see the issue body, DESCRIPTION stays empty so ghgremlin.sh
-# can fill it in after resolving the issue (INSTR_RAW would be just the
-# flag echo "--plan 42" which is not a useful description).
-# The empty-description issue-ref branch is guarded to KIND=ghgremlin: only
-# ghgremlin has an issue-body fill-in step later in the pipeline, and its
-# --plan accepts non-file refs. localgremlin's --plan is always a file (and
-# the earlier early-validation block dies on a non-file value), so a
-# non-file _plan_arg reaching this block under localgremlin is structurally
-# impossible — but the guard makes the assumption explicit and future-proof.
+# launch.sh can't see the issue body, DESCRIPTION stays empty so the
+# orchestrator can fill it in after resolving the issue (INSTR_RAW would be
+# just the flag echo "--plan 42 --chain-kind gh" which is not a useful
+# description).
+# The empty-description issue-ref branch is guarded to ghgremlin/bossgremlin:
+# both have an issue-body fill-in step later in the pipeline, and both --plan
+# variants accept non-file refs. localgremlin's --plan is always a file (and
+# the earlier early-validation block dies on a non-file value), so a non-file
+# _plan_arg reaching this block under localgremlin is structurally impossible
+# — but the guard makes the assumption explicit and future-proof.
 if [[ -z "$DESCRIPTION" ]]; then
     if [[ -n "$_plan_h1" ]]; then
         DESCRIPTION="${_plan_h1:0:60}"
-    elif [[ -n "$_plan_arg" && "$KIND" == "ghgremlin" ]]; then
+    elif [[ -n "$_plan_arg" && ( "$KIND" == "ghgremlin" || "$KIND" == "bossgremlin" ) ]]; then
         DESCRIPTION=""
     else
         DESCRIPTION="${INSTR_RAW:0:60}"

@@ -17,12 +17,16 @@ import argparse
 import datetime
 import json
 import os
-import pathlib
+import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
-from typing import List
+from typing import List, Tuple
+
+from ..gh_utils import get_repo, parse_issue_ref, view_issue
+from ..state import patch_state
 
 STATE_ROOT = os.path.join(
     os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")),
@@ -177,7 +181,8 @@ def get_remote_branch_sha(project_root: str, branch: str) -> str:
 
 
 def init_boss_state(spec_path: str, chain_kind: str, chain_base_ref: str,
-                    target_branch: str, state_dir: str) -> dict:
+                    target_branch: str, state_dir: str,
+                    issue_url: str = "", issue_num: str = "") -> dict:
     boss_state = {
         "spec_path": spec_path,
         "chain_kind": chain_kind,
@@ -188,6 +193,11 @@ def init_boss_state(spec_path: str, chain_kind: str, chain_base_ref: str,
         "current_child_id": None,
         "children": [],
         "handoff_records": [],
+        # Source of the spec: empty for local-file inputs, populated when
+        # --plan was a GitHub issue reference. Persisted so `/gremlins`
+        # status can show the issue link and so resume never re-fetches.
+        "issue_url": issue_url,
+        "issue_num": issue_num,
         # Latest operator_followups list reported by handoff. Each handoff
         # rewrites this with the conservative carry-forward set the handoff
         # agent produced, so by chain-done it holds the final list of
@@ -462,6 +472,134 @@ def _parse_boss_args(argv: List[str]) -> argparse.Namespace:
     return args
 
 
+def _resolve_plan_source(plan: str, state_dir: str) -> Tuple[str, str, str]:
+    """Resolve --plan into a snapshot under ``<state_dir>/spec.md``.
+
+    Accepts the same forms as ghgremlin's --plan: a local file path, ``42`` /
+    ``#42``, ``owner/name#42``, or a full ``https://github.com/.../issues/N``
+    URL. The returned ``spec_path`` is always the snapshot — boss handoffs
+    only ever read the snapshot, never the original input.
+
+    Idempotent: if ``spec.md`` already exists with non-zero size, it is
+    treated as authoritative and no re-fetch is performed. This handles the
+    rescue edge case where a previous run wrote the snapshot but crashed
+    before persisting boss_state.json.
+
+    Returns ``(spec_path, issue_url, issue_num)``. ``issue_url`` /
+    ``issue_num`` are empty strings for local-file inputs.
+    """
+    spec_dest = os.path.join(state_dir, "spec.md")
+
+    if os.path.isfile(spec_dest) and os.path.getsize(spec_dest) > 0:
+        # Rescue path: a previous run already wrote the snapshot. Recover any
+        # issue_url / issue_num it persisted to state.json so the rescue
+        # doesn't silently strip the issue link from boss_state.json. (We
+        # avoid re-fetching from GitHub — the snapshot is authoritative.)
+        log(f"reusing existing spec snapshot: {spec_dest}")
+        recovered_url = ""
+        recovered_num = ""
+        try:
+            state_data = load_json(os.path.join(state_dir, "state.json"))
+            recovered_url = state_data.get("issue_url") or ""
+            recovered_num = state_data.get("issue_num") or ""
+        except Exception:
+            pass
+        return spec_dest, recovered_url, recovered_num
+
+    # Classify the input shape *before* shelling out to `gh repo view`. For a
+    # typo like `--plan not-a-ref`, this lets us fail fast with a clear error
+    # instead of forcing the caller to be inside a gh-recognized repo first.
+    target_repo, issue_ref = parse_issue_ref(plan, "")
+
+    if os.path.isfile(plan):
+        try:
+            if os.path.getsize(plan) == 0:
+                die(f"--plan: file is empty: {plan}")
+            shutil.copyfile(plan, spec_dest)
+        except OSError as exc:
+            die(f"--plan: failed to read/copy local plan file {plan!r}: {exc}")
+        log(f"plan source (file): {plan} → {spec_dest}")
+        return spec_dest, "", ""
+
+    if target_repo is None and issue_ref is None:
+        # parse_issue_ref returned (None, None) for the bare-number form
+        # only because we passed an empty repo. Re-check by looking for the
+        # bare-number shape directly so the error message is accurate.
+        if not re.match(r"^#?[0-9]+$", plan):
+            die(f"--plan: not a readable file or recognized issue reference: {plan}")
+
+    if shutil.which("gh") is None:
+        die(f"--plan: gh CLI not found; required to resolve issue reference {plan!r}")
+
+    # Resolve the bare-number form against the current repo; cross-repo
+    # forms (`owner/name#42` or full URLs) already carry their own repo.
+    if target_repo is None or target_repo == "":
+        try:
+            target_repo = get_repo()
+        except RuntimeError as exc:
+            die(f"--plan: {exc}")
+        # Re-parse against the resolved repo to populate issue_ref for the
+        # bare-number form.
+        target_repo, issue_ref = parse_issue_ref(plan, target_repo)
+        if target_repo is None:
+            die(f"--plan: not a readable file or recognized issue reference: {plan}")
+
+    try:
+        issue_data = view_issue(issue_ref, target_repo)
+    except RuntimeError as exc:
+        die(f"--plan: {exc}")
+
+    body = issue_data.get("body") or ""
+    if not body:
+        die(f"--plan: issue {plan} has an empty body")
+
+    issue_url = issue_data.get("url") or ""
+    issue_num = str(issue_data.get("number") or "")
+
+    with open(spec_dest, "w", encoding="utf-8") as f:
+        f.write(body + "\n")
+    # Persist the issue identifiers to state.json immediately so a crash
+    # between this point and init_boss_state() doesn't strip them on rescue.
+    patch_state(issue_url=issue_url, issue_num=issue_num)
+    log(f"plan source (issue {target_repo}#{issue_ref}): {issue_url} → {spec_dest}")
+    return spec_dest, issue_url, issue_num
+
+
+def _maybe_set_description_from_spec(state_dir: str) -> None:
+    """If state.json's description wasn't set explicitly, fill it from the
+    spec snapshot's first heading. Mirrors gh's _update_description_from_plan.
+
+    A no-op when state.json is missing or already has description_explicit=true,
+    or when the snapshot has no recognizable heading.
+    """
+    state_file = os.path.join(state_dir, "state.json")
+    spec_file = os.path.join(state_dir, "spec.md")
+    if not os.path.isfile(state_file) or not os.path.isfile(spec_file):
+        return
+    try:
+        data = load_json(state_file)
+    except Exception:
+        return
+    if data.get("description_explicit"):
+        return
+    try:
+        # Read up to 50 lines; .splitlines() stops at EOF, so short specs
+        # still yield their leading lines (the prior list-comprehension
+        # form raised StopIteration on short files and dropped the H1).
+        with open(spec_file, encoding="utf-8") as f:
+            head_lines = f.read().splitlines()[:50]
+    except Exception:
+        return
+    h1 = ""
+    for line in head_lines:
+        m = re.match(r"^#+\s+(.+)", line)
+        if m:
+            h1 = m.group(1).strip()[:60]
+            break
+    if h1:
+        patch_state(description=h1)
+
+
 def boss_main(argv: List[str]) -> int:
     args = _parse_boss_args(argv)
 
@@ -482,13 +620,22 @@ def boss_main(argv: List[str]) -> int:
         die(f"project_root not usable: {project_root!r}")
     boss_workdir = gremlin_state.get("workdir", "")
 
-    spec_path = str(pathlib.Path(args.plan).resolve())
     chain_kind = args.chain_kind
     launch_kind = {"local": "localgremlin", "gh": "ghgremlin"}[chain_kind]
 
     boss_state_file = os.path.join(state_dir, "boss_state.json")
     if not os.path.isfile(boss_state_file):
-        log(f"chain start: kind={chain_kind}, spec={spec_path}")
+        # Chain start: snapshot --plan into the state dir. The handoff agent
+        # only ever reads the snapshot, so a deleted-or-modified original
+        # input cannot perturb later handoffs. For issue refs, the fetch
+        # happens here (after launch.sh has detached) so a transient GitHub
+        # outage is reported in the boss log instead of failing the launch.
+        spec_path, issue_url, issue_num = _resolve_plan_source(args.plan, state_dir)
+        if issue_url:
+            log(f"chain start: kind={chain_kind}, spec={spec_path}, issue={issue_url}")
+        else:
+            log(f"chain start: kind={chain_kind}, spec={spec_path}")
+        _maybe_set_description_from_spec(state_dir)
         if chain_kind == "gh":
             # gh children open PRs from the repo's default branch and land
             # there, regardless of where the user happens to be. Anchor the
@@ -506,6 +653,8 @@ def boss_main(argv: List[str]) -> int:
             chain_base_ref=chain_base_ref,
             target_branch=target_branch,
             state_dir=state_dir,
+            issue_url=issue_url,
+            issue_num=issue_num,
         )
     else:
         boss_state = load_boss_state(state_dir)

@@ -9,6 +9,7 @@ import pytest
 
 import pipeline.orchestrators.boss as boss_mod
 from pipeline.orchestrators.boss import (
+    _resolve_plan_source,
     _summarize_for_log,
     boss_main,
     get_child_bail_detail,
@@ -721,3 +722,254 @@ def test_bail_after_rescue_refused(tmp_path, monkeypatch):
     assert child_entry["id"] == child_id
     assert "bailed" in child_entry["outcome"]
     assert final_state["current_child_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# _resolve_plan_source: file path, issue ref, idempotent rescue
+# ---------------------------------------------------------------------------
+
+def test_resolve_plan_source_file(tmp_path):
+    """File path inputs are copied verbatim into <state-dir>/spec.md."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    src = tmp_path / "in.md"
+    src.write_text("# Spec\nContent.\n")
+
+    spec_path, issue_url, issue_num = _resolve_plan_source(str(src), str(state_dir))
+
+    assert spec_path == str(state_dir / "spec.md")
+    assert (state_dir / "spec.md").read_text() == "# Spec\nContent.\n"
+    assert issue_url == ""
+    assert issue_num == ""
+
+
+def test_resolve_plan_source_empty_file(tmp_path):
+    """Empty file inputs are rejected."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    src = tmp_path / "empty.md"
+    src.write_text("")
+
+    with pytest.raises(SystemExit):
+        _resolve_plan_source(str(src), str(state_dir))
+
+
+def test_resolve_plan_source_issue_ref(tmp_path, monkeypatch):
+    """Issue refs fetch the body via gh and snapshot it to spec.md."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    monkeypatch.setattr(boss_mod, "get_repo", lambda: "owner/repo")
+    monkeypatch.setattr(
+        boss_mod, "view_issue",
+        lambda ref, repo: {
+            "number": 42,
+            "url": "https://github.com/owner/repo/issues/42",
+            "body": "# Issue Spec\nFetched from gh.\n",
+        },
+    )
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda n: "/fake/gh" if n == "gh" else None)
+
+    spec_path, issue_url, issue_num = _resolve_plan_source("42", str(state_dir))
+
+    assert spec_path == str(state_dir / "spec.md")
+    body = (state_dir / "spec.md").read_text()
+    assert "# Issue Spec" in body
+    assert "Fetched from gh." in body
+    assert issue_url == "https://github.com/owner/repo/issues/42"
+    assert issue_num == "42"
+
+
+def test_resolve_plan_source_cross_repo_issue_ref(tmp_path, monkeypatch):
+    """``owner/repo#42`` resolves against the named repo, not get_repo()."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    captured = {}
+
+    def fake_view_issue(ref, repo):
+        captured["ref"] = ref
+        captured["repo"] = repo
+        return {
+            "number": 7,
+            "url": "https://github.com/other/proj/issues/7",
+            "body": "# Cross-repo\nspec.\n",
+        }
+
+    monkeypatch.setattr(boss_mod, "get_repo", lambda: "owner/repo")
+    monkeypatch.setattr(boss_mod, "view_issue", fake_view_issue)
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda n: "/fake/gh" if n == "gh" else None)
+
+    spec_path, issue_url, issue_num = _resolve_plan_source(
+        "other/proj#7", str(state_dir)
+    )
+
+    assert captured == {"ref": "7", "repo": "other/proj"}
+    assert issue_url == "https://github.com/other/proj/issues/7"
+    assert issue_num == "7"
+    assert (state_dir / "spec.md").read_text().startswith("# Cross-repo")
+
+
+def test_resolve_plan_source_unknown_shape(tmp_path, monkeypatch):
+    """Non-file, non-issue-ref inputs fail fast."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr(boss_mod, "get_repo", lambda: "owner/repo")
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda n: "/fake/gh" if n == "gh" else None)
+
+    with pytest.raises(SystemExit):
+        _resolve_plan_source("not-a-ref", str(state_dir))
+
+
+def test_resolve_plan_source_idempotent(tmp_path, monkeypatch):
+    """A pre-existing non-empty spec.md is reused without re-fetching."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "spec.md").write_text("# Already snapshotted\n")
+
+    fetch_called = []
+
+    def boom(*a, **kw):
+        fetch_called.append(True)
+        raise AssertionError("view_issue should not be called when snapshot exists")
+
+    monkeypatch.setattr(boss_mod, "view_issue", boom)
+    monkeypatch.setattr(boss_mod, "get_repo", lambda: (_ for _ in ()).throw(AssertionError("get_repo should not be called")))
+
+    spec_path, issue_url, issue_num = _resolve_plan_source("42", str(state_dir))
+
+    assert spec_path == str(state_dir / "spec.md")
+    assert (state_dir / "spec.md").read_text() == "# Already snapshotted\n"
+    assert fetch_called == []
+
+
+def test_resolve_plan_source_idempotent_recovers_issue_metadata(tmp_path, monkeypatch):
+    """On rescue, issue_url / issue_num are recovered from state.json so the
+    issue link survives the snapshot-already-exists short-circuit. Regression
+    for the bug where the idempotent path always returned empty strings."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "spec.md").write_text("# Already snapshotted\n")
+    (state_dir / "state.json").write_text(json.dumps({
+        "issue_url": "https://github.com/owner/repo/issues/77",
+        "issue_num": "77",
+    }))
+
+    monkeypatch.setattr(
+        boss_mod, "view_issue",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not refetch")),
+    )
+
+    spec_path, issue_url, issue_num = _resolve_plan_source("77", str(state_dir))
+
+    assert spec_path == str(state_dir / "spec.md")
+    assert issue_url == "https://github.com/owner/repo/issues/77"
+    assert issue_num == "77"
+
+
+def test_resolve_plan_source_persists_issue_metadata_on_first_fetch(
+    tmp_path, monkeypatch
+):
+    """First-run issue-ref path persists issue_url / issue_num to state.json
+    so a crash before init_boss_state still leaves the rescue path able to
+    recover the link."""
+    xdg_home = tmp_path / "xdg"
+    state_root = xdg_home / "claude-gremlins"
+    state_dir = state_root / "test-boss-persist-aa1122"
+    state_dir.mkdir(parents=True)
+    (state_dir / "state.json").write_text(json.dumps({"id": "test-boss-persist-aa1122"}))
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg_home))
+    monkeypatch.setenv("GR_ID", "test-boss-persist-aa1122")
+
+    monkeypatch.setattr(boss_mod, "get_repo", lambda: "owner/repo")
+    monkeypatch.setattr(
+        boss_mod, "view_issue",
+        lambda ref, repo: {
+            "number": 99,
+            "url": "https://github.com/owner/repo/issues/99",
+            "body": "# Spec\nbody.\n",
+        },
+    )
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda n: "/fake/gh" if n == "gh" else None)
+
+    spec_path, issue_url, issue_num = _resolve_plan_source("99", str(state_dir))
+
+    assert issue_url == "https://github.com/owner/repo/issues/99"
+    assert issue_num == "99"
+    state_data = json.loads((state_dir / "state.json").read_text())
+    assert state_data.get("issue_url") == "https://github.com/owner/repo/issues/99"
+    assert state_data.get("issue_num") == "99"
+
+
+# ---------------------------------------------------------------------------
+# boss_main smoke test: --plan <issue-ref> end-to-end snapshot
+# ---------------------------------------------------------------------------
+
+def test_boss_main_plan_issue_ref_snapshots_spec(tmp_path, monkeypatch):
+    """boss_main with --plan <issue-ref> fetches the issue and snapshots spec.md."""
+    gr_id = "test-boss-issue-aabb12"
+    # Arrange XDG_STATE_HOME so boss_mod.STATE_ROOT and patch_state's
+    # XDG-derived state file path agree, otherwise the description fill
+    # would silently no-op and the assertion below would always pass.
+    xdg_home = tmp_path / "xdg"
+    state_root = xdg_home / "claude-gremlins"
+    state_root.mkdir(parents=True)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg_home))
+
+    state_dir, project_root, workdir = _make_gremlin_state(state_root, gr_id)
+    _common_boss_patches(monkeypatch, state_root, gr_id)
+
+    monkeypatch.setattr(boss_mod, "get_repo", lambda: "owner/repo")
+    monkeypatch.setattr(
+        boss_mod, "view_issue",
+        lambda ref, repo: {
+            "number": 80,
+            "url": "https://github.com/owner/repo/issues/80",
+            "body": "# Plan from issue\nDo a thing.\n",
+        },
+    )
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda n: "/fake/gh" if n == "gh" else None)
+
+    # Short-circuit handoff at the very first step so we don't have to mock
+    # an entire chain — we just want to verify spec.md and boss_state.json.
+    def fake_run_handoff(gr_id, state_dir, boss_state, project_root, boss_workdir, model):
+        n = boss_state["handoff_count"] + 1
+        out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
+        pathlib.Path(out_path).write_text("# Handoff\n")
+        boss_state["handoff_count"] = n
+        boss_state["current_plan"] = out_path
+        boss_state["operator_followups"] = []
+        boss_state["handoff_records"].append({
+            "timestamp": "2026-01-01T00:00:00Z", "n": n,
+            "plan_in": boss_state["spec_path"], "plan_out": out_path,
+            "signal_file": "", "exit_state": "chain-done",
+            "child_plan": None, "bail_reason": None, "operator_followups": [],
+        })
+        return "chain-done", {"exit_state": "chain-done", "operator_followups": []}
+
+    monkeypatch.setattr(boss_mod, "run_handoff", fake_run_handoff)
+
+    result = boss_main(["--plan", "80", "--chain-kind", "local"])
+    assert result == 0
+
+    snapshot = state_dir / "spec.md"
+    assert snapshot.exists()
+    body = snapshot.read_text()
+    assert "Plan from issue" in body
+    assert "Do a thing." in body
+
+    final_state = load_boss_state(str(state_dir))
+    assert final_state["spec_path"] == str(snapshot)
+    assert final_state["issue_url"] == "https://github.com/owner/repo/issues/80"
+    assert final_state["issue_num"] == "80"
+
+    # _maybe_set_description_from_spec should have filled state.json's
+    # description from the snapshot's first H1 — this confirms the H1 read
+    # works for short specs (regression coverage for the StopIteration bug).
+    state_data = json.loads((state_dir / "state.json").read_text())
+    assert state_data.get("description") == "Plan from issue"
