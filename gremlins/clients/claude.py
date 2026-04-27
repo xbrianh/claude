@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Protocol, Sequence
+from typing import IO, Callable, List, Optional, Protocol, Sequence, Tuple
 
 CLAUDE_FLAGS_BASE = [
     "--permission-mode", "bypassPermissions",
@@ -139,6 +139,61 @@ def _emit_event(prefix: str, evt: dict) -> None:
     out.flush()
 
 
+def stream_events(
+    stdout: IO[bytes],
+    *,
+    prefix: str = "",
+    raw_path: Optional[pathlib.Path] = None,
+    capture: bool = False,
+    on_event: Optional[Callable[[dict], None]] = None,
+) -> Tuple[Optional[str], List[dict]]:
+    """Read stream-json lines from stdout, render via _emit_event.
+
+    Returns (session_id, events) where session_id is extracted from the first
+    system.init event (None if not seen) and events is populated only when
+    capture=True.
+    """
+    session_id: Optional[str] = None
+    events: List[dict] = []
+    raw = None
+    if raw_path is not None:
+        raw = open(raw_path, "ab")
+    try:
+        for line in stdout:
+            if raw is not None:
+                raw.write(line)
+                raw.flush()
+            try:
+                evt = json.loads(line.decode("utf-8", errors="replace"))
+            except Exception:
+                continue
+            if not isinstance(evt, dict):
+                continue
+            if (
+                session_id is None
+                and evt.get("type") == "system"
+                and evt.get("subtype") == "init"
+            ):
+                sid = evt.get("session_id")
+                if isinstance(sid, str):
+                    session_id = sid
+            if capture:
+                events.append(evt)
+            try:
+                _emit_event(prefix, evt)
+            except Exception:
+                pass
+            if on_event is not None:
+                try:
+                    on_event(evt)
+                except Exception:
+                    pass
+    finally:
+        if raw is not None:
+            raw.close()
+    return session_id, events
+
+
 # ---------------------------------------------------------------------------
 # SubprocessClaudeClient
 # ---------------------------------------------------------------------------
@@ -236,51 +291,21 @@ class SubprocessClaudeClient:
 
         session_id: Optional[str] = None
         text_chunks: List[str] = []
-        events: Optional[List[dict]] = [] if capture_events else None
+        events: Optional[List[dict]] = None
         prefix = f"[{label}] " if label else ""
 
         try:
             assert p.stdout is not None
             if output_format == "stream-json":
-                if raw_path is not None:
-                    raw = open(raw_path, "ab")
-                else:
-                    raw = None
-                try:
-                    for line in p.stdout:
-                        if raw is not None:
-                            raw.write(line)
-                            raw.flush()
-                        try:
-                            evt = json.loads(line.decode("utf-8", errors="replace"))
-                        except Exception:
-                            # Parity with the bash `jq ... || true`: a truncated
-                            # JSON line from a crashing claude must not abort.
-                            continue
-                        if not isinstance(evt, dict):
-                            continue
-                        if (
-                            session_id is None
-                            and evt.get("type") == "system"
-                            and evt.get("subtype") == "init"
-                        ):
-                            sid = evt.get("session_id")
-                            if isinstance(sid, str):
-                                session_id = sid
-                        if events is not None:
-                            events.append(evt)
-                        try:
-                            _emit_event(prefix, evt)
-                        except Exception:
-                            pass
-                        if on_event is not None:
-                            try:
-                                on_event(evt)
-                            except Exception:
-                                pass
-                finally:
-                    if raw is not None:
-                        raw.close()
+                session_id, collected = stream_events(
+                    p.stdout,
+                    prefix=prefix,
+                    raw_path=raw_path,
+                    capture=capture_events,
+                    on_event=on_event,
+                )
+                if capture_events:
+                    events = collected
             else:
                 # text mode — capture stdout, no per-event trace.
                 data = p.stdout.read()

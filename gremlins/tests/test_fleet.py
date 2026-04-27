@@ -506,3 +506,90 @@ def test_parse_duration_invalid():
         gremlins.parse_duration("5x")
     with pytest.raises(ValueError):
         gremlins.parse_duration("abc")
+
+
+# ---------------------------------------------------------------------------
+# do_rescue interactive: streaming events via stream_events
+# ---------------------------------------------------------------------------
+
+def test_rescue_interactive_streams_events_to_stderr(tmp_path, monkeypatch, capsys):
+    """Interactive rescue streams [rescue]-prefixed events to stderr."""
+    import os as _os
+
+    gr_dir, workdir = _setup_dead_gremlin(tmp_path, monkeypatch)
+
+    # Fake claude: emits stream-json, writes marker file, exits 0.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_bin = bin_dir / "claude"
+    fake_bin.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json, re, pathlib\n"
+        "prompt = sys.argv[-1]\n"
+        "m = re.search(r'(/[^\\s`]+\\.done)', prompt)\n"
+        "marker = m.group(1) if m else ''\n"
+        "for evt in [\n"
+        "    {'type':'system','subtype':'init','session_id':'r1','model':'fake','cwd':'.'},\n"
+        "    {'type':'assistant','message':{'content':[{'type':'text','text':'diagnosing'}]}},\n"
+        "    {'type':'result','subtype':'success','num_turns':1,'total_cost_usd':0},\n"
+        "]:\n"
+        "    sys.stdout.write(json.dumps(evt) + '\\n')\n"
+        "sys.stdout.flush()\n"
+        "if marker:\n"
+        "    pathlib.Path(marker).parent.mkdir(parents=True, exist_ok=True)\n"
+        "    pathlib.Path(marker).write_text(json.dumps({'status':'fixed','summary':'ok'}))\n"
+    )
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{_os.environ.get('PATH', '')}")
+
+    # Prevent relaunch step from executing a real launcher.
+    _real_access = _os.access
+    def _fake_access(path, mode, *args, **kwargs):
+        if isinstance(path, str) and "launch.sh" in path:
+            return False
+        return _real_access(path, mode, *args, **kwargs)
+    monkeypatch.setattr(_os, "access", _fake_access)
+
+    gremlins.do_rescue("test-id-aabb12", headless=False)
+
+    _, err = capsys.readouterr()
+    assert "[rescue] init" in err
+    assert "[rescue] text:" in err
+    assert "[rescue] final:" in err
+
+
+def test_rescue_interactive_nonzero_exit_writes_bail(tmp_path, monkeypatch, capsys):
+    """Interactive rescue with rc != 0 (no marker) returns False and sets diagnosis_claude_error."""
+    import os as _os
+
+    gr_dir, workdir = _setup_dead_gremlin(tmp_path, monkeypatch)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_bin = bin_dir / "claude"
+    fake_bin.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json\n"
+        "for evt in [\n"
+        "    {'type':'system','subtype':'init','session_id':'r2','model':'fake','cwd':'.'},\n"
+        "    {'type':'result','subtype':'error','num_turns':1,'total_cost_usd':0},\n"
+        "]:\n"
+        "    sys.stdout.write(json.dumps(evt) + '\\n')\n"
+        "sys.stdout.flush()\n"
+        "sys.exit(1)\n"
+    )
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{_os.environ.get('PATH', '')}")
+
+    _real_access = _os.access
+    def _fake_access(path, mode, *args, **kwargs):
+        if isinstance(path, str) and "launch.sh" in path:
+            return False
+        return _real_access(path, mode, *args, **kwargs)
+    monkeypatch.setattr(_os, "access", _fake_access)
+
+    result = gremlins.do_rescue("test-id-aabb12", headless=False)
+
+    assert result is False
+    state = json.loads((gr_dir / "state.json").read_text())
+    assert state.get("bail_reason") == "diagnosis_claude_error"
