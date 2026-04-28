@@ -20,6 +20,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -1285,7 +1286,7 @@ def expected_branch(state: dict, gr_id: str):
 
 def _print_cost(state: dict) -> None:
     cost = state.get("total_cost_usd")
-    if cost is not None and isinstance(cost, (int, float)):
+    if isinstance(cost, (int, float)) and cost > 0:
         print(f"total cost: ${cost:.4f}")
 
 
@@ -1307,7 +1308,7 @@ def _persist_land_cost(sf: str, state: dict, additional_cost: float) -> None:
         existing = float(existing) if isinstance(existing, (int, float)) else 0.0
         new_total = existing + float(additional_cost)
         data["total_cost_usd"] = new_total
-        tmp = f"{sf}.{os.getpid()}.tmp"
+        tmp = f"{sf}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, sf)
@@ -1620,7 +1621,7 @@ def _run_claude_p_text(prompt: str, timeout: int = 60) -> tuple:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"claude -p returned non-JSON output: {exc}")
     text = data.get("result") if isinstance(data.get("result"), str) else ""
-    raw_cost = data.get("total_cost_usd")
+    raw_cost = data.get("total_cost_usd", data.get("cost_usd"))
     cost = float(raw_cost) if isinstance(raw_cost, (int, float)) else 0.0
     return text, cost
 
