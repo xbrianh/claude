@@ -29,6 +29,8 @@ import tempfile
 import time
 from typing import List, Optional
 
+from gremlins.clients.claude import stream_events
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -1080,28 +1082,46 @@ def do_rescue(target: str, headless: bool = False) -> bool:
                 print("Diagnosis: running diagnosis agent inline — Ctrl-C to abort.")
                 print(f"Marker: {marker_path}")
                 print()
+                cmd = [
+                    "claude", "-p",
+                    "--permission-mode", "bypassPermissions",
+                    "--output-format", "stream-json",
+                    "--verbose",
+                    prompt,
+                ]
                 try:
-                    result = subprocess.run(["claude", "-p", prompt], cwd=scratch_dir)
+                    p = subprocess.Popen(cmd, cwd=scratch_dir, stdout=subprocess.PIPE)
                 except FileNotFoundError:
                     print("error: 'claude' CLI not found in PATH")
+                    _write_bail(sf, wdir, "diagnosis_claude_error", "'claude' CLI not found in PATH")
                     report["verdict"] = "diagnosis_claude_error"
                     report["summary"] = "'claude' CLI not found in PATH"
                     return False
+                try:
+                    stream_events(p.stdout, prefix="[rescue] ")
+                    p.stdout.close()
+                    rc = p.wait()
                 except KeyboardInterrupt:
-                    # Operator's deliberate interrupt — preserve state with no
-                    # bail so they can rerun /gremlins rescue without first
-                    # having to clear a bail_reason. Skip the report too: nothing
-                    # was decided, the gremlin is exactly as it was.
+                    try:
+                        p.terminate()
+                        p.wait(timeout=2)
+                    except Exception:
+                        pass
+                    if p.poll() is None:
+                        try:
+                            p.kill()
+                        except Exception:
+                            pass
                     print("\nRescue aborted by user. Gremlin state preserved — rerun /gremlins rescue, rm, or close.")
                     aborted[0] = True
                     return False
 
                 print()
 
-                if result.returncode != 0:
-                    detail = f"claude -p exited {result.returncode}"
+                if rc != 0:
+                    detail = f"claude -p exited {rc}"
                     _write_bail(sf, wdir, "diagnosis_claude_error", detail)
-                    print(f"Diagnosis: rescue agent exited with code {result.returncode}.")
+                    print(f"Diagnosis: rescue agent exited with code {rc}.")
                     print(f"Inspect the log at {log_path} and worktree at {workdir} for details.")
                     report["verdict"] = "diagnosis_claude_error"
                     report["summary"] = detail

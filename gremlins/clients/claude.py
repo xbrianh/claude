@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Protocol, Sequence
+from typing import Callable, List, Optional, Protocol, Sequence, Tuple
 
 CLAUDE_FLAGS_BASE = [
     "--permission-mode", "bypassPermissions",
@@ -145,6 +145,65 @@ def _emit_event(prefix: str, evt: dict) -> None:
     out.flush()
 
 
+def stream_events(
+    stdout,
+    *,
+    prefix: str = "",
+    raw_path: Optional[pathlib.Path] = None,
+    capture: bool = False,
+    on_event: Optional[Callable[[dict], None]] = None,
+) -> Tuple[Optional[str], Optional[float], Optional[List[dict]]]:
+    """Read stream-json lines from stdout, render via _emit_event.
+
+    Returns (session_id, cost_usd, events). events is None when capture=False.
+    """
+    session_id: Optional[str] = None
+    cost_usd: Optional[float] = None
+    events: Optional[List[dict]] = [] if capture else None
+
+    raw = None
+    if raw_path is not None:
+        raw = open(raw_path, "ab")
+    try:
+        for line in stdout:
+            if raw is not None:
+                raw.write(line)
+                raw.flush()
+            try:
+                evt = json.loads(line.decode("utf-8", errors="replace"))
+            except Exception:
+                continue
+            if not isinstance(evt, dict):
+                continue
+            if (
+                session_id is None
+                and evt.get("type") == "system"
+                and evt.get("subtype") == "init"
+            ):
+                sid = evt.get("session_id")
+                if isinstance(sid, str):
+                    session_id = sid
+            if evt.get("type") == "result":
+                raw_cost = evt.get("total_cost_usd", evt.get("cost_usd"))
+                if isinstance(raw_cost, (int, float)):
+                    cost_usd = float(raw_cost)
+            if events is not None:
+                events.append(evt)
+            try:
+                _emit_event(prefix, evt)
+            except Exception:
+                pass
+            if on_event is not None:
+                try:
+                    on_event(evt)
+                except Exception:
+                    pass
+    finally:
+        if raw is not None:
+            raw.close()
+    return session_id, cost_usd, events
+
+
 # ---------------------------------------------------------------------------
 # SubprocessClaudeClient
 # ---------------------------------------------------------------------------
@@ -247,58 +306,23 @@ class SubprocessClaudeClient:
 
         session_id: Optional[str] = None
         text_chunks: List[str] = []
-        events: Optional[List[dict]] = [] if capture_events else None
+        events: Optional[List[dict]] = None  # populated only in stream-json mode
         prefix = f"[{label}] " if label else ""
         cost_usd: Optional[float] = None
 
         try:
             assert p.stdout is not None
             if output_format == "stream-json":
-                if raw_path is not None:
-                    raw = open(raw_path, "ab")
-                else:
-                    raw = None
-                try:
-                    for line in p.stdout:
-                        if raw is not None:
-                            raw.write(line)
-                            raw.flush()
-                        try:
-                            evt = json.loads(line.decode("utf-8", errors="replace"))
-                        except Exception:
-                            # Parity with the bash `jq ... || true`: a truncated
-                            # JSON line from a crashing claude must not abort.
-                            continue
-                        if not isinstance(evt, dict):
-                            continue
-                        if (
-                            session_id is None
-                            and evt.get("type") == "system"
-                            and evt.get("subtype") == "init"
-                        ):
-                            sid = evt.get("session_id")
-                            if isinstance(sid, str):
-                                session_id = sid
-                        if evt.get("type") == "result":
-                            raw_cost = evt.get("total_cost_usd", evt.get("cost_usd"))
-                            if isinstance(raw_cost, (int, float)):
-                                cost_usd = float(raw_cost)
-                                with self._lock:
-                                    self._total_cost_usd += cost_usd
-                        if events is not None:
-                            events.append(evt)
-                        try:
-                            _emit_event(prefix, evt)
-                        except Exception:
-                            pass
-                        if on_event is not None:
-                            try:
-                                on_event(evt)
-                            except Exception:
-                                pass
-                finally:
-                    if raw is not None:
-                        raw.close()
+                session_id, cost_usd, events = stream_events(
+                    p.stdout,
+                    prefix=prefix,
+                    raw_path=raw_path,
+                    capture=capture_events,
+                    on_event=on_event,
+                )
+                if cost_usd is not None:
+                    with self._lock:
+                        self._total_cost_usd += cost_usd
             else:
                 # text mode — capture stdout, no per-event trace.
                 data = p.stdout.read()

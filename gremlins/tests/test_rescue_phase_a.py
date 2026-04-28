@@ -268,3 +268,104 @@ def test_rescue_headless_excluded_class_refused(tmp_path, monkeypatch):
     # Fake claude must not have been spawned at all.
     log = read_fake_claude_log(sh.fake_claude_log)
     assert all(e["stage"] != "rescue-diagnosis" for e in log), log
+
+
+def test_rescue_nonzero_exit_records_diagnosis_claude_error(tmp_path, monkeypatch):
+    """Agent that exits non-zero → do_rescue returns False with diagnosis_claude_error."""
+    sh = setup_shell_env(tmp_path)
+    failing_claude = tmp_path / "failing_claude.py"
+    failing_claude.write_text(
+        "import sys\nsys.exit(42)\n",
+        encoding="utf-8",
+    )
+    install_fake_bin(sh.bin_dir, "claude", failing_claude)
+
+    state_dir = _make_failed_gremlin(sh.state_root, sh.repo)
+
+    for k, v in sh.env.items():
+        monkeypatch.setenv(k, v)
+
+    gremlins_mod = _load_gremlins_module()
+    _patch_state_root(gremlins_mod, sh.state_root, monkeypatch)
+
+    ok = gremlins_mod.do_rescue("victim-abcdef", headless=False)
+    assert ok is False
+
+    state = json.loads((state_dir / "state.json").read_text())
+    assert state["bail_reason"] == "diagnosis_claude_error"
+
+
+def test_rescue_claude_not_found_records_diagnosis_claude_error(tmp_path, monkeypatch):
+    """Missing claude binary → do_rescue returns False with diagnosis_claude_error."""
+    import subprocess as _subprocess
+
+    sh = setup_shell_env(tmp_path)
+    state_dir = _make_failed_gremlin(sh.state_root, sh.repo)
+
+    for k, v in sh.env.items():
+        monkeypatch.setenv(k, v)
+
+    gremlins_mod = _load_gremlins_module()
+    _patch_state_root(gremlins_mod, sh.state_root, monkeypatch)
+
+    original_popen = _subprocess.Popen
+
+    def popen_raise_if_claude(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "claude":
+            raise FileNotFoundError("claude not found")
+        return original_popen(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(_subprocess, "Popen", popen_raise_if_claude)
+    # Also patch it in the fleet module's own subprocess reference.
+    monkeypatch.setattr(gremlins_mod.subprocess, "Popen", popen_raise_if_claude)
+
+    ok = gremlins_mod.do_rescue("victim-abcdef", headless=False)
+    assert ok is False
+
+    state = json.loads((state_dir / "state.json").read_text())
+    assert state["bail_reason"] == "diagnosis_claude_error"
+
+
+def test_rescue_diagnosis_streams_events_to_stderr(tmp_path, monkeypatch, capsys):
+    """Interactive rescue emits [rescue]-prefixed stream-json events to stderr."""
+    sh = setup_shell_env(tmp_path)
+    _make_failed_gremlin(sh.state_root, sh.repo)
+
+    # Minimal fake claude: emit stream-json events, write unsalvageable marker.
+    # Use "unsalvageable" so there's no relaunch step and the test stays self-contained.
+    streaming_claude_py = tmp_path / "streaming_claude.py"
+    streaming_claude_py.write_text(
+        "import json, os, pathlib, sys\n"
+        "prompt = sys.argv[-1]\n"
+        "for evt in [\n"
+        '    {"type": "system", "subtype": "init", "session_id": "rescue-s1",\n'
+        '     "model": "fake", "cwd": os.getcwd()},\n'
+        '    {"type": "assistant", "message": {"content": [\n'
+        '        {"type": "text", "text": "Diagnosing..."}]}},\n'
+        '    {"type": "result", "subtype": "success", "num_turns": 1, "total_cost_usd": 0},\n'
+        "]:\n"
+        '    sys.stdout.write(json.dumps(evt) + "\\n")\n'
+        "    sys.stdout.flush()\n"
+        "for word in prompt.split():\n"
+        "    word = word.strip('`\"\\'')\n"
+        "    if word.endswith('.done') and word.startswith('/'):\n"
+        "        pathlib.Path(word).parent.mkdir(parents=True, exist_ok=True)\n"
+        '        pathlib.Path(word).write_text(json.dumps({"status": "unsalvageable", "summary": "streaming test"}))\n'
+        "        break\n",
+        encoding="utf-8",
+    )
+    install_fake_bin(sh.bin_dir, "claude", streaming_claude_py)
+
+    for k, v in sh.env.items():
+        monkeypatch.setenv(k, v)
+
+    gremlins_mod = _load_gremlins_module()
+    _patch_state_root(gremlins_mod, sh.state_root, monkeypatch)
+
+    gremlins_mod.do_rescue("victim-abcdef", headless=False)
+
+    captured = capsys.readouterr()
+    rescue_lines = [l for l in captured.err.splitlines() if l.startswith("[rescue]")]
+    assert len(rescue_lines) >= 2, f"Expected [rescue]-prefixed events on stderr; got: {captured.err!r}"
+    assert any("init" in l for l in rescue_lines), f"Expected init event line: {rescue_lines}"
+    assert any("text:" in l for l in rescue_lines), f"Expected text event line: {rescue_lines}"
