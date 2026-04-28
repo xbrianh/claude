@@ -463,6 +463,162 @@ def test_land_local_refuses_when_branch_missing_from_state(tmp_path, monkeypatch
     assert "no branch field" in capsys.readouterr().out
 
 
+def test_land_proceeds_with_untracked_files_present(tmp_path, monkeypatch, capsys):
+    """Untracked files must not block land (they can't be clobbered by squash merge)."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _init_git_repo(project_root)
+
+    branch = "bg/localgremlin/test-id-untr12"
+    subprocess.run(["git", "checkout", "-b", branch], cwd=project_root,
+                   check=True, capture_output=True)
+    (project_root / "feature.txt").write_text("feature work\n")
+    subprocess.run(["git", "add", "."], cwd=project_root,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "feat: add feature.txt"],
+                   cwd=project_root, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "main"], cwd=project_root,
+                   check=True, capture_output=True)
+
+    # Drop an untracked file into the working tree on main.
+    (project_root / "scratch.tmp").write_text("scratch\n")
+
+    state_root = tmp_path / "state-root"
+    state_root.mkdir()
+    gr_id = "test-id-untr12"
+    gr_dir = state_root / gr_id
+    artifacts_dir = gr_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "plan.md").write_text(
+        "# Add feature\n\n## Context\nAdd feature.txt to the repo.\n"
+    )
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "status": "dead",
+        "exit_code": 0,
+        "setup_kind": "worktree-branch",
+        "branch": branch,
+        "workdir": str(workdir),
+        "project_root": str(project_root),
+    }
+    _write_state(gr_dir, state, finished=True)
+
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+    monkeypatch.setattr(gremlins, "_synthesize_commit_message_ai",
+                        lambda inputs: ("Add feature.txt to repo", ""))
+    monkeypatch.chdir(project_root)
+
+    ok = gremlins._land_local(gr_id, str(gr_dir / "state.json"),
+                               str(gr_dir), state, mode="squash")
+    assert ok is True
+    # Untracked file must still be present after land.
+    assert (project_root / "scratch.tmp").exists()
+
+
+def test_land_refuses_with_tracked_modifications(tmp_path, monkeypatch, capsys):
+    """Staged or modified tracked files must still block land."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _init_git_repo(project_root)
+
+    branch = "bg/localgremlin/test-id-dirty1"
+    subprocess.run(["git", "checkout", "-b", branch], cwd=project_root,
+                   check=True, capture_output=True)
+    (project_root / "feature.txt").write_text("feature work\n")
+    subprocess.run(["git", "add", "."], cwd=project_root,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "feat: add feature.txt"],
+                   cwd=project_root, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "main"], cwd=project_root,
+                   check=True, capture_output=True)
+
+    # Dirty the tracked README.md on main.
+    (project_root / "README.md").write_text("modified\n")
+
+    state_root = tmp_path / "state-root"
+    state_root.mkdir()
+    gr_id = "test-id-dirty1"
+    gr_dir = state_root / gr_id
+    (gr_dir / "artifacts").mkdir(parents=True)
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "status": "dead",
+        "exit_code": 0,
+        "setup_kind": "worktree-branch",
+        "branch": branch,
+        "workdir": str(workdir),
+        "project_root": str(project_root),
+    }
+    _write_state(gr_dir, state, finished=True)
+
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+    monkeypatch.chdir(project_root)
+
+    ok = gremlins._land_local(gr_id, str(gr_dir / "state.json"),
+                               str(gr_dir), state, mode="squash")
+    assert ok is False
+    assert "working tree is not clean" in capsys.readouterr().out
+
+
+def test_squash_land_failure_preserves_untracked_files(tmp_path, monkeypatch):
+    """git clean -fd must not run when untracked files existed before the merge."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _init_git_repo(project_root)
+
+    # Create a conflicting branch: adds a file that will conflict with an
+    # untracked file of the same name already present in the working tree.
+    branch = "bg/localgremlin/test-id-conf12"
+    subprocess.run(["git", "checkout", "-b", branch], cwd=project_root,
+                   check=True, capture_output=True)
+    (project_root / "conflict.txt").write_text("from branch\n")
+    subprocess.run(["git", "add", "."], cwd=project_root,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "feat: add conflict.txt"],
+                   cwd=project_root, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "main"], cwd=project_root,
+                   check=True, capture_output=True)
+
+    # Drop an untracked file with the same name — this will cause the squash merge to fail.
+    (project_root / "conflict.txt").write_text("pre-existing untracked\n")
+
+    state_root = tmp_path / "state-root"
+    state_root.mkdir()
+    gr_id = "test-id-conf12"
+    gr_dir = state_root / gr_id
+    artifacts_dir = gr_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "status": "dead",
+        "exit_code": 0,
+        "setup_kind": "worktree-branch",
+        "branch": branch,
+        "workdir": str(workdir),
+        "project_root": str(project_root),
+    }
+    _write_state(gr_dir, state, finished=True)
+
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+    monkeypatch.chdir(project_root)
+
+    # The merge will fail (untracked file would be overwritten), but the
+    # pre-existing untracked file must survive — git clean -fd must not run.
+    ok = gremlins._land_local(gr_id, str(gr_dir / "state.json"),
+                               str(gr_dir), state, mode="squash")
+    assert ok is False
+    assert (project_root / "conflict.txt").read_text() == "pre-existing untracked\n"
+
+
 # ---------------------------------------------------------------------------
 # Misc small-surface helpers
 # ---------------------------------------------------------------------------
