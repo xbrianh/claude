@@ -419,7 +419,8 @@ def test_land_local_squash_lands_branch_and_deletes_it(tmp_path, monkeypatch, ca
     monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
     monkeypatch.setattr(gremlins, "_synthesize_commit_message_ai",
                         lambda inputs: ("Add feature.txt to repo",
-                                         "Adds feature.txt with placeholder content."))
+                                         "Adds feature.txt with placeholder content.",
+                                         0.0))
     monkeypatch.chdir(project_root)
 
     ok = gremlins._land_local(gr_id, str(gr_dir / "state.json"),
@@ -437,6 +438,61 @@ def test_land_local_squash_lands_branch_and_deletes_it(tmp_path, monkeypatch, ca
         capture_output=True, text=True, check=True,
     ).stdout
     assert branches.strip() == ""
+
+
+def test_land_local_squash_folds_commit_synthesis_cost_into_total(tmp_path, monkeypatch, capsys):
+    """Squash-land must add the commit-message `claude -p` cost to total_cost_usd
+    so the printed total — and the persisted state — cover land-time spend."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _init_git_repo(project_root)
+
+    branch = "bg/localgremlin/test-id-cost12"
+    subprocess.run(["git", "checkout", "-b", branch], cwd=project_root,
+                   check=True, capture_output=True)
+    (project_root / "feature.txt").write_text("feature work\n")
+    subprocess.run(["git", "add", "."], cwd=project_root,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "feat: add feature.txt"],
+                   cwd=project_root, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "main"], cwd=project_root,
+                   check=True, capture_output=True)
+
+    state_root = tmp_path / "state-root"
+    state_root.mkdir()
+    gr_id = "test-id-cost12"
+    gr_dir = state_root / gr_id
+    artifacts_dir = gr_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "plan.md").write_text(
+        "# Add feature\n\n## Context\nAdd feature.txt to the repo.\n"
+    )
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "status": "dead",
+        "exit_code": 0,
+        "setup_kind": "worktree-branch",
+        "branch": branch,
+        "workdir": str(workdir),
+        "project_root": str(project_root),
+        "total_cost_usd": 1.0,
+    }
+    sf_path = _write_state(gr_dir, state, finished=True)
+
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+    monkeypatch.setattr(gremlins, "_synthesize_commit_message_ai",
+                        lambda inputs: ("Add feature.txt to repo", "", 0.05))
+    monkeypatch.chdir(project_root)
+
+    ok = gremlins._land_local(gr_id, sf_path, str(gr_dir), state, mode="squash")
+    assert ok is True
+
+    persisted = json.loads(pathlib.Path(sf_path).read_text())
+    assert persisted["total_cost_usd"] == pytest.approx(1.05)
+    assert "total cost: $1.0500" in capsys.readouterr().out
 
 
 def test_land_local_refuses_non_worktree_branch_setup(tmp_path, monkeypatch, capsys):
@@ -508,7 +564,7 @@ def test_land_proceeds_with_untracked_files_present(tmp_path, monkeypatch, capsy
 
     monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
     monkeypatch.setattr(gremlins, "_synthesize_commit_message_ai",
-                        lambda inputs: ("Add feature.txt to repo", ""))
+                        lambda inputs: ("Add feature.txt to repo", "", 0.0))
     monkeypatch.chdir(project_root)
 
     ok = gremlins._land_local(gr_id, str(gr_dir / "state.json"),

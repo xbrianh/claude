@@ -20,6 +20,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -1283,6 +1284,39 @@ def expected_branch(state: dict, gr_id: str):
     return None
 
 
+def _print_cost(state: dict) -> None:
+    cost = state.get("total_cost_usd")
+    if isinstance(cost, (int, float)) and cost > 0:
+        print(f"total cost: ${cost:.4f}")
+
+
+def _persist_land_cost(sf: str, state: dict, additional_cost: float) -> None:
+    """Fold a land-time `claude -p` cost into state.json's total_cost_usd.
+
+    Writes through to disk so the value `_print_cost` reports — and any later
+    fleet status reader — reflects spend that happened during land. Mutates
+    `state` in place so the immediately-following `_print_cost(state)` sees
+    the updated total. Best-effort: cost accounting must not crash a
+    successful land.
+    """
+    if not isinstance(additional_cost, (int, float)) or additional_cost <= 0:
+        return
+    try:
+        with open(sf, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        existing = data.get("total_cost_usd")
+        existing = float(existing) if isinstance(existing, (int, float)) else 0.0
+        new_total = existing + float(additional_cost)
+        data["total_cost_usd"] = new_total
+        tmp = f"{sf}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, sf)
+        state["total_cost_usd"] = new_total
+    except Exception:
+        pass
+
+
 def _resolve_landing_cwd(state: dict) -> str:
     """Return a project_root suitable as cwd for `gh pr merge --delete-branch`.
 
@@ -1560,8 +1594,14 @@ def _parse_commit_output(text: str) -> tuple:
     return subject, body
 
 
-def _run_claude_p_text(prompt: str, timeout: int = 60) -> str:
-    """Run `claude -p` and return its stdout as plain text.
+def _run_claude_p_text(prompt: str, timeout: int = 60) -> tuple:
+    """Run `claude -p` and return (stdout text, total_cost_usd).
+
+    Uses `--output-format json` so the single result object carries both the
+    assistant's reply text and `total_cost_usd`. The cost is surfaced so the
+    caller can fold land-time `claude -p` spend into the gremlin's reported
+    total — without it, `gremlins land`'s commit-message synthesis would not
+    show up in the "total cost" line printed after a squash-land.
 
     Suppresses the session-summary hook via `GREMLIN_SKIP_SUMMARY=1`; otherwise
     the hook's "surface this verbatim" directive prepends the gremlin status
@@ -1571,12 +1611,19 @@ def _run_claude_p_text(prompt: str, timeout: int = 60) -> str:
     env = os.environ.copy()
     env["GREMLIN_SKIP_SUMMARY"] = "1"
     result = subprocess.run(
-        ["claude", "-p", "--output-format", "text"],
+        ["claude", "-p", "--output-format", "json"],
         input=prompt, capture_output=True, text=True, timeout=timeout, env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(f"claude -p exited {result.returncode}: {result.stderr.strip()}")
-    return result.stdout
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"claude -p returned non-JSON output: {exc}")
+    text = data.get("result") if isinstance(data.get("result"), str) else ""
+    raw_cost = data.get("total_cost_usd", data.get("cost_usd"))
+    cost = float(raw_cost) if isinstance(raw_cost, (int, float)) else 0.0
+    return text, cost
 
 
 def _synthesize_commit_message_ai(inputs: dict) -> tuple:
@@ -1611,29 +1658,30 @@ Requirements:
 
 Output only the commit message text, nothing else."""
 
-    stdout = _run_claude_p_text(prompt)
+    stdout, cost = _run_claude_p_text(prompt)
     subject, body = _parse_commit_output(stdout)
     if not subject:
         raise RuntimeError("claude -p returned empty subject")
-    return subject, body
+    return subject, body, cost
 
 
 def _build_commit_message(wdir: str, state: dict, branch: str, merge_base: str, cwd) -> tuple:
-    """Return (subject, body) using AI synthesis with fallback to regex extraction."""
+    """Return (subject, body, cost_usd) using AI synthesis with fallback to regex extraction."""
     inputs = _gather_commit_inputs(wdir, state, branch, merge_base, cwd)
 
     print("Composing commit message...", flush=True)
     try:
-        subject, body = _synthesize_commit_message_ai(inputs)
+        subject, body, cost = _synthesize_commit_message_ai(inputs)
         print(f"Commit message: {subject}", flush=True)
-        return subject, body
+        return subject, body, cost
     except Exception as exc:
         print(f"warning: AI commit message synthesis failed ({exc}); falling back to plan.md extraction", flush=True)
         plan_path = os.path.join(wdir, "artifacts", "plan.md")
         if not os.path.isfile(plan_path):
             print(f"error: plan.md not found at {plan_path} — cannot build commit message")
             raise
-        return _compose_commit_message(plan_path)
+        subject, body = _compose_commit_message(plan_path)
+        return subject, body, 0.0
 
 
 def _inside_worktree(workdir: str) -> bool:
@@ -1710,7 +1758,7 @@ def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         print(f"error: git merge --squash failed — {suffix}")
         return False
 
-    subject, body = _build_commit_message(wdir, state, source_ref, merge_base, cwd)
+    subject, body, land_cost = _build_commit_message(wdir, state, source_ref, merge_base, cwd)
     commit_msg = f"{subject}\n\n{body}" if body else subject
 
     r = subprocess.run(["git", "commit", "-m", commit_msg], cwd=cwd)
@@ -1719,6 +1767,8 @@ def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         return False
 
     print(f"Landed {source_label} onto {current}.")
+    _persist_land_cost(sf, state, land_cost)
+    _print_cost(state)
     _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
     return True
 
@@ -1754,6 +1804,7 @@ def _ff_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         return False
 
     print(f"Landed {source_label} onto {current}.")
+    _print_cost(state)
     _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
     return True
 
