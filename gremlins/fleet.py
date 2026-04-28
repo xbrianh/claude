@@ -1669,6 +1669,12 @@ def _preflight_land(state: dict, cwd) -> tuple:
     return current, True
 
 
+def _print_cost(state: dict) -> None:
+    cost = state.get("total_cost_usd")
+    if isinstance(cost, (int, float)) and cost > 0:
+        print(f"total cost: ${cost:.4f}")
+
+
 def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
                  source_ref: str, source_label: str,
                  current: str, delete_branch: bool) -> bool:
@@ -1708,6 +1714,7 @@ def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         return False
 
     print(f"Landed {source_label} onto {current}.")
+    _print_cost(state)
     _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
     return True
 
@@ -1743,6 +1750,7 @@ def _ff_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         return False
 
     print(f"Landed {source_label} onto {current}.")
+    _print_cost(state)
     _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
     return True
 
