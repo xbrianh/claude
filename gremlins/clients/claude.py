@@ -69,6 +69,10 @@ class ClaudeClient(Protocol):
     def reap_all(self) -> None:
         ...
 
+    @property
+    def total_cost_usd(self) -> float:
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Stream-JSON event tracing
@@ -279,7 +283,8 @@ class SubprocessClaudeClient:
                             raw_cost = evt.get("total_cost_usd", evt.get("cost_usd"))
                             if isinstance(raw_cost, (int, float)):
                                 cost_usd = float(raw_cost)
-                                self._total_cost_usd += cost_usd
+                                with self._lock:
+                                    self._total_cost_usd += cost_usd
                         if events is not None:
                             events.append(evt)
                         try:

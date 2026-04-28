@@ -1285,7 +1285,7 @@ def expected_branch(state: dict, gr_id: str):
 
 def _print_cost(state: dict) -> None:
     cost = state.get("total_cost_usd")
-    if cost:
+    if cost is not None and isinstance(cost, (int, float)):
         print(f"total cost: ${cost:.4f}")
 
 

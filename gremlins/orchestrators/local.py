@@ -265,12 +265,12 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
     run_stages(stages, resume_from=args.resume_from)
 
     total_cost = getattr(client, "total_cost_usd", 0.0)
-    if total_cost:
+    if total_cost is not None and total_cost > 0:
         patch_state(total_cost_usd=total_cost)
 
     print("", flush=True)
     print(f"done. session artifacts in: {session_dir}", flush=True)
-    if total_cost:
+    if total_cost is not None and total_cost > 0:
         print(f"total cost: ${total_cost:.4f}", flush=True)
     return 0
 
