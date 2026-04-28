@@ -1661,7 +1661,7 @@ def _preflight_land(state: dict, cwd) -> tuple:
     current = r.stdout.strip()
 
     r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=cwd)
-    tracked_changes = [ln for ln in r.stdout.splitlines() if not ln.startswith("??")]
+    tracked_changes = [ln for ln in r.stdout.splitlines() if not ln.startswith(("??", "!!"))]
     if tracked_changes:
         print("error: working tree is not clean — commit or stash changes before landing")
         return current, False
@@ -1688,13 +1688,24 @@ def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
         return True
 
+    # Snapshot untracked files before the merge so the failure-cleanup path
+    # doesn't delete files that were already present before we started.
+    pre_merge_untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        capture_output=True, text=True, cwd=cwd,
+    ).stdout.strip()
+
     print(f"Squash-merging {source_label} onto {current}...")
     r = subprocess.run(["git", "merge", "--squash", source_ref], cwd=cwd)
     if r.returncode != 0:
         reset_ok = subprocess.run(
             ["git", "reset", "--hard", "HEAD"], capture_output=True, cwd=cwd,
         ).returncode == 0
-        subprocess.run(["git", "clean", "-fd"], capture_output=True, cwd=cwd)
+        # Only run git clean if the tree was clean of untracked files before
+        # the merge attempt — otherwise we'd delete pre-existing files that
+        # were explicitly allowed through preflight.
+        if not pre_merge_untracked:
+            subprocess.run(["git", "clean", "-fd"], capture_output=True, cwd=cwd)
         suffix = "working tree restored" if reset_ok else "manual cleanup may be needed"
         print(f"error: git merge --squash failed — {suffix}")
         return False
