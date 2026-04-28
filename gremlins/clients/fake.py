@@ -49,6 +49,7 @@ class FakeClaudeClient:
         self.calls: List[RecordedCall] = []
         self._fixtures: Dict[str, object] = dict(fixtures or {})
         self._text_results: Dict[str, str] = dict(text_results or {})
+        self.total_cost_usd: float = 0.0
 
     def reap_all(self) -> None:
         # Fake never spawns; nothing to reap.
@@ -115,6 +116,7 @@ class FakeClaudeClient:
                     f.write((json.dumps(evt) + "\n").encode("utf-8"))
 
         session_id: Optional[str] = None
+        cost_usd: Optional[float] = None
         for evt in events:
             if (
                 session_id is None
@@ -123,6 +125,11 @@ class FakeClaudeClient:
                 and isinstance(evt.get("session_id"), str)
             ):
                 session_id = evt["session_id"]
+            if evt.get("type") == "result":
+                raw_cost = evt.get("total_cost_usd", evt.get("cost_usd"))
+                if isinstance(raw_cost, (int, float)):
+                    cost_usd = float(raw_cost)
+                    self.total_cost_usd += cost_usd
             if on_event is not None:
                 try:
                     on_event(evt)
@@ -134,4 +141,5 @@ class FakeClaudeClient:
             session_id=session_id,
             text_result=None,
             events=events if capture_events else None,
+            cost_usd=cost_usd,
         )

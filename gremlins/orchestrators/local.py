@@ -31,7 +31,7 @@ from ..stages.address_code import run_address_code_stage
 from ..stages.implement import run_implement_stage
 from ..stages.plan import run_plan_stage
 from ..stages.review_code import run_review_code_stage
-from ..state import resolve_session_dir, set_stage
+from ..state import patch_state, resolve_session_dir, set_stage
 
 MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 VALID_RESUME_STAGES = ["plan", "implement", "review-code", "address-code"]
@@ -264,8 +264,14 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
     ]
     run_stages(stages, resume_from=args.resume_from)
 
+    total_cost = getattr(client, "total_cost_usd", 0.0)
+    if total_cost:
+        patch_state(total_cost_usd=total_cost)
+
     print("", flush=True)
     print(f"done. session artifacts in: {session_dir}", flush=True)
+    if total_cost:
+        print(f"total cost: ${total_cost:.4f}", flush=True)
     return 0
 
 

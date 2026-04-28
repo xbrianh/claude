@@ -1283,6 +1283,12 @@ def expected_branch(state: dict, gr_id: str):
     return None
 
 
+def _print_cost(state: dict) -> None:
+    cost = state.get("total_cost_usd")
+    if cost:
+        print(f"total cost: ${cost:.4f}")
+
+
 def _resolve_landing_cwd(state: dict) -> str:
     """Return a project_root suitable as cwd for `gh pr merge --delete-branch`.
 
@@ -1719,6 +1725,7 @@ def _squash_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         return False
 
     print(f"Landed {source_label} onto {current}.")
+    _print_cost(state)
     _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
     return True
 
@@ -1754,6 +1761,7 @@ def _ff_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
         return False
 
     print(f"Landed {source_label} onto {current}.")
+    _print_cost(state)
     _cleanup_gremlin(gr_id, sf, wdir, state, cwd, delete_branch=delete_branch, remove_state_dir=False)
     return True
 

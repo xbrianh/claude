@@ -39,13 +39,15 @@ class CompletedRun:
     or runs that crashed before emitting init). ``text_result`` holds the
     captured stdout for ``output_format='text'`` runs and is None otherwise.
     ``events`` is populated only when ``capture_events=True``; each entry is
-    one parsed stream-json event.
+    one parsed stream-json event. ``cost_usd`` is extracted from the
+    stream-json ``result`` event when available.
     """
 
     exit_code: int
     session_id: Optional[str] = None
     text_result: Optional[str] = None
     events: Optional[List[dict]] = None
+    cost_usd: Optional[float] = None
 
 
 class ClaudeClient(Protocol):
@@ -159,6 +161,7 @@ class SubprocessClaudeClient:
         # in that narrow window.
         self._lock = threading.RLock()
         self._children: List[subprocess.Popen] = []
+        self._total_cost_usd: float = 0.0
 
     # --- child-process tracking -------------------------------------------
 
@@ -194,6 +197,10 @@ class SubprocessClaudeClient:
                     p.kill()
                 except Exception:
                     pass
+
+    @property
+    def total_cost_usd(self) -> float:
+        return self._total_cost_usd
 
     # --- main entry point -------------------------------------------------
 
@@ -238,6 +245,7 @@ class SubprocessClaudeClient:
         text_chunks: List[str] = []
         events: Optional[List[dict]] = [] if capture_events else None
         prefix = f"[{label}] " if label else ""
+        cost_usd: Optional[float] = None
 
         try:
             assert p.stdout is not None
@@ -267,6 +275,11 @@ class SubprocessClaudeClient:
                             sid = evt.get("session_id")
                             if isinstance(sid, str):
                                 session_id = sid
+                        if evt.get("type") == "result":
+                            raw_cost = evt.get("total_cost_usd", evt.get("cost_usd"))
+                            if isinstance(raw_cost, (int, float)):
+                                cost_usd = float(raw_cost)
+                                self._total_cost_usd += cost_usd
                         if events is not None:
                             events.append(evt)
                         try:
@@ -303,4 +316,5 @@ class SubprocessClaudeClient:
             session_id=session_id,
             text_result="".join(text_chunks) if output_format != "stream-json" else None,
             events=events,
+            cost_usd=cost_usd,
         )
