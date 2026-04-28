@@ -1661,7 +1661,8 @@ def _preflight_land(state: dict, cwd) -> tuple:
     current = r.stdout.strip()
 
     r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=cwd)
-    if r.stdout.strip():
+    tracked_changes = [ln for ln in r.stdout.splitlines() if not ln.startswith("??")]
+    if tracked_changes:
         print("error: working tree is not clean — commit or stash changes before landing")
         return current, False
 
