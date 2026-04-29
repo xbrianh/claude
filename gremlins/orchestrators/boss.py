@@ -476,7 +476,7 @@ def land_child(child_id: str) -> bool:
 
 
 def advance_boss_workdir(boss_workdir: str, new_head: str) -> None:
-    """Fast-forward the boss worktree's HEAD to match project_root after a local land.
+    """Reset the boss worktree's HEAD to match project_root after a local land.
 
     Local child gremlins squash-land into project_root, leaving the boss's
     own worktree frozen at the chain-start SHA. Resetting here ensures each
@@ -821,7 +821,9 @@ def boss_main(argv: List[str]) -> int:
             if success:
                 set_stage(gr_id, "landing")
                 if land_child(current_child_id):
-                    if chain_kind == "local" and boss_workdir and os.path.isdir(boss_workdir):
+                    if chain_kind == "local":
+                        if not boss_workdir or not os.path.isdir(boss_workdir):
+                            die(f"boss workdir not usable after local land: {boss_workdir!r}")
                         advance_boss_workdir(boss_workdir, get_head_ref(project_root))
                     outcome = "rescued-then-landed" if was_rescued else "landed"
                     log(f"child {current_child_id} {outcome}")
