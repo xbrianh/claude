@@ -1,10 +1,10 @@
 """Regression tests for the GR_ID-leakage bug captured on PR #140.
 
 When `pytest` runs as a subprocess of an implement-stage gremlin, GR_ID is
-inherited. Without isolation, gremlins.state.set_stage shells out to
-set-stage.sh against the parent gremlin's state.json, corrupting its
-`stage` and `sub_stage` fields — observable in `/gremlins --watch` and
-dangerous for any rescue-flow logic that branches on `stage`.
+inherited. Without isolation, gremlins.state.set_stage would write the
+parent gremlin's state.json and corrupt its `stage` and `sub_stage` fields
+— observable in `/gremlins --watch` and dangerous for any rescue-flow logic
+that branches on `stage`.
 
 The fix is the autouse `_isolate_gr_id` fixture in conftest.py, which
 delenv's GR_ID before every test. These tests verify both layers:
@@ -15,19 +15,15 @@ delenv's GR_ID before every test. These tests verify both layers:
   hop, this test would pass trivially in any clean CI environment (no
   GR_ID inherited) regardless of whether the autouse fixture was present.
 - test_*_does_not_clobber_external_state: per-orchestrator end-to-end
-  checks that running each entry point does not invoke set-stage.sh
-  against a pre-staged parent gremlin's state.json. Each orchestrator is
-  exercised in its own test so a regression message names the offender.
+  checks that running each entry point does not modify a pre-staged parent
+  gremlin's state.json. Each orchestrator is exercised in its own test so a
+  regression message names the offender.
 
 Coverage envelope: with GR_ID unset (the post-fix invariant), set_stage
-early-returns before subprocess.run, so these tests verify that guard
-plus the autouse fixture's delenv. They do NOT catch hypothetical future
-code paths that resolve GR_ID from somewhere other than os.environ (a
-config file, a passed-in arg) — those bypass the autouse delenv. To
-make any leak that *does* hit subprocess.run deterministic regardless of
-whether ~/.claude/skills/_bg/set-stage.sh exists on the test machine,
-the orchestrator tests monkeypatch gremlins.state.SET_STAGE_SH to a
-real executable in tmp_path.
+early-returns before touching state.json, so these tests verify that guard
+plus the autouse fixture's delenv. The orchestrator tests also verify
+on-disk contents directly — no fake executables or subprocess interception
+needed since set_stage is pure Python.
 """
 
 import json
@@ -37,6 +33,7 @@ import subprocess
 import sys
 import textwrap
 
+import gremlins.state as state_mod
 from conftest import (
     MINIMAL_EVENTS,
     REVIEW_LABELS as _REVIEW_LABELS,
@@ -99,28 +96,9 @@ def test_autouse_isolate_gr_id_unsets_gr_id_under_inherited_env(tmp_path):
     )
 
 
-def _recording_run(recorded_calls):
-    """Build a subprocess.run replacement that records each call's argv and
-    returns a successful CompletedProcess. Module-scope helper so we don't
-    rebuild the closure target type on every recorded call."""
-
-    def recording_run(*args, **kwargs):
-        recorded_calls.append(args[0] if args else kwargs.get("args"))
-        return subprocess.CompletedProcess(
-            args=args[0] if args else (),
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
-
-    return recording_run
-
-
 def _stage_parent_state(tmp_path, monkeypatch):
-    """Pre-create a parent gremlin's state.json under XDG_STATE_HOME and
-    install a fake set-stage.sh so any leak deterministically hits the
-    recorded subprocess.run. Returns (parent_state_file, original_content,
-    parent_mtime, recorded_calls).
+    """Pre-create a parent gremlin's state.json under XDG_STATE_HOME.
+    Returns (parent_state_file, original_content, parent_mtime).
     """
     xdg = tmp_path / "xdg"
     parent_id = "parent-gremlin-deadbeef"
@@ -131,46 +109,18 @@ def _stage_parent_state(tmp_path, monkeypatch):
     parent_state_file.write_text(original_content)
     parent_mtime = parent_state_file.stat().st_mtime_ns
     monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
-
-    # Install a fake set-stage.sh executable so gremlins.state.set_stage's
-    # exists()/access(X_OK) preflight succeeds. Without this, a future
-    # regression that re-leaked GR_ID could still silently pass on a CI
-    # machine that has no ~/.claude/skills/_bg/set-stage.sh, because the
-    # preflight would early-return before our recorded subprocess.run hook.
-    fake_helper = tmp_path / "set-stage.sh"
-    fake_helper.write_text("#!/bin/sh\nexit 0\n")
-    fake_helper.chmod(0o755)
-    monkeypatch.setattr("gremlins.state.SET_STAGE_SH", fake_helper)
-
-    recorded_calls = []
-    monkeypatch.setattr("gremlins.state.subprocess.run", _recording_run(recorded_calls))
-
-    # GR_ID intentionally NOT set here — the autouse _isolate_gr_id fixture
-    # in conftest.py has removed it. With Layer 1 in place, set_stage
-    # no-ops because GR_ID is empty, so subprocess.run is never invoked
-    # against set-stage.sh. If autouse delenv is removed AND GR_ID is
-    # inherited from the parent env, the recorded_calls assertion fires.
-    return parent_state_file, original_content, parent_mtime, recorded_calls
+    # GR_ID intentionally NOT set — the autouse _isolate_gr_id fixture in
+    # conftest.py has removed it. set_stage no-ops because GR_ID is empty.
+    return parent_state_file, original_content, parent_mtime
 
 
-def _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls):
-    # File byte-equality covers any direct write path that resolves through
-    # XDG_STATE_HOME (the asserts on stage / sub_stage that used to live
-    # here were redundant — they're implied by content equality).
+def _assert_no_state_clobber(parent_state_file, original_content, parent_mtime):
     assert parent_state_file.stat().st_mtime_ns == parent_mtime
     assert parent_state_file.read_text() == original_content
 
-    leaked = [
-        c for c in recorded_calls
-        if c and len(c) >= 1 and "set-stage.sh" in str(c[0])
-    ]
-    assert not leaked, (
-        f"orchestrator leaked set-stage.sh calls under unset GR_ID: {leaked}"
-    )
-
 
 def test_local_main_does_not_clobber_external_state(tmp_path, monkeypatch):
-    parent_state_file, original_content, parent_mtime, recorded_calls = (
+    parent_state_file, original_content, parent_mtime = (
         _stage_parent_state(tmp_path, monkeypatch)
     )
 
@@ -200,11 +150,11 @@ def test_local_main_does_not_clobber_external_state(tmp_path, monkeypatch):
         }
     )
     assert local_main(["--plan", str(plan_file)], client=client) == 0
-    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls)
+    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime)
 
 
 def test_review_main_does_not_clobber_external_state(tmp_path, monkeypatch):
-    parent_state_file, original_content, parent_mtime, recorded_calls = (
+    parent_state_file, original_content, parent_mtime = (
         _stage_parent_state(tmp_path, monkeypatch)
     )
 
@@ -217,11 +167,11 @@ def test_review_main_does_not_clobber_external_state(tmp_path, monkeypatch):
         fixtures={lbl: MINIMAL_EVENTS for lbl in _REVIEW_LABELS}
     )
     assert review_main(["--dir", str(review_dir)], client=client) == 0
-    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls)
+    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime)
 
 
 def test_address_main_does_not_clobber_external_state(tmp_path, monkeypatch):
-    parent_state_file, original_content, parent_mtime, recorded_calls = (
+    parent_state_file, original_content, parent_mtime = (
         _stage_parent_state(tmp_path, monkeypatch)
     )
 
@@ -236,4 +186,143 @@ def test_address_main_does_not_clobber_external_state(tmp_path, monkeypatch):
     monkeypatch.setattr("gremlins.orchestrators.local.in_git_repo", lambda: False)
     client = FakeClaudeClient(fixtures={"address-code": MINIMAL_EVENTS})
     assert address_main(["--dir", str(address_dir)], client=client) == 0
-    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime, recorded_calls)
+    _assert_no_state_clobber(parent_state_file, original_content, parent_mtime)
+
+
+# ---------------------------------------------------------------------------
+# set_stage direct tests
+# ---------------------------------------------------------------------------
+
+def _make_state_dir(tmp_path, gr_id):
+    """Create state dir with a minimal state.json and return the file path."""
+    xdg = tmp_path / "xdg"
+    state_dir = xdg / "claude-gremlins" / gr_id
+    state_dir.mkdir(parents=True)
+    sf = state_dir / "state.json"
+    sf.write_text(json.dumps({"id": gr_id, "stage": "implement"}))
+    return xdg, sf
+
+
+def test_set_stage_noop_when_gr_id_unset(tmp_path, monkeypatch):
+    """set_stage is a no-op when GR_ID is absent (autouse already clears it)."""
+    xdg, sf = _make_state_dir(tmp_path, "gr-noop-test")
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    # GR_ID is already unset via autouse fixture
+    mtime_before = sf.stat().st_mtime_ns
+    state_mod.set_stage("running")
+    assert sf.stat().st_mtime_ns == mtime_before
+
+
+def test_set_stage_writes_stage_and_timestamp(tmp_path, monkeypatch):
+    """set_stage writes stage and stage_updated_at to state.json."""
+    gr_id = "gr-stage-write-test"
+    xdg, sf = _make_state_dir(tmp_path, gr_id)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    monkeypatch.setenv("GR_ID", gr_id)
+
+    state_mod.set_stage("review-code")
+
+    data = json.loads(sf.read_text())
+    assert data["stage"] == "review-code"
+    assert "stage_updated_at" in data
+    # ISO-8601 UTC second-precision format
+    ts = data["stage_updated_at"]
+    assert ts.endswith("Z")
+    assert len(ts) == 20  # e.g. "2026-04-29T12:00:00Z"
+
+
+def test_set_stage_with_sub_stage(tmp_path, monkeypatch):
+    """set_stage with sub_stage writes the sub_stage key."""
+    gr_id = "gr-substage-test"
+    xdg, sf = _make_state_dir(tmp_path, gr_id)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    monkeypatch.setenv("GR_ID", gr_id)
+
+    state_mod.set_stage("implement", sub_stage={"attempt": 2})
+
+    data = json.loads(sf.read_text())
+    assert data["stage"] == "implement"
+    assert data["sub_stage"] == {"attempt": 2}
+
+
+def test_set_stage_removes_sub_stage_when_none(tmp_path, monkeypatch):
+    """Calling set_stage without sub_stage removes a previously written sub_stage key."""
+    gr_id = "gr-substage-del-test"
+    xdg, sf = _make_state_dir(tmp_path, gr_id)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    monkeypatch.setenv("GR_ID", gr_id)
+
+    state_mod.set_stage("implement", sub_stage={"k": 1})
+    assert "sub_stage" in json.loads(sf.read_text())
+
+    state_mod.set_stage("review-code")
+    data = json.loads(sf.read_text())
+    assert data["stage"] == "review-code"
+    assert "sub_stage" not in data
+
+
+def test_set_stage_noop_when_state_json_missing(tmp_path, monkeypatch):
+    """set_stage is a no-op when state.json doesn't exist (no crash)."""
+    gr_id = "gr-missing-state-test"
+    xdg = tmp_path / "xdg"
+    state_dir = xdg / "claude-gremlins" / gr_id
+    state_dir.mkdir(parents=True)
+    # No state.json written
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    monkeypatch.setenv("GR_ID", gr_id)
+    state_mod.set_stage("running")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# emit_bail direct tests
+# ---------------------------------------------------------------------------
+
+def test_emit_bail_writes_bail_class(tmp_path, monkeypatch):
+    """emit_bail writes bail_class to state.json."""
+    gr_id = "gr-bail-write-test"
+    xdg, sf = _make_state_dir(tmp_path, gr_id)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    monkeypatch.setenv("GR_ID", gr_id)
+
+    state_mod.emit_bail("other", "something went wrong")
+
+    data = json.loads(sf.read_text())
+    assert data["bail_class"] == "other"
+    assert data["bail_detail"] == "something went wrong"
+
+
+def test_emit_bail_removes_bail_detail_when_empty(tmp_path, monkeypatch):
+    """Calling emit_bail without detail removes a previously written bail_detail key."""
+    gr_id = "gr-bail-del-test"
+    xdg, sf = _make_state_dir(tmp_path, gr_id)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    monkeypatch.setenv("GR_ID", gr_id)
+
+    state_mod.emit_bail("other", "detail")
+    assert "bail_detail" in json.loads(sf.read_text())
+
+    state_mod.emit_bail("other")
+    data = json.loads(sf.read_text())
+    assert data["bail_class"] == "other"
+    assert "bail_detail" not in data
+
+
+def test_emit_bail_noop_when_gr_id_unset(tmp_path, monkeypatch):
+    """emit_bail is a no-op when GR_ID is absent."""
+    gr_id = "gr-bail-noop-test"
+    xdg, sf = _make_state_dir(tmp_path, gr_id)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    mtime_before = sf.stat().st_mtime_ns
+    state_mod.emit_bail("other")
+    assert sf.stat().st_mtime_ns == mtime_before
+
+
+def test_emit_bail_noop_when_bail_class_empty(tmp_path, monkeypatch):
+    """emit_bail is a no-op when bail_class is empty."""
+    gr_id = "gr-bail-empty-test"
+    xdg, sf = _make_state_dir(tmp_path, gr_id)
+    monkeypatch.setenv("XDG_STATE_HOME", str(xdg))
+    monkeypatch.setenv("GR_ID", gr_id)
+    mtime_before = sf.stat().st_mtime_ns
+    state_mod.emit_bail("")
+    assert sf.stat().st_mtime_ns == mtime_before

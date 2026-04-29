@@ -49,7 +49,6 @@ def _common_boss_patches(monkeypatch, tmp_path, gr_id):
     monkeypatch.setenv("GR_ID", gr_id)
     monkeypatch.setattr(boss_mod, "STATE_ROOT", str(tmp_path))
     monkeypatch.setattr(boss_mod, "_stop_requested", False)
-    monkeypatch.setattr(boss_mod, "set_stage", lambda *a: None)
     monkeypatch.setattr(boss_mod, "get_head_ref", lambda p: "abc123def456abc1")
     monkeypatch.setattr(boss_mod, "get_current_branch", lambda p: "main")
 

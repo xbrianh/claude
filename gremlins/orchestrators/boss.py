@@ -27,7 +27,7 @@ import time
 from typing import List, Tuple
 
 from ..gh_utils import get_repo, parse_issue_ref, view_issue
-from ..state import patch_state
+from ..state import patch_state, set_stage
 
 STATE_ROOT = os.path.join(
     os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")),
@@ -106,12 +106,6 @@ def save_json(path: str, data: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, path)
-
-
-def set_stage(gr_id: str, stage: str) -> None:
-    script = os.path.expanduser("~/.claude/skills/_bg/set-stage.sh")
-    if os.access(script, os.X_OK):
-        subprocess.run([script, gr_id, stage], capture_output=True)
 
 
 def run_proc(cmd: list, **kwargs) -> int:
@@ -250,7 +244,7 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
     right cwd/rev so handoff sees the actually-landed work, not a stale ref
     in the user's repo that may never advance during the chain.
     """
-    set_stage(gr_id, "handoff")
+    set_stage("handoff")
 
     n = boss_state["handoff_count"] + 1
     out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
@@ -711,7 +705,7 @@ def boss_main(argv: List[str]) -> int:
                         log(f"  - {item}")
                 else:
                     log("operator follow-ups: (none)")
-                set_stage(gr_id, "done")
+                set_stage("done")
                 save_boss_state(state_dir, boss_state)
                 return 0
 
@@ -791,7 +785,7 @@ def boss_main(argv: List[str]) -> int:
             child_wdir = os.path.join(STATE_ROOT, current_child_id)
 
             if not os.path.isfile(os.path.join(child_wdir, "finished")):
-                set_stage(gr_id, "waiting")
+                set_stage("waiting")
                 success = wait_for_child(current_child_id, gr_id)
             else:
                 try:
@@ -803,7 +797,7 @@ def boss_main(argv: List[str]) -> int:
             check_stop()
 
             if success:
-                set_stage(gr_id, "landing")
+                set_stage("landing")
                 into_dir = ""
                 if chain_kind == "local":
                     if not boss_workdir or not os.path.isdir(boss_workdir):
@@ -833,7 +827,7 @@ def boss_main(argv: List[str]) -> int:
                     )
 
             # Pipeline failure → rescue
-            set_stage(gr_id, "rescuing")
+            set_stage("rescuing")
             if not rescue_child(current_child_id):
                 bail_reason = get_child_bail_reason(current_child_id)
                 bail_detail = _summarize_for_log(
