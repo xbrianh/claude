@@ -211,7 +211,7 @@ def handle_plan_title(prompt: str, session_id: str) -> int:
     emit_event({"type": "system", "subtype": "init", "session_id": session_id,
                 "model": "fake", "cwd": os.getcwd()})
     emit_event({"type": "result", "subtype": "success", "num_turns": 1,
-                "total_cost_usd": 0, "result": "Test issue title from fake claude"})
+                "total_cost_usd": 0.0, "result": "Test issue title from fake claude"})
     return 0
 
 
