@@ -206,10 +206,12 @@ def handle_ghplan(prompt: str, session_id: str) -> int:
     return 0
 
 
-def handle_text_title(prompt: str) -> int:
+def handle_plan_title(prompt: str, session_id: str) -> int:
     # `--plan <file>` flow asks for a one-line GitHub issue title.
-    sys.stdout.write("Test issue title from fake claude\n")
-    sys.stdout.flush()
+    emit_event({"type": "system", "subtype": "init", "session_id": session_id,
+                "model": "fake", "cwd": os.getcwd()})
+    emit_event({"type": "result", "subtype": "success", "num_turns": 1,
+                "total_cost_usd": 0.0, "result": "Test issue title from fake claude"})
     return 0
 
 
@@ -299,13 +301,12 @@ def main(argv):
     maybe_fail_at(stage)
 
     if args.output_format == "text":
-        if stage == "plan-title":
-            return handle_text_title(prompt)
         sys.stdout.write("(fake text output)\n")
         return 0
 
     handlers = {
         "plan": handle_plan,
+        "plan-title": handle_plan_title,
         "implement-local": handle_implement,
         "implement-gh": handle_implement,
         "review": handle_review,

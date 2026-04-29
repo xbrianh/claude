@@ -121,7 +121,7 @@ def test_ghgremlin_plan_file_full_chain(tmp_path):
 
     log = read_fake_claude_log(sh.fake_claude_log)
     stages = [e["stage"] for e in log]
-    # plan-title runs because --plan <file> needs a title via claude text mode.
+    # plan-title runs because --plan <file> needs a title via claude.
     assert "plan-title" in stages
     # plan stage (the /ghplan one) must NOT run because --plan supplied.
     assert "ghplan" not in stages

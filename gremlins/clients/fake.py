@@ -117,6 +117,7 @@ class FakeClaudeClient:
 
         session_id: Optional[str] = None
         cost_usd: Optional[float] = None
+        result_text: Optional[str] = None
         for evt in events:
             if (
                 session_id is None
@@ -130,6 +131,9 @@ class FakeClaudeClient:
                 if isinstance(raw_cost, (int, float)):
                     cost_usd = float(raw_cost)
                     self.total_cost_usd += cost_usd
+                raw_result = evt.get("result")
+                if isinstance(raw_result, str):
+                    result_text = raw_result
             if on_event is not None:
                 try:
                     on_event(evt)
@@ -139,7 +143,7 @@ class FakeClaudeClient:
         return CompletedRun(
             exit_code=0,
             session_id=session_id,
-            text_result=None,
+            text_result=result_text,
             events=events if capture_events else None,
             cost_usd=cost_usd,
         )
