@@ -4,3 +4,4 @@ settings.local.json
 __pycache__/
 *.pyc
 .at_venv_config
+plans/
