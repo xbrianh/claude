@@ -182,7 +182,14 @@ If the spec author wrote operator-flavoured language inline with implementation 
 
 5. Write an **updated plan document** (the "rolling plan") to: `{out_path}`
 
-   The rolling plan describes only **remaining** work. Completed tasks are removed entirely — no `[x]` markers, no struck-through entries, no "completed" appendix. The chain of versioned plan files plus git history is the audit trail; the rolling plan does not repeat it. Do not propagate the overarching goal of the chain forward into the rolling plan — that lives upstream, in the original spec.
+   The rolling plan describes only **remaining** work. These forms are **never** allowed anywhere in the document, at any position:
+   - Prose statements about what has landed, shipped, merged, or been completed — e.g. "Phases 0–3 have landed", "X was merged in PR #N", "the following work is complete", "all tasks in this phase are done"
+   - Bullet lists enumerating completed phases or items
+   - `[x]` checkboxes or checked markers of any kind
+   - Struck-through entries (~~text~~)
+   - An H1 title (`# ...`) that names the overall chain goal or summarizes the completed chain — scope the H1 to the remaining work only; e.g. use `# Add sanitize pass` not `# Implement Full Feature X`
+
+   The chain of versioned plan files plus git history is the audit trail; the rolling plan does not repeat it. Do not propagate the overarching goal of the chain forward into the rolling plan — that lives upstream, in the original spec.
 
    - **`next-plan`**: include only the implementation tasks that are not yet implemented (still `[ ]`). Prune the surrounding sections (`## Context`, `## Approach`, `## Open questions`, etc.) to match: drop sections whose reason for existing was a now-completed task; keep or trim the rest so the document stays a coherent description of the remaining work.
      - Under `## Open questions`, carry forward unresolved entries; drop entries tied to completed tasks.
@@ -225,6 +232,75 @@ If the spec author wrote operator-flavoured language inline with implementation 
 Write all required files before finishing. Do not explain your reasoning in stdout — the files are the output."""
 
 
+def build_sanitize_prompt(rolling_plan_text: str, out_path: pathlib.Path) -> str:
+    return f"""You are a format-enforcement agent. Rewrite the rolling plan below to remove every violation of the rules listed here, then write ONLY the rewritten document to: {out_path}
+
+## Rules — these patterns are NEVER allowed anywhere in the document
+
+1. Prose statements about what has landed, shipped, merged, or been completed at any document position — e.g. "Phases 0–3 have landed", "X was merged in PR #N", "the following work is complete", "all tasks in this phase are done". Remove such sentences entirely.
+2. Bullet lists enumerating completed phases or items — any bullet that describes something already done. Remove them.
+3. `[x]` checkboxes or checked markers of any kind. Remove the entire line.
+4. Struck-through entries (~~text~~). Remove the entire line.
+5. An H1 title (`# ...`) that names the overall chain goal or summarizes the completed chain — e.g. `# Implement Feature X` or `# Claude Config Personal Setup`. Replace it with a short H1 scoped only to the remaining work.
+
+## What to keep
+
+Keep all remaining task lists (`- [ ] ...`), open questions, context relevant to what is still to be done, and operator follow-ups. You may make minimal wording changes only when needed to satisfy the rules above, such as replacing a too-broad H1 with one scoped to the remaining work or rephrasing surrounding context so it refers only to unfinished work. Do not invent new tasks, requirements, decisions, or factual claims that are not supported by the original.
+
+## Output
+
+Write ONLY the rewritten document to: {out_path}
+Do not print the document to stdout. Do not explain what you changed.
+
+## Rolling plan to rewrite
+
+~~~~
+{rolling_plan_text}
+~~~~"""
+
+
+def sanitize_rolling_plan(out_path: pathlib.Path, timeout: Optional[int]) -> None:
+    if not out_path.exists():
+        sys.stderr.write(f"warning: sanitize skipped — rolling plan not found: {out_path}\n")
+        return
+    try:
+        plan_text = out_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.stderr.write(f"warning: sanitize skipped — could not read rolling plan: {exc}\n")
+        return
+    def restore_original(reason: str) -> None:
+        try:
+            out_path.write_text(plan_text, encoding="utf-8")
+        except OSError as exc:
+            sys.stderr.write(
+                f"warning: {reason} — failed to restore original rolling plan: {exc}\n"
+            )
+            return
+        sys.stderr.write(f"warning: {reason} — restored original rolling plan\n")
+
+    sanitize_timeout = min(timeout, 60) if timeout is not None else 60
+    prompt = build_sanitize_prompt(plan_text, out_path)
+    cmd = ["claude", "-p", "--model", "haiku", *CLAUDE_FLAGS, prompt]
+    print("==> sanitizing rolling plan", flush=True)
+    try:
+        result = subprocess.run(cmd, timeout=sanitize_timeout, capture_output=True, text=True)
+    except subprocess.TimeoutExpired:
+        restore_original("sanitize pass timed out")
+        return
+    if result.stderr:
+        sys.stderr.write(f"warning: sanitize stderr:\n{result.stderr}")
+    if result.returncode != 0:
+        restore_original(f"sanitize pass exited {result.returncode}")
+        return
+    try:
+        sanitized_text = out_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        restore_original(f"sanitize pass completed but output could not be read: {exc}")
+        return
+    if not sanitized_text.strip():
+        restore_original("sanitize pass completed but output was empty")
+
+
 def parse_args(argv: List[str]) -> argparse.Namespace:
     usage = "usage: handoff.py --plan <path> [--spec <path>] [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]"
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
@@ -235,7 +311,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--base", dest="base", default=None)
     parser.add_argument("--model", dest="model", default="sonnet")
     parser.add_argument("--timeout", dest="timeout", type=int, default=None,
-                        help="timeout in seconds for the inner claude agent (default: no timeout)")
+                        help="timeout in seconds for the main handoff agent (default: no timeout); the sanitize pass is capped at min(timeout, 60)s")
     parser.add_argument("--rev", dest="rev", default=None,
                         help="inspect this ref instead of HEAD (e.g. a target branch name)")
     return parser.parse_args(argv)
@@ -367,6 +443,7 @@ def main(argv: List[str]) -> int:
         for item in followups:
             print(f"      - {item}", flush=True)
 
+    sanitize_rolling_plan(out_path, args.timeout)
     return 0
 
 

@@ -8,6 +8,8 @@ import pytest
 
 from gremlins import handoff
 
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
 
 # ---------------------------------------------------------------------------
 # auto_name_out — naming convention
@@ -211,6 +213,9 @@ def _stub_happy_main(monkeypatch, tmp_path, signal_payload, *,
     If `child_plan_text` is given, the fake claude run also writes the
     child plan file to whatever path the prompt says it should go to.
     Returns the plan path so the caller can pass it to handoff.main.
+
+    The first subprocess.run call is the main agent (writes sig_path and
+    out_path); the second call is the sanitize pass (treated as a no-op).
     """
     plan_path = tmp_path / "plan.md"
     plan_path.write_text("# Plan\nTasks\n- [ ] thing\n")
@@ -223,14 +228,22 @@ def _stub_happy_main(monkeypatch, tmp_path, signal_payload, *,
     sig_path = out_path.parent / (out_path.stem + ".state.json")
     child_path = out_path.parent / (out_path.stem + "-child" + out_path.suffix)
 
+    call_count = [0]
+
     def fake_run(cmd, **kwargs):
         if claude_timeout:
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout") or 1)
-        if claude_returncode == 0:
-            sig_path.write_text(json.dumps(signal_payload))
-            if child_plan_text is not None:
-                child_path.write_text(child_plan_text)
-        return subprocess.CompletedProcess(args=cmd, returncode=claude_returncode)
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # Main agent call
+            if claude_returncode == 0:
+                sig_path.write_text(json.dumps(signal_payload))
+                out_path.write_text("# Rolling plan (stub)\n")
+                if child_plan_text is not None:
+                    child_path.write_text(child_plan_text)
+            return subprocess.CompletedProcess(args=cmd, returncode=claude_returncode)
+        # Second call is the sanitize pass — no-op
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
 
     monkeypatch.setattr(handoff.subprocess, "run", fake_run)
     return plan_path, sig_path, child_path
@@ -268,13 +281,20 @@ def test_main_next_plan_signal(monkeypatch, tmp_path, capsys):
         "reason": None,
         "operator_followups": [],
     }
+    out_path = handoff.auto_name_out(plan_path)
+    call_count2 = [0]
+
+    def fake_run2(cmd, **kw):
+        call_count2[0] += 1
+        if call_count2[0] == 1:
+            sig_path.write_text(json.dumps(payload))
+            child_path.write_text("# Child\n")
+            out_path.write_text("# Rolling plan\n")
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
     monkeypatch.setattr(handoff, "collect_git_context",
                         lambda base_ref, rev=None: ("b", "", ""))
-    monkeypatch.setattr(handoff.subprocess, "run", lambda cmd, **kw: (
-        sig_path.write_text(json.dumps(payload)),
-        child_path.write_text("# Child\n"),
-        subprocess.CompletedProcess(args=cmd, returncode=0),
-    )[-1])
+    monkeypatch.setattr(handoff.subprocess, "run", fake_run2)
 
     rc = handoff.main(["--plan", str(plan_path)])
     assert rc == 0
@@ -414,3 +434,93 @@ def test_main_missing_spec_warns_and_continues(monkeypatch, tmp_path, capsys):
     err = capsys.readouterr().err
     assert "warning" in err.lower()
     assert "spec" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# build_sanitize_prompt — rule coverage
+# ---------------------------------------------------------------------------
+
+def test_build_sanitize_prompt_rules(tmp_path):
+    out_path = tmp_path / "rolling.md"
+    prompt = handoff.build_sanitize_prompt("# Plan\n- [ ] do thing\n", out_path)
+    # Each prohibited pattern must be explicitly named
+    assert "[x]" in prompt
+    assert "~~" in prompt or "struck-through" in prompt.lower()
+    assert "H1" in prompt or "# ..." in prompt
+    assert str(out_path) in prompt
+    # Prose-about-landing and bullet-of-completed-items
+    assert any(word in prompt.lower() for word in ("landed", "shipped", "merged", "completed"))
+    assert "bullet" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# sanitize_rolling_plan — behaviour
+# ---------------------------------------------------------------------------
+
+def test_sanitize_rolling_plan_rewrites_file(monkeypatch, tmp_path):
+    out_path = tmp_path / "rolling.md"
+    out_path.write_text("# Bad Plan\nPhases 0–3 have landed.\n- [ ] remaining task\n")
+    cleaned = "# Remaining Work\n- [ ] remaining task\n"
+
+    def fake_run(cmd, **kwargs):
+        out_path.write_text(cleaned)
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(handoff.subprocess, "run", fake_run)
+    handoff.sanitize_rolling_plan(out_path, timeout=None)
+    assert out_path.read_text() == cleaned
+
+
+def test_sanitize_rolling_plan_nonzero_is_nonfatal(monkeypatch, tmp_path, capsys):
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text("# Plan\n- [ ] task\n")
+    monkeypatch.setattr(handoff.shutil, "which", lambda n: "/fake/claude")
+    monkeypatch.setattr(handoff, "collect_git_context",
+                        lambda base_ref, rev=None: ("b", "", ""))
+
+    out_path = handoff.auto_name_out(plan_path)
+    sig_path = out_path.parent / (out_path.stem + ".state.json")
+    payload = {
+        "exit_state": "chain-done",
+        "child_plan": None,
+        "reason": None,
+        "operator_followups": [],
+    }
+
+    call_count = [0]
+
+    def fake_run(cmd, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            sig_path.write_text(json.dumps(payload))
+            out_path.write_text("# Rolling plan\n")
+            return subprocess.CompletedProcess(args=cmd, returncode=0)
+        # Sanitize pass — return non-zero
+        return subprocess.CompletedProcess(args=cmd, returncode=1)
+
+    monkeypatch.setattr(handoff.subprocess, "run", fake_run)
+    rc = handoff.main(["--plan", str(plan_path)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# sanitize regression — fixture violations
+# ---------------------------------------------------------------------------
+
+def test_sanitize_prompt_rejects_phases_preamble():
+    bad = (FIXTURES / "handoff_bad_next_plan.md").read_text()
+    prompt = handoff.build_sanitize_prompt(bad, pathlib.Path("/tmp/out.md"))
+    # Prompt must contain a rule covering "Phases 0–3 have landed"-style prose
+    assert any(word in prompt.lower() for word in ("landed", "shipped", "merged", "completed"))
+    # The bad content is present for the agent to rewrite
+    assert bad in prompt
+
+
+def test_sanitize_prompt_rejects_chain_complete_enumeration():
+    bad = (FIXTURES / "handoff_bad_chain_done.md").read_text()
+    prompt = handoff.build_sanitize_prompt(bad, pathlib.Path("/tmp/out.md"))
+    # Prompt must contain a rule covering bullet enumerations of completed items
+    assert "bullet" in prompt.lower()
+    assert bad in prompt
