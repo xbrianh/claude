@@ -94,6 +94,9 @@ def liveness_of_state_file(sf: str, state=None) -> str:
             try:
                 os.kill(int(gr_pid), 0)
             except (OSError, ValueError):
+                workdir = state.get("workdir") or ""
+                if workdir and not os.path.isdir(workdir):
+                    return "dead:host-terminated"
                 return f"dead:crashed (pid {gr_pid} gone)"
 
         # Stall heuristic: log file hasn't moved in BG_STALL_SECS.

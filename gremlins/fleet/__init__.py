@@ -42,6 +42,7 @@ from gremlins.fleet.rescue import (
     write_rescue_report,
     _read_rescue_marker,
     _run_headless_diagnosis,
+    _recreate_worktree,
     do_rescue,
 )
 from gremlins.fleet.log import do_log
@@ -105,6 +106,7 @@ __all__ = [
     "write_rescue_report",
     "_read_rescue_marker",
     "_run_headless_diagnosis",
+    "_recreate_worktree",
     "do_rescue",
     # log
     "do_log",
@@ -160,6 +162,7 @@ class _FleetModule(types.ModuleType):
         "BG_STALL_SECS": "gremlins.fleet.constants",
         "STATE_ROOT": "gremlins.fleet.constants",
         "_run_headless_diagnosis": "gremlins.fleet.rescue",
+        "_recreate_worktree": "gremlins.fleet.rescue",
         "_synthesize_commit_message_ai": "gremlins.fleet.land",
     }
 

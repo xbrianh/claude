@@ -718,3 +718,142 @@ def test_parse_duration_invalid():
         gremlins.parse_duration("5x")
     with pytest.raises(ValueError):
         gremlins.parse_duration("abc")
+
+
+# ---------------------------------------------------------------------------
+# liveness — dead:host-terminated (pid gone + workdir missing)
+# ---------------------------------------------------------------------------
+
+def test_liveness_host_terminated_when_pid_gone_and_workdir_missing(tmp_path):
+    workdir = tmp_path / "workdir"
+    # workdir is NOT created — simulates host-terminated teardown
+    sf = _write_state(
+        tmp_path / "g",
+        {"status": "running", "pid": 999999, "workdir": str(workdir)},
+    )
+    assert gremlins.liveness_of_state_file(sf) == "dead:host-terminated"
+
+
+def test_liveness_crashed_when_pid_gone_but_workdir_exists(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    sf = _write_state(
+        tmp_path / "g",
+        {"status": "running", "pid": 999999, "workdir": str(workdir)},
+    )
+    live = gremlins.liveness_of_state_file(sf)
+    assert live.startswith("dead:crashed")
+
+
+def test_liveness_crashed_when_pid_gone_and_no_workdir_in_state(tmp_path):
+    sf = _write_state(
+        tmp_path / "g",
+        {"status": "running", "pid": 999999},
+    )
+    live = gremlins.liveness_of_state_file(sf)
+    assert live.startswith("dead:crashed")
+
+
+# ---------------------------------------------------------------------------
+# rescue — dead:host-terminated handling
+# ---------------------------------------------------------------------------
+
+def test_rescue_host_terminated_project_root_gone_bails_headless(tmp_path, monkeypatch, capsys):
+    """When project_root is also missing, headless rescue should bail with host_terminated_unrecoverable."""
+    state_root = tmp_path / "state-root"
+    state_root.mkdir()
+    gr_id = "test-id-htbb12"
+    gr_dir = state_root / gr_id
+    workdir = tmp_path / "workdir"
+    # workdir is NOT created — simulates host teardown
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "stage": "implement",
+        "status": "running",
+        "pid": 999999,  # dead pid
+        "workdir": str(workdir),
+        "project_root": str(tmp_path / "gone-project"),  # also gone
+        "rescue_count": 0,
+    }
+    _write_state(gr_dir, state)
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+
+    ok = gremlins.do_rescue(gr_id, headless=True)
+    assert ok is False
+    new = json.loads((gr_dir / "state.json").read_text())
+    assert new["bail_reason"] == "host_terminated_unrecoverable"
+    assert (gr_dir / "finished").exists()
+    out = capsys.readouterr().out
+    assert "host" in out.lower() or "terminated" in out.lower() or "gone" in out.lower()
+
+
+def test_rescue_host_terminated_worktree_recreation_failure_bails_headless(tmp_path, monkeypatch, capsys):
+    """When worktree recreation fails, headless rescue should bail with host_terminated_unrecoverable."""
+    state_root = tmp_path / "state-root"
+    state_root.mkdir()
+    gr_id = "test-id-htcc12"
+    gr_dir = state_root / gr_id
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    workdir = tmp_path / "workdir"
+    # workdir NOT created
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "stage": "implement",
+        "status": "running",
+        "pid": 999999,
+        "workdir": str(workdir),
+        "project_root": str(project_root),
+        "rescue_count": 0,
+    }
+    _write_state(gr_dir, state)
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+    monkeypatch.setattr(gremlins, "_recreate_worktree", lambda s: (False, "git not a repo"))
+
+    ok = gremlins.do_rescue(gr_id, headless=True)
+    assert ok is False
+    new = json.loads((gr_dir / "state.json").read_text())
+    assert new["bail_reason"] == "host_terminated_unrecoverable"
+    assert (gr_dir / "finished").exists()
+
+
+def test_rescue_host_terminated_recreates_worktree_and_proceeds(tmp_path, monkeypatch, capsys):
+    """When worktree recreation succeeds, rescue continues to the diagnosis step."""
+    state_root = tmp_path / "state-root"
+    state_root.mkdir()
+    gr_id = "test-id-htdd12"
+    gr_dir = state_root / gr_id
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    workdir = tmp_path / "workdir"
+    # workdir NOT created initially
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "stage": "implement",
+        "status": "running",
+        "pid": 999999,
+        "workdir": str(workdir),
+        "project_root": str(project_root),
+        "rescue_count": 0,
+    }
+    _write_state(gr_dir, state)
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+
+    def fake_recreate(s):
+        workdir.mkdir(exist_ok=True)
+        return True, "recreated from branch 'bg/localgremlin/test-id-htdd12'"
+
+    monkeypatch.setattr(gremlins, "_recreate_worktree", fake_recreate)
+    monkeypatch.setattr(gremlins, "_run_headless_diagnosis",
+                        lambda *a, **kw: ("structural", "fake structural"))
+
+    ok = gremlins.do_rescue(gr_id, headless=True)
+    assert ok is False  # structural bail, not host-terminated
+    new = json.loads((gr_dir / "state.json").read_text())
+    # Should have bailed with "structural", not "host_terminated_unrecoverable"
+    assert new["bail_reason"] == "structural"
+    out = capsys.readouterr().out
+    assert "recreated" in out

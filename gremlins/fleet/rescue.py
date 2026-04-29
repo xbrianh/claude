@@ -430,6 +430,56 @@ def _run_headless_diagnosis(workdir: str, prompt: str, marker_path: str):
     return _read_rescue_marker(marker_path)
 
 
+def _recreate_worktree(state: dict) -> tuple:
+    """Attempt to recreate a missing worktree from the gremlin's branch or base ref.
+
+    Tries the named branch first (preserves in-progress commits for localgremlin),
+    then falls back to a detached checkout of worktree_base or HEAD.
+    Returns (success: bool, detail: str).
+    """
+    workdir = state.get("workdir") or ""
+    branch = state.get("branch") or ""
+    worktree_base = state.get("worktree_base") or ""
+    project_root = state.get("project_root") or ""
+
+    if not workdir or not project_root:
+        return False, "workdir or project_root not recorded in state"
+    if not os.path.isdir(project_root):
+        return False, f"project_root {project_root!r} does not exist"
+
+    # Prune stale worktree entries so that git worktree add doesn't fail
+    # with "is already registered" when the directory was deleted by the host.
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        capture_output=True, cwd=project_root,
+    )
+
+    if branch:
+        r = subprocess.run(
+            ["git", "worktree", "add", workdir, branch],
+            capture_output=True, text=True, cwd=project_root,
+        )
+        if r.returncode == 0:
+            return True, f"recreated from branch {branch!r}"
+        branch_err = r.stderr.strip()
+    else:
+        branch_err = ""
+
+    ref = worktree_base or "HEAD"
+    r = subprocess.run(
+        ["git", "worktree", "add", "--detach", workdir, ref],
+        capture_output=True, text=True, cwd=project_root,
+    )
+    if r.returncode == 0:
+        suffix = f" (branch {branch!r} was gone)" if branch_err else ""
+        return True, f"recreated detached at {ref!r}{suffix}"
+    fallback_err = r.stderr.strip()
+
+    if branch_err:
+        return False, f"branch {branch!r}: {branch_err}; fallback {ref!r}: {fallback_err}"
+    return False, f"worktree add --detach {ref!r}: {fallback_err}"
+
+
 def do_rescue(target: str, headless: bool = False) -> bool:
     match = resolve_gremlin(target)
     if match is None:
@@ -464,6 +514,30 @@ def do_rescue(target: str, headless: bool = False) -> bool:
     if not workdir:
         print(f"error: no workdir recorded in state for {gr_id} — cannot rescue")
         return False
+
+    if live == "dead:host-terminated":
+        project_root_check = state.get("project_root") or ""
+        print(f"gremlin {gr_id}: worktree is gone (host likely terminated externally)")
+        if not project_root_check or not os.path.isdir(project_root_check):
+            detail = (
+                f"project_root {project_root_check!r} is also gone — "
+                "worktree cannot be recreated; use 'gremlins rm' to clean up"
+            )
+            print(f"  {detail}")
+            if headless:
+                _write_bail(sf, wdir, "host_terminated_unrecoverable", detail)
+            return False
+        print(f"  attempting to recreate worktree at {workdir}...")
+        recreated, detail = _recreate_worktree(state)
+        if not recreated:
+            msg = f"worktree recreation failed: {detail}"
+            print(f"  {msg}")
+            print(f"  use 'gremlins rm {gr_id}' to clean up")
+            if headless:
+                _write_bail(sf, wdir, "host_terminated_unrecoverable", msg)
+            return False
+        print(f"  worktree recreated: {detail}; resuming rescue...")
+        live = liveness_of_state_file(sf, state)
 
     rescue_count_raw = state.get("rescue_count") or 0
     try:
