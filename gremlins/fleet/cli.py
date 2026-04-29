@@ -143,6 +143,9 @@ def _dispatch_subcommand(argv: List[str]):
             into_idx = raw.index("--into")
             if into_idx + 1 < len(raw):
                 into_dir = raw[into_idx + 1]
+            else:
+                print("error: --into requires a directory argument")
+                sys.exit(1)
         ok = do_land(target, force=force, mode=mode, into_dir=into_dir)
     else:
         headless = "--headless" in raw

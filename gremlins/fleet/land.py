@@ -545,7 +545,7 @@ def _ff_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
 
 
 def _land_local(gr_id: str, sf: str, wdir: str, state: dict, mode: str, into_dir: str = "") -> bool:
-    """Land a local gremlin branch onto the current branch (mode: 'squash' or 'ff')."""
+    """Land a local gremlin branch (mode: 'squash' or 'ff'). If into_dir is given, land there instead of project_root."""
     setup_kind = state.get("setup_kind", "")
     if setup_kind != "worktree-branch":
         print(f"gremlin {gr_id} has setup_kind={setup_kind!r} — only worktree-branch gremlins support local landing")
