@@ -15,7 +15,7 @@ history.
 - `state.py` — session-dir resolution, `set_stage` / `emit_bail` / `patch_state` / `check_bail`.
 - `git.py` — `in_git_repo`, `git_head`, branch / worktree helpers.
 - `gh_utils.py` — `gh` CLI wrappers and stream-json URL extractors used by the gh orchestrator.
-- `fleet.py` — fleet manager: status listing + `stop` / `rescue` / `land` / `close` / `rm` / `log` subcommands. Implements the logic behind shim entrypoint `skills/gremlins/gremlins.py`.
+- `fleet/` — fleet manager package: status listing + `stop` / `rescue` / `land` / `close` / `rm` / `log` subcommands. Implements the logic behind shim entrypoint `skills/gremlins/gremlins.py`. See [`fleet/CLAUDE.md`](fleet/CLAUDE.md) for the per-module breakdown.
 - `handoff.py` — chain-step decision agent (next-plan / chain-done / bail). Implements the logic behind shim entrypoint `skills/handoff/handoff.py`.
 - `clients/claude.py` — `ClaudeClient` Protocol + `SubprocessClaudeClient` (production).
 - `clients/fake.py` — `FakeClaudeClient` recording test double; replays canned stream-json from fixtures keyed by `label`.
@@ -57,7 +57,7 @@ distinct labels per phase.
 These values are persisted to `state.json` files and read by other
 writers (`session-summary.sh` hook, `liveness.sh` sourced from
 `session-summary.sh`, the fleet manager that inlines an equivalent
-classifier in [`fleet.py`](fleet.py), the launcher, the rescue
+classifier in [`fleet/state.py`](fleet/state.py), the launcher, the rescue
 protocol). Renaming any of them silently breaks cross-process
 consumers. Source of truth: bail-class constants live in
 [`state.py`](state.py); local / gh stage-name vocab is defined and
