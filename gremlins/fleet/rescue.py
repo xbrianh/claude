@@ -447,6 +447,13 @@ def _recreate_worktree(state: dict) -> tuple:
     if not os.path.isdir(project_root):
         return False, f"project_root {project_root!r} does not exist"
 
+    # Prune stale worktree entries so that git worktree add doesn't fail
+    # with "is already registered" when the directory was deleted by the host.
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        capture_output=True, cwd=project_root,
+    )
+
     if branch:
         r = subprocess.run(
             ["git", "worktree", "add", workdir, branch],

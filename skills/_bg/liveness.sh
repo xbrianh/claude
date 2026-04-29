@@ -37,13 +37,13 @@ liveness_of_state_file() {
 
     # US (\x1f) separator, matching session-summary.sh and pipeline/fleet.py:
     # bash treats tab as IFS-whitespace and collapses consecutive empty
-    # columns, so a future 5th field could silently lose a value. US is
+    # columns, so a future 6th field could silently lose a value. US is
     # non-whitespace.
     IFS=$'\x1f' read -r gr_status gr_pid gr_exit_code gr_bail_reason gr_workdir < <(
         jq -r '[.status, (.pid // "" | tostring),
                 (.exit_code // "" | tostring),
                 (.bail_reason // ""),
-                (.workdir // "")] | join("")' "$sf" 2>/dev/null || true
+                (.workdir // "")] | join("\^_")' "$sf" 2>/dev/null || true
     )
 
     # Terminal: finish.sh (or headless rescue's bail path) wrote the
