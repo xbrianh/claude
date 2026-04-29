@@ -225,6 +225,48 @@ if [[ -n "$ORPHAN_IDS" ]]; then
     FAILURES+=("orphaned running/stalled children: $ORPHAN_IDS")
 fi
 
+# H: no looping — no two child plans share the same opening 300 non-whitespace chars
+LOOP_PAIRS="NONE"
+if [[ "$CHILD_COUNT" -ge 2 && -f "$STATE_DIR/boss_state.json" ]]; then
+    LOOP_TMP=$(mktemp)
+    STATE_DIR="$STATE_DIR" python3 - > "$LOOP_TMP" 2>/dev/null <<'LOOP_PY' || true
+import os
+state_dir = os.environ.get('STATE_DIR', '')
+i = 1
+plans = []
+while True:
+    path = os.path.join(state_dir, f'handoff-{i:03d}-child.md')
+    if not os.path.exists(path):
+        break
+    try:
+        with open(path) as f:
+            plans.append((i, f.read()))
+    except Exception:
+        plans.append((i, ''))
+    i += 1
+dupes = []
+for a_idx, (a_n, a_text) in enumerate(plans):
+    for b_n, b_text in plans[a_idx + 1:]:
+        a_sig = ''.join(a_text.split())[:300]
+        b_sig = ''.join(b_text.split())[:300]
+        if a_sig and b_sig and a_sig == b_sig:
+            dupes.append(f'{a_n}={b_n}')
+print(','.join(dupes) if dupes else 'NONE')
+LOOP_PY
+    LOOP_PAIRS=$(cat "$LOOP_TMP" 2>/dev/null) || true
+    rm -f "$LOOP_TMP"
+    [[ -n "$LOOP_PAIRS" ]] || LOOP_PAIRS="NONE"
+    if [[ "$LOOP_PAIRS" != "NONE" ]]; then
+        FAILURES+=("looping detected — duplicate child plans: $LOOP_PAIRS")
+    fi
+fi
+
+# I: child count hard ceiling — a runaway chain is looping
+MAX_CHILDREN=${E2E_MAX_CHILDREN:-12}
+if [[ "$CHILD_COUNT" -gt "$MAX_CHILDREN" ]]; then
+    FAILURES+=("child count $CHILD_COUNT exceeds max $MAX_CHILDREN — likely looping")
+fi
+
 # G: LLM judge — plan reduction property (skipped if fewer than 3 child plans)
 JUDGE_VERDICT="skipped"
 JUDGE_PAIRS_JSON="[]"
@@ -431,7 +473,7 @@ print(json.dumps(sys.argv[1:]))
 
 # Emit final-line JSON summary (must be last stdout line)
 export BOSS_ID STATE_DIR SANDBOX_BRANCH PASS_FAIL CHAIN_EXIT_STATE ELAPSED \
-    FAILURE_REASONS_JSON JUDGE_VERDICT JUDGE_PAIRS_JSON JUDGE_MODEL_USED
+    FAILURE_REASONS_JSON JUDGE_VERDICT JUDGE_PAIRS_JSON JUDGE_MODEL_USED LOOP_PAIRS
 python3 -c "
 import json, os
 
@@ -467,6 +509,7 @@ print(json.dumps({
     'judge_verdict': os.environ.get('JUDGE_VERDICT', 'skipped'),
     'judge_pairs': judge_pairs,
     'judge_model': os.environ.get('JUDGE_MODEL_USED', ''),
+    'loop_pairs': os.environ.get('LOOP_PAIRS', 'NONE'),
 }, separators=(',', ':')))
 " || echo "{\"outcome\":\"$PASS_FAIL\",\"boss_id\":\"$BOSS_ID\",\"sandbox_branch\":\"$SANDBOX_BRANCH\",\"error\":\"json_construction_failed\",\"elapsed_seconds\":$ELAPSED}"
 
