@@ -11,6 +11,7 @@ import gremlins.orchestrators.boss as boss_mod
 from gremlins.orchestrators.boss import (
     _resolve_plan_source,
     _summarize_for_log,
+    advance_boss_workdir,
     boss_main,
     get_child_bail_detail,
     get_child_bail_reason,
@@ -52,6 +53,7 @@ def _common_boss_patches(monkeypatch, tmp_path, gr_id):
     monkeypatch.setattr(boss_mod, "set_stage", lambda *a: None)
     monkeypatch.setattr(boss_mod, "get_head_ref", lambda p: "abc123def456abc1")
     monkeypatch.setattr(boss_mod, "get_current_branch", lambda p: "main")
+    monkeypatch.setattr(boss_mod, "advance_boss_workdir", lambda *a: None)
 
 
 # ---------------------------------------------------------------------------
@@ -973,3 +975,133 @@ def test_boss_main_plan_issue_ref_snapshots_spec(tmp_path, monkeypatch):
     # works for short specs (regression coverage for the StopIteration bug).
     state_data = json.loads((state_dir / "state.json").read_text())
     assert state_data.get("description") == "Plan from issue"
+
+
+# ---------------------------------------------------------------------------
+# advance_boss_workdir: called after local child lands
+# ---------------------------------------------------------------------------
+
+def test_advance_boss_workdir_called_after_local_land(tmp_path, monkeypatch):
+    """After a local child lands, advance_boss_workdir is called with the new project_root HEAD."""
+    gr_id = "test-boss-advance-aabb12"
+    state_dir, project_root, workdir = _make_gremlin_state(tmp_path, gr_id)
+    _common_boss_patches(monkeypatch, tmp_path, gr_id)
+
+    new_head = "newhead1234567890newhead12345678"
+    monkeypatch.setattr(boss_mod, "get_head_ref", lambda p: new_head)
+
+    spec = tmp_path / "spec.md"
+    spec.write_text("# Spec\n")
+    child_plan = tmp_path / "child-plan.md"
+    child_plan.write_text("# Child plan\n")
+
+    advance_calls = []
+
+    def fake_advance_boss_workdir(boss_workdir, head):
+        advance_calls.append((boss_workdir, head))
+
+    handoff_results = iter([
+        ("next-plan", {"exit_state": "next-plan", "child_plan": str(child_plan), "operator_followups": []}),
+        ("chain-done", {"exit_state": "chain-done", "operator_followups": []}),
+    ])
+
+    def fake_run_handoff(gr_id, state_dir, boss_state, project_root, boss_workdir, model):
+        exit_state, sig = next(handoff_results)
+        n = boss_state["handoff_count"] + 1
+        out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
+        pathlib.Path(out_path).write_text(f"# Handoff {n}\n")
+        boss_state["handoff_count"] = n
+        boss_state["current_plan"] = out_path
+        boss_state["operator_followups"] = sig.get("operator_followups", [])
+        boss_state["handoff_records"].append({
+            "timestamp": "2026-01-01T00:00:00Z",
+            "n": n,
+            "plan_in": boss_state["spec_path"],
+            "plan_out": out_path,
+            "signal_file": out_path.replace(".md", ".state.json"),
+            "exit_state": exit_state,
+            "child_plan": sig.get("child_plan"),
+            "bail_reason": None,
+            "operator_followups": sig.get("operator_followups", []),
+        })
+        return exit_state, sig
+
+    def fake_launch_child(gr_id, launch_kind, child_plan_path):
+        child_id = "child-advance-test-112233"
+        child_dir = tmp_path / child_id
+        child_dir.mkdir(exist_ok=True)
+        (child_dir / "state.json").write_text(json.dumps({"exit_code": 0}))
+        (child_dir / "finished").write_text("")
+        return child_id
+
+    monkeypatch.setattr(boss_mod, "run_handoff", fake_run_handoff)
+    monkeypatch.setattr(boss_mod, "launch_child", fake_launch_child)
+    monkeypatch.setattr(boss_mod, "land_child", lambda cid: True)
+    monkeypatch.setattr(boss_mod, "advance_boss_workdir", fake_advance_boss_workdir)
+
+    result = boss_main(["--plan", str(spec), "--chain-kind", "local"])
+    assert result == 0
+
+    assert len(advance_calls) == 1
+    called_workdir, called_head = advance_calls[0]
+    assert called_workdir == str(workdir)
+    assert called_head == new_head
+
+
+def test_advance_boss_workdir_not_called_for_gh_chain(tmp_path, monkeypatch):
+    """advance_boss_workdir is NOT called for gh chains (they use origin/<branch> instead)."""
+    gr_id = "test-boss-advance-gh-cc3344"
+    state_dir, project_root, workdir = _make_gremlin_state(tmp_path, gr_id)
+    _common_boss_patches(monkeypatch, tmp_path, gr_id)
+    monkeypatch.setattr(boss_mod, "get_default_branch", lambda p: "main")
+    monkeypatch.setattr(boss_mod, "get_remote_branch_sha", lambda p, b: "deadbeef12345678")
+
+    spec = tmp_path / "spec.md"
+    spec.write_text("# Spec\n")
+    child_plan = tmp_path / "child-plan.md"
+    child_plan.write_text("# Child plan\n")
+
+    advance_calls = []
+
+    handoff_results = iter([
+        ("next-plan", {"exit_state": "next-plan", "child_plan": str(child_plan), "operator_followups": []}),
+        ("chain-done", {"exit_state": "chain-done", "operator_followups": []}),
+    ])
+
+    def fake_run_handoff(gr_id, state_dir, boss_state, project_root, boss_workdir, model):
+        exit_state, sig = next(handoff_results)
+        n = boss_state["handoff_count"] + 1
+        out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
+        pathlib.Path(out_path).write_text(f"# Handoff {n}\n")
+        boss_state["handoff_count"] = n
+        boss_state["current_plan"] = out_path
+        boss_state["operator_followups"] = sig.get("operator_followups", [])
+        boss_state["handoff_records"].append({
+            "timestamp": "2026-01-01T00:00:00Z",
+            "n": n,
+            "plan_in": boss_state["spec_path"],
+            "plan_out": out_path,
+            "signal_file": "",
+            "exit_state": exit_state,
+            "child_plan": sig.get("child_plan"),
+            "bail_reason": None,
+            "operator_followups": sig.get("operator_followups", []),
+        })
+        return exit_state, sig
+
+    def fake_launch_child(gr_id, launch_kind, child_plan_path):
+        child_id = "child-gh-advance-dd5566"
+        child_dir = tmp_path / child_id
+        child_dir.mkdir(exist_ok=True)
+        (child_dir / "state.json").write_text(json.dumps({"exit_code": 0}))
+        (child_dir / "finished").write_text("")
+        return child_id
+
+    monkeypatch.setattr(boss_mod, "run_handoff", fake_run_handoff)
+    monkeypatch.setattr(boss_mod, "launch_child", fake_launch_child)
+    monkeypatch.setattr(boss_mod, "land_child", lambda cid: True)
+    monkeypatch.setattr(boss_mod, "advance_boss_workdir", lambda *a: advance_calls.append(a))
+
+    result = boss_main(["--plan", str(spec), "--chain-kind", "gh"])
+    assert result == 0
+    assert advance_calls == []

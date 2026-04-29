@@ -475,6 +475,22 @@ def land_child(child_id: str) -> bool:
     ) == 0
 
 
+def advance_boss_workdir(boss_workdir: str, new_head: str) -> None:
+    """Reset the boss worktree's HEAD to match project_root after a local land.
+
+    Local child gremlins squash-land into project_root, leaving the boss's
+    own worktree frozen at the chain-start SHA. Resetting here ensures each
+    subsequent handoff sees the full accumulated diff instead of an empty one.
+    """
+    r = subprocess.run(
+        ["git", "reset", "--hard", new_head],
+        capture_output=True, text=True, cwd=boss_workdir,
+    )
+    if r.returncode != 0:
+        die(f"git reset --hard {new_head[:12]} failed in boss workdir {boss_workdir}: {r.stderr.strip()}")
+    log(f"advanced boss workdir HEAD to {new_head[:12]}")
+
+
 def rescue_child(child_id: str) -> bool:
     log(f"rescuing child {child_id} (headless)")
     return run_proc(
@@ -805,6 +821,10 @@ def boss_main(argv: List[str]) -> int:
             if success:
                 set_stage(gr_id, "landing")
                 if land_child(current_child_id):
+                    if chain_kind == "local":
+                        if not boss_workdir or not os.path.isdir(boss_workdir):
+                            die(f"boss workdir not usable after local land: {boss_workdir!r}")
+                        advance_boss_workdir(boss_workdir, get_head_ref(project_root))
                     outcome = "rescued-then-landed" if was_rescued else "landed"
                     log(f"child {current_child_id} {outcome}")
                     boss_state["children"].append({"id": current_child_id, "outcome": outcome})
