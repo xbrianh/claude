@@ -8,7 +8,7 @@ allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
 You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `~/.claude/skills/_bg/launch.sh`, which:
 
 1. Creates an isolated git worktree of the current project (detached HEAD).
-2. Spawns the real gremlin (`~/.claude/skills/ghgremlin/ghgremlin.sh`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+2. Invokes `python -m gremlins.cli gh` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-gremlin state under `~/.local/state/claude-gremlins/<gremlin-id>/` (or `$XDG_STATE_HOME/claude-gremlins/<gremlin-id>/` if `XDG_STATE_HOME` is set) — `state.json`, combined `log`, markers.
 4. Returns within ~1s.
 

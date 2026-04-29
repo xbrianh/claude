@@ -137,10 +137,9 @@ if [[ -n "$RESUME_GR_ID" ]]; then
         die "gremlin $RESUME_GR_ID finished successfully — nothing to resume"
     fi
 
-    # Per-kind dispatch resolution. Migrated kinds run via `gremlins.cli`;
-    # not-yet-migrated kinds still resolve a per-kind script. Phases 3 and 4
-    # flip ghgremlin and bossgremlin to the gremlins path; the loop fallback
-    # disappears entirely once all three kinds are migrated.
+    # Per-kind dispatch resolution. All current kinds run via `gremlins.cli`;
+    # the wildcard fallback resolves a per-kind script for any future kinds
+    # not yet migrated.
     PIPELINE=""
     KIND_SUBCOMMAND=""
     USE_PIPELINE=0

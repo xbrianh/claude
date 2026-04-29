@@ -52,7 +52,7 @@ The skills cluster into a GitHub-issue-driven gremlin and a local gremlin (`/loc
 
 - [`/design`](skills/design/SKILL.md) — runs a WHAT-focused spec conversation; writes the spec to `/tmp/design-<slug>.md` and stops. The user can then pass that path to `/ghgremlin` or `/localgremlin` themselves.
 - [`/ghplan`](skills/ghplan/SKILL.md) — draft a plan and post it as a new GitHub issue.
-- [`/ghgremlin`](skills/ghgremlin/SKILL.md) — run the full gremlin run end-to-end via [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh).
+- [`/ghgremlin`](skills/ghgremlin/SKILL.md) — GitHub-issue-driven counterpart to `/localgremlin`: runs plan → implement → PR creation → Copilot + Claude review → address via the [`gremlins`](gremlins/) package (`python -m gremlins.cli gh`). Orchestrator lives in [`gremlins/orchestrators/gh.py`](gremlins/orchestrators/gh.py); [`skills/ghgremlin/ghgremlin.sh`](skills/ghgremlin/ghgremlin.sh) is a thin shim kept for manual invocation.
 - [`/ghreview`](skills/ghreview/SKILL.md) — review a PR and post inline comments.
 - [`/ghaddress`](skills/ghaddress/SKILL.md) — address review comments on a PR and reply to each thread.
 - [`/localgremlin`](skills/localgremlin/SKILL.md) — local (no-GitHub) counterpart to `/ghgremlin`: runs plan → implement → detail review → address-code locally via the [`gremlins`](gremlins/) package (`python -m gremlins.cli local`), with all artifacts written to `~/.local/state/claude-gremlins/<id>/artifacts/` (off the product branch). Orchestrator and stages live under [`gremlins/orchestrators/local.py`](gremlins/orchestrators/local.py) and [`gremlins/stages/`](gremlins/stages/); `/localreview` and `/localaddress` dispatch to the same code via `gremlins.cli review` and `gremlins.cli address`.
