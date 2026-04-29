@@ -32,17 +32,18 @@ liveness_of_state_file() {
     [[ -f "$sf" ]] || return 0
     # Note: avoid `status` as a local name — it's a special/readonly in zsh,
     # and this file is intended to be sourced from either bash or zsh hooks.
-    local wdir gr_status gr_pid gr_exit_code gr_bail_reason
+    local wdir gr_status gr_pid gr_exit_code gr_bail_reason gr_workdir
     wdir=$(dirname "$sf")
 
     # US (\x1f) separator, matching session-summary.sh and pipeline/fleet.py:
     # bash treats tab as IFS-whitespace and collapses consecutive empty
     # columns, so a future 5th field could silently lose a value. US is
     # non-whitespace.
-    IFS=$'\x1f' read -r gr_status gr_pid gr_exit_code gr_bail_reason < <(
+    IFS=$'\x1f' read -r gr_status gr_pid gr_exit_code gr_bail_reason gr_workdir < <(
         jq -r '[.status, (.pid // "" | tostring),
                 (.exit_code // "" | tostring),
-                (.bail_reason // "")] | join("\u001f")' "$sf" 2>/dev/null || true
+                (.bail_reason // ""),
+                (.workdir // "")] | join("")' "$sf" 2>/dev/null || true
     )
 
     # Terminal: finish.sh (or headless rescue's bail path) wrote the
@@ -63,7 +64,11 @@ liveness_of_state_file() {
     if [[ "$gr_status" == "running" ]]; then
         # PID gone but no finish marker → crashed silently.
         if [[ -n "$gr_pid" && "$gr_pid" != "null" ]] && ! kill -0 "$gr_pid" 2>/dev/null; then
-            echo "dead:crashed (pid $gr_pid gone)"
+            if [[ -n "$gr_workdir" && ! -d "$gr_workdir" ]]; then
+                echo "dead:host-terminated"
+            else
+                echo "dead:crashed (pid $gr_pid gone)"
+            fi
             return 0
         fi
 
