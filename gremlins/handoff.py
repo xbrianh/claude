@@ -245,7 +245,7 @@ def build_sanitize_prompt(rolling_plan_text: str, out_path: pathlib.Path) -> str
 
 ## What to keep
 
-Keep all remaining task lists (`- [ ] ...`), open questions, context relevant to what is still to be done, and operator follow-ups. Do not add any content that was not in the original.
+Keep all remaining task lists (`- [ ] ...`), open questions, context relevant to what is still to be done, and operator follow-ups. You may make minimal wording changes only when needed to satisfy the rules above, such as replacing a too-broad H1 with one scoped to the remaining work or rephrasing surrounding context so it refers only to unfinished work. Do not invent new tasks, requirements, decisions, or factual claims that are not supported by the original.
 
 ## Output
 
@@ -268,16 +268,37 @@ def sanitize_rolling_plan(out_path: pathlib.Path, timeout: Optional[int]) -> Non
     except OSError as exc:
         sys.stderr.write(f"warning: sanitize skipped — could not read rolling plan: {exc}\n")
         return
+    def restore_original(reason: str) -> None:
+        try:
+            out_path.write_text(plan_text, encoding="utf-8")
+        except OSError as exc:
+            sys.stderr.write(
+                f"warning: {reason} — failed to restore original rolling plan: {exc}\n"
+            )
+            return
+        sys.stderr.write(f"warning: {reason} — restored original rolling plan\n")
+
+    sanitize_timeout = min(timeout, 60) if timeout is not None else 60
     prompt = build_sanitize_prompt(plan_text, out_path)
     cmd = ["claude", "-p", "--model", "haiku", *CLAUDE_FLAGS, prompt]
     print("==> sanitizing rolling plan", flush=True)
     try:
-        result = subprocess.run(cmd, timeout=timeout)
+        result = subprocess.run(cmd, timeout=sanitize_timeout, capture_output=True, text=True)
     except subprocess.TimeoutExpired:
-        sys.stderr.write("warning: sanitize pass timed out — keeping original\n")
+        restore_original("sanitize pass timed out")
         return
+    if result.stderr:
+        sys.stderr.write(f"warning: sanitize stderr:\n{result.stderr}")
     if result.returncode != 0:
-        sys.stderr.write(f"warning: sanitize pass exited {result.returncode} — keeping original\n")
+        restore_original(f"sanitize pass exited {result.returncode}")
+        return
+    try:
+        sanitized_text = out_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        restore_original(f"sanitize pass completed but output could not be read: {exc}")
+        return
+    if not sanitized_text.strip():
+        restore_original("sanitize pass completed but output was empty")
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -290,7 +311,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--base", dest="base", default=None)
     parser.add_argument("--model", dest="model", default="sonnet")
     parser.add_argument("--timeout", dest="timeout", type=int, default=None,
-                        help="timeout in seconds for the inner claude agent (default: no timeout)")
+                        help="timeout in seconds for the main handoff agent (default: no timeout); the sanitize pass is capped at min(timeout, 60)s")
     parser.add_argument("--rev", dest="rev", default=None,
                         help="inspect this ref instead of HEAD (e.g. a target branch name)")
     return parser.parse_args(argv)

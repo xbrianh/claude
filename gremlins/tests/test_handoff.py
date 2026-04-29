@@ -281,13 +281,20 @@ def test_main_next_plan_signal(monkeypatch, tmp_path, capsys):
         "reason": None,
         "operator_followups": [],
     }
+    out_path = handoff.auto_name_out(plan_path)
+    call_count2 = [0]
+
+    def fake_run2(cmd, **kw):
+        call_count2[0] += 1
+        if call_count2[0] == 1:
+            sig_path.write_text(json.dumps(payload))
+            child_path.write_text("# Child\n")
+            out_path.write_text("# Rolling plan\n")
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
     monkeypatch.setattr(handoff, "collect_git_context",
                         lambda base_ref, rev=None: ("b", "", ""))
-    monkeypatch.setattr(handoff.subprocess, "run", lambda cmd, **kw: (
-        sig_path.write_text(json.dumps(payload)),
-        child_path.write_text("# Child\n"),
-        subprocess.CompletedProcess(args=cmd, returncode=0),
-    )[-1])
+    monkeypatch.setattr(handoff.subprocess, "run", fake_run2)
 
     rc = handoff.main(["--plan", str(plan_path)])
     assert rc == 0
