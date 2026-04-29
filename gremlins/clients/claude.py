@@ -37,7 +37,8 @@ class CompletedRun:
     ``exit_code`` is always populated. ``session_id`` is extracted from the
     stream-json ``system.init`` event when available (None for text-mode runs
     or runs that crashed before emitting init). ``text_result`` holds the
-    captured stdout for ``output_format='text'`` runs and is None otherwise.
+    final text output: for stream-json runs this is the ``result`` field from
+    the ``result`` event; for text-mode runs it is the raw captured stdout.
     ``events`` is populated only when ``capture_events=True``; each entry is
     one parsed stream-json event. ``cost_usd`` is extracted from the
     stream-json ``result`` event when available.
@@ -152,13 +153,16 @@ def stream_events(
     raw_path: Optional[pathlib.Path] = None,
     capture: bool = False,
     on_event: Optional[Callable[[dict], None]] = None,
-) -> Tuple[Optional[str], Optional[float], Optional[List[dict]]]:
+) -> Tuple[Optional[str], Optional[float], Optional[str], Optional[List[dict]]]:
     """Read stream-json lines from stdout, render via _emit_event.
 
-    Returns (session_id, cost_usd, events). events is None when capture=False.
+    Returns (session_id, cost_usd, result_text, events).
+    result_text is the ``result`` field from the final result event (the
+    complete text output). events is None when capture=False.
     """
     session_id: Optional[str] = None
     cost_usd: Optional[float] = None
+    result_text: Optional[str] = None
     events: Optional[List[dict]] = [] if capture else None
 
     raw = None
@@ -187,6 +191,9 @@ def stream_events(
                 raw_cost = evt.get("total_cost_usd", evt.get("cost_usd"))
                 if isinstance(raw_cost, (int, float)):
                     cost_usd = float(raw_cost)
+                raw_result = evt.get("result")
+                if isinstance(raw_result, str):
+                    result_text = raw_result
             if events is not None:
                 events.append(evt)
             try:
@@ -201,7 +208,7 @@ def stream_events(
     finally:
         if raw is not None:
             raw.close()
-    return session_id, cost_usd, events
+    return session_id, cost_usd, result_text, events
 
 
 # ---------------------------------------------------------------------------
@@ -309,11 +316,12 @@ class SubprocessClaudeClient:
         events: Optional[List[dict]] = None  # populated only in stream-json mode
         prefix = f"[{label}] " if label else ""
         cost_usd: Optional[float] = None
+        stream_result_text: Optional[str] = None
 
         try:
             assert p.stdout is not None
             if output_format == "stream-json":
-                session_id, cost_usd, events = stream_events(
+                session_id, cost_usd, stream_result_text, events = stream_events(
                     p.stdout,
                     prefix=prefix,
                     raw_path=raw_path,
@@ -340,10 +348,15 @@ class SubprocessClaudeClient:
                 f"claude -p (model={model}, label={label}) exited {rc}"
             )
 
+        if output_format == "stream-json":
+            text_result = stream_result_text
+        else:
+            text_result = "".join(text_chunks)
+
         return CompletedRun(
             exit_code=rc,
             session_id=session_id,
-            text_result="".join(text_chunks) if output_format != "stream-json" else None,
+            text_result=text_result,
             events=events,
             cost_usd=cost_usd,
         )

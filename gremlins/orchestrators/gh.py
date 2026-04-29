@@ -209,7 +209,7 @@ def _resolve_plan_source(
             flush=True,
         )
 
-        # Generate issue title via claude in text mode
+        # Generate issue title via claude
         title_prompt = (
             "Produce a concise GitHub issue title (under 80 characters) "
             "summarizing the spec below. Output ONLY the title, nothing else."
@@ -219,7 +219,6 @@ def _resolve_plan_source(
             title_prompt,
             label="plan-title",
             model=model,
-            output_format="text",
         )
         parts = (completed.text_result or "").strip().splitlines()
         issue_title = parts[0][:80] if parts else ""
