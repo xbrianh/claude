@@ -81,7 +81,7 @@ confirm() {
     [[ "$reply" =~ ^[Yy]$ ]]
 }
 
-BASE_FLAGS=(-a --omit-dir-times --itemize-changes)
+BASE_FLAGS=(-a --omit-dir-times --itemize-changes --exclude='.nfs*')
 [[ $DRY -eq 1 ]] && BASE_FLAGS+=(--dry-run)
 
 # NUL-terminated list of content-identical files, for rsync's --from0 --exclude-from.
@@ -132,7 +132,7 @@ sync_dir() {
 count_deletions_dir() {
     local src="$1" dst="$2"
     [[ ! -d "$src" || ! -d "$dst" ]] && { echo 0; return; }
-    rsync -a --delete --dry-run --itemize-changes "$src/" "$dst/" 2>/dev/null \
+    rsync -a --delete --dry-run --itemize-changes --exclude='.nfs*' "$src/" "$dst/" 2>/dev/null \
         | grep -c '^\*deleting' || true
 }
 
@@ -201,7 +201,7 @@ backup_claude_dir() {
     echo "Backing up $CLAUDE_DIR before push..." >&2
     backup_dir=$(mktemp -d "/tmp/claude-backup-$(date +%Y%m%d-%H%M%S)-XXXXXX") \
         || { echo "error: failed to create backup directory under /tmp; aborting push." >&2; return 1; }
-    rsync -a "$CLAUDE_DIR/" "$backup_dir/" \
+    rsync -a --exclude='.nfs*' "$CLAUDE_DIR/" "$backup_dir/" \
         || { echo "error: failed to snapshot $CLAUDE_DIR into $backup_dir (incomplete — remove $backup_dir before retrying); aborting push." >&2; return 1; }
     echo "Backup created: $backup_dir" >&2
 }
