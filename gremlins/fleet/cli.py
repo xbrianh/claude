@@ -138,7 +138,12 @@ def _dispatch_subcommand(argv: List[str]):
             print("error: --squash and --ff are mutually exclusive")
             sys.exit(1)
         mode = "squash" if squash_flag else ("ff" if ff_flag else None)
-        ok = do_land(target, force=force, mode=mode)
+        into_dir = ""
+        if "--into" in raw:
+            into_idx = raw.index("--into")
+            if into_idx + 1 < len(raw):
+                into_dir = raw[into_idx + 1]
+        ok = do_land(target, force=force, mode=mode, into_dir=into_dir)
     else:
         headless = "--headless" in raw
         ok = do_rescue(target, headless=headless)

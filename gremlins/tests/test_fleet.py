@@ -519,6 +519,81 @@ def test_land_local_refuses_when_branch_missing_from_state(tmp_path, monkeypatch
     assert "no branch field" in capsys.readouterr().out
 
 
+def test_land_local_into_dir_nonexistent_fails(tmp_path, monkeypatch, capsys):
+    """_land_local returns False and prints an error when into_dir does not exist."""
+    state = {
+        "id": "x",
+        "kind": "localgremlin",
+        "setup_kind": "worktree-branch",
+        "branch": "bg/localgremlin/x",
+        "project_root": str(tmp_path / "project"),
+    }
+    ok = gremlins._land_local("x", "/sf", "/wdir", state, mode="squash",
+                               into_dir=str(tmp_path / "nonexistent"))
+    assert ok is False
+    assert "--into directory does not exist" in capsys.readouterr().out
+
+
+def test_land_local_into_dir_lands_in_worktree(tmp_path, monkeypatch, capsys):
+    """When into_dir is provided, the squash commit lands there instead of project_root."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    _init_git_repo(project_root)
+
+    gr_id = "land-into-wt-12345678"
+    branch = f"bg/localgremlin/{gr_id}"
+
+    # Create feature branch with a commit.
+    subprocess.run(["git", "checkout", "-b", branch], cwd=project_root,
+                   check=True, capture_output=True)
+    (project_root / "wt_feature.txt").write_text("from worktree\n")
+    subprocess.run(["git", "add", "wt_feature.txt"], cwd=project_root,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "add wt_feature.txt"], cwd=project_root,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "main"], cwd=project_root,
+                   check=True, capture_output=True)
+
+    # Create a detached worktree from main (simulating the boss worktree).
+    into_dir = tmp_path / "boss_worktree"
+    subprocess.run(["git", "worktree", "add", "--detach", str(into_dir), "HEAD"],
+                   cwd=project_root, check=True, capture_output=True)
+
+    state_root = tmp_path / "state-root"
+    gr_dir = state_root / gr_id
+    artifacts_dir = gr_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "plan.md").write_text("# Add wt_feature\n\n## Context\nAdd wt_feature.txt.\n")
+    workdir = tmp_path / "child_worktree"
+    workdir.mkdir()
+    state = {
+        "id": gr_id,
+        "kind": "localgremlin",
+        "status": "dead",
+        "exit_code": 0,
+        "setup_kind": "worktree-branch",
+        "branch": branch,
+        "workdir": str(workdir),
+        "project_root": str(project_root),
+        "total_cost_usd": 1.0,
+    }
+    sf = str(gr_dir / "state.json")
+    pathlib.Path(sf).write_text(json.dumps(state))
+
+    monkeypatch.setattr(gremlins, "STATE_ROOT", str(state_root))
+    monkeypatch.setattr(gremlins, "_synthesize_commit_message_ai",
+                        lambda inputs: ("Add wt_feature.txt", "", 0.0))
+    monkeypatch.chdir(into_dir)
+
+    ok = gremlins._land_local(gr_id, sf, str(gr_dir), state, mode="squash",
+                               into_dir=str(into_dir))
+    assert ok is True
+
+    # Feature must appear in the boss worktree, not in project_root.
+    assert (into_dir / "wt_feature.txt").exists()
+    assert not (project_root / "wt_feature.txt").exists()
+
+
 def test_land_proceeds_with_untracked_files_present(tmp_path, monkeypatch, capsys):
     """Untracked files must not block land (they can't be clobbered by squash merge)."""
     project_root = tmp_path / "project"

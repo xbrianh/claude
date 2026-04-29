@@ -544,7 +544,7 @@ def _ff_land(gr_id: str, sf: str, wdir: str, state: dict, cwd,
     return True
 
 
-def _land_local(gr_id: str, sf: str, wdir: str, state: dict, mode: str) -> bool:
+def _land_local(gr_id: str, sf: str, wdir: str, state: dict, mode: str, into_dir: str = "") -> bool:
     """Land a local gremlin branch onto the current branch (mode: 'squash' or 'ff')."""
     setup_kind = state.get("setup_kind", "")
     if setup_kind != "worktree-branch":
@@ -557,7 +557,13 @@ def _land_local(gr_id: str, sf: str, wdir: str, state: dict, mode: str) -> bool:
         return False
 
     project_root = state.get("project_root") or ""
-    cwd = project_root if project_root and os.path.isdir(project_root) else None
+    if into_dir:
+        if not os.path.isdir(into_dir):
+            print(f"error: --into directory does not exist: {into_dir!r}")
+            return False
+        cwd = into_dir
+    else:
+        cwd = project_root if project_root and os.path.isdir(project_root) else None
 
     r = subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -735,7 +741,7 @@ def _land_gh(gr_id: str, sf: str, wdir: str, state: dict, force: bool = False) -
     return True
 
 
-def do_land(target: str, force: bool = False, mode: str = None) -> bool:
+def do_land(target: str, force: bool = False, mode: str = None, into_dir: str = "") -> bool:
     match = resolve_gremlin(target)
     if match is None:
         return False
@@ -756,7 +762,7 @@ def do_land(target: str, force: bool = False, mode: str = None) -> bool:
         if live != "dead:finished":
             print(f"gremlin {gr_id} is not finished (liveness: {live})")
             return False
-        return _land_local(gr_id, sf, wdir, state, mode or "squash")
+        return _land_local(gr_id, sf, wdir, state, mode or "squash", into_dir=into_dir)
     elif kind == "bossgremlin":
         if live != "dead:finished":
             print(f"gremlin {gr_id} is not finished (liveness: {live})")
