@@ -279,16 +279,50 @@ def test_launch_sh_child_inherits_project_root_from_parent(tmp_path):
         encoding="utf-8",
     )
 
+    # Invoke launch.sh from outside the repo so a broken implementation cannot
+    # accidentally match the parent's project_root via cwd-based fallback.
+    launch_cwd = tmp_path / "outside-repo"
+    launch_cwd.mkdir()
+
     r = _run_launch(
         sh.env, "--print-id", "--parent", parent_id,
         "localgremlin", "test child inheritance",
-        cwd=sh.repo, timeout=30,
+        cwd=launch_cwd, timeout=30,
     )
     assert r.returncode == 0, f"launch.sh failed: {r.stderr}"
     gr_id = r.stdout.strip()
 
     state = read_state(sh.state_root / "claude-gremlins" / gr_id / "state.json")
     assert state["project_root"] == str(parent_root)
+
+    wait_for_finished(sh.state_root / "claude-gremlins" / gr_id, timeout=60)
+
+
+def test_launch_sh_child_falls_back_when_parent_root_nonexistent(tmp_path):
+    """Parent state.json has project_root but the path no longer exists; falls back to git rev-parse."""
+    sh = setup_shell_env(tmp_path)
+
+    # Create a parent state with a project_root that points to a deleted directory.
+    parent_id = "fake-parent-gone-aabbcc"
+    parent_state_dir = sh.state_root / "claude-gremlins" / parent_id
+    parent_state_dir.mkdir(parents=True)
+    gone_root = tmp_path / "deleted-repo"  # deliberately never created
+    (parent_state_dir / "state.json").write_text(
+        json.dumps({"id": parent_id, "project_root": str(gone_root)}),
+        encoding="utf-8",
+    )
+
+    r = _run_launch(
+        sh.env, "--print-id", "--parent", parent_id,
+        "localgremlin", "test nonexistent root fallback",
+        cwd=sh.repo, timeout=30,
+    )
+    assert r.returncode == 0, f"launch.sh failed: {r.stderr}"
+    gr_id = r.stdout.strip()
+
+    state = read_state(sh.state_root / "claude-gremlins" / gr_id / "state.json")
+    # Should fall back to git rev-parse of sh.repo (the launch cwd).
+    assert state["project_root"] == str(sh.repo)
 
     wait_for_finished(sh.state_root / "claude-gremlins" / gr_id, timeout=60)
 
