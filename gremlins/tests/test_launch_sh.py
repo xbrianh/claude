@@ -263,3 +263,50 @@ def test_launch_sh_localgremlin_empty_plan_file_rejected(tmp_path):
     )
     assert r.returncode != 0
     assert "empty" in (r.stderr + r.stdout)
+
+
+def test_launch_sh_child_inherits_project_root_from_parent(tmp_path):
+    """--parent causes the child's project_root to come from the parent's state.json."""
+    sh = setup_shell_env(tmp_path)
+
+    # Create a fake parent state directory with a known project_root.
+    parent_id = "fake-parent-aabbcc"
+    parent_state_dir = sh.state_root / "claude-gremlins" / parent_id
+    parent_state_dir.mkdir(parents=True)
+    parent_root = sh.repo  # a real directory so IS_GIT check works
+    (parent_state_dir / "state.json").write_text(
+        json.dumps({"id": parent_id, "project_root": str(parent_root)}),
+        encoding="utf-8",
+    )
+
+    r = _run_launch(
+        sh.env, "--print-id", "--parent", parent_id,
+        "localgremlin", "test child inheritance",
+        cwd=sh.repo, timeout=30,
+    )
+    assert r.returncode == 0, f"launch.sh failed: {r.stderr}"
+    gr_id = r.stdout.strip()
+
+    state = read_state(sh.state_root / "claude-gremlins" / gr_id / "state.json")
+    assert state["project_root"] == str(parent_root)
+
+    wait_for_finished(sh.state_root / "claude-gremlins" / gr_id, timeout=60)
+
+
+def test_launch_sh_child_falls_back_when_parent_state_missing(tmp_path):
+    """--parent with a non-existent parent id falls back to git rev-parse and succeeds."""
+    sh = setup_shell_env(tmp_path)
+
+    r = _run_launch(
+        sh.env, "--print-id", "--parent", "nonexistent-parent-id",
+        "localgremlin", "test fallback",
+        cwd=sh.repo, timeout=30,
+    )
+    assert r.returncode == 0, f"launch.sh failed: {r.stderr}"
+    gr_id = r.stdout.strip()
+
+    state = read_state(sh.state_root / "claude-gremlins" / gr_id / "state.json")
+    # Should fall back to the git toplevel of sh.repo (where launch was invoked from).
+    assert state["project_root"] == str(sh.repo)
+
+    wait_for_finished(sh.state_root / "claude-gremlins" / gr_id, timeout=60)

@@ -341,10 +341,25 @@ case "$KIND" in
         ;;
 esac
 
-if PROJECT_ROOT=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null); then
-    IS_GIT=1
+_parent_root=""
+if [[ -n "$PARENT_ID" ]]; then
+    _parent_state="${XDG_STATE_HOME:-$HOME/.local/state}/claude-gremlins/$PARENT_ID/state.json"
+    if [[ -f "$_parent_state" ]]; then
+        _parent_root=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('project_root',''))" "$_parent_state" 2>/dev/null || true)
+    fi
+fi
+
+if [[ -n "$_parent_root" && -d "$_parent_root" ]]; then
+    PROJECT_ROOT="$_parent_root"
+elif PROJECT_ROOT=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null); then
+    : # PROJECT_ROOT set
 else
     PROJECT_ROOT=$(pwd)
+fi
+
+if git -C "$PROJECT_ROOT" rev-parse --show-toplevel &>/dev/null; then
+    IS_GIT=1
+else
     IS_GIT=0
 fi
 [[ -n "$PROJECT_ROOT" && -d "$PROJECT_ROOT" ]] || die "could not resolve project root"
