@@ -11,7 +11,8 @@ import tempfile
 import time
 
 from gremlins.clients.claude import stream_events
-from gremlins.fleet.constants import STATE_ROOT, RESCUE_CAP, HEADLESS_DIAGNOSIS_TIMEOUT_SECS, EXCLUDED_BAIL_CLASSES
+from gremlins.fleet import constants as _constants
+from gremlins.fleet.constants import RESCUE_CAP, HEADLESS_DIAGNOSIS_TIMEOUT_SECS, EXCLUDED_BAIL_CLASSES
 from gremlins.fleet.resolve import GREMLIN_STAGES, resolve_gremlin
 from gremlins.fleet.state import load_state, liveness_of_state_file
 from gremlins.fleet.stop import do_stop
@@ -39,7 +40,7 @@ def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
         ("~/.claude/skills/_bg/", "shared launcher, finish, set-stage, set-bail wrappers"),
     ]
     parent_state_dir = (
-        os.path.join(STATE_ROOT, parent_id) if parent_id else ""
+        os.path.join(_constants.STATE_ROOT, parent_id) if parent_id else ""
     )
 
     context_lines = [
@@ -457,6 +458,7 @@ def do_rescue(target: str, headless: bool = False) -> bool:
         # finished-marker fallback, and we want the fresh values for the
         # bail-class and rescue_count checks below.
         state = load_state(sf) or state
+        live = liveness_of_state_file(sf, state)
 
     workdir = state.get("workdir")
     if not workdir:

@@ -7,7 +7,7 @@ import sys
 import time
 from typing import List, Optional
 
-from gremlins.fleet.constants import STATE_ROOT
+from gremlins.fleet import constants as _constants
 from gremlins.fleet.state import git_toplevel
 from gremlins.fleet.stop import do_stop
 from gremlins.fleet.rescue import do_rescue
@@ -89,8 +89,8 @@ def parse_args(argv=None):
 
 def render_view(args, here_root):
     """Render whichever view the flags request. Used by both normal and --watch path."""
-    if args.recent is not None and (args.running or args.stalled):
-        print("error: --recent cannot be combined with --running/--stalled", file=sys.stderr)
+    if args.recent is not None and (args.running or args.dead or args.stalled):
+        print("error: --recent cannot be combined with --running/--dead/--stalled", file=sys.stderr)
         return
 
     if args.recent is not None:
@@ -118,7 +118,7 @@ def _dispatch_subcommand(argv: List[str]):
         sys.exit(1)
 
     target = trailing[0]
-    if not os.path.isdir(STATE_ROOT):
+    if not os.path.isdir(_constants.STATE_ROOT):
         print("No gremlins have been launched on this machine.")
         sys.exit(0)
 
@@ -160,7 +160,7 @@ def _main_impl(argv: Optional[List[str]] = None) -> int:
         sys.exit(0)
 
     # Early exit if state root doesn't exist.
-    if not os.path.isdir(STATE_ROOT):
+    if not os.path.isdir(_constants.STATE_ROOT):
         print("No gremlins have been launched on this machine.")
         sys.exit(0)
 
@@ -202,9 +202,8 @@ def _main_impl(argv: Optional[List[str]] = None) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     """Entry point. Wraps ``_main_impl`` in a top-level try/except so the
     "exit 0 on the listing path even on unexpected errors" promise from the
-    module docstring holds regardless of how this is invoked — direct
-    ``python gremlins/fleet.py`` execution, ``python -m gremlins.cli fleet``
-    dispatch, or import + call from a test.
+    module docstring holds regardless of how this is invoked — via
+    ``python -m gremlins.cli fleet`` dispatch or import + call from a test.
 
     ``SystemExit`` is re-raised verbatim so deliberate ``sys.exit(N)`` calls
     inside ``_main_impl`` (including ``sys.exit(1)`` for handled failures)

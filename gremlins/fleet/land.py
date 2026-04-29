@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from gremlins.fleet.constants import STATE_ROOT
+from gremlins.fleet import constants as _constants
 from gremlins.fleet.resolve import resolve_gremlin
 from gremlins.fleet.state import load_state, liveness_of_state_file
 
@@ -87,7 +87,7 @@ def _resolve_landing_cwd(state: dict) -> str:
             # returning a possibly-detached intermediate ancestor.
             return own_root
         seen.add(pid)
-        parent_sf = os.path.join(STATE_ROOT, pid, "state.json")
+        parent_sf = os.path.join(_constants.STATE_ROOT, pid, "state.json")
         parent_state = load_state(parent_sf)
         if not parent_state:
             # Unreadable parent state — fall back to own_root rather than
