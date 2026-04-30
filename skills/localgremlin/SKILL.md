@@ -1,11 +1,11 @@
 ---
 name: localgremlin
-description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Plan and code review land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); a single detail review is produced. The launcher returns immediately; you'll be notified when the gremlin finishes.
-argument-hint: [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-b <detail-review-model>] [--plan <path> | <instructions>]
-allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
+description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking `python -m gremlins.cli launch`. Plan and code review land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); a single detail review is produced. The launcher returns immediately; you'll be notified when the gremlin finishes.
+argument-hint: [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-b <detail-review-model>] [--plan <path> | --instructions <instructions>]
+allowed-tools: Bash(python -m gremlins.cli launch:*)
 ---
 
-You are running the `localgremlin` workflow **in the background**. The skill is a thin wrapper over `~/.claude/skills/_bg/launch.sh`, which:
+You are running the `localgremlin` workflow **in the background**. The skill is a thin wrapper over `python -m gremlins.cli launch`, which:
 
 1. Creates an isolated git worktree of the current project on a fresh branch named `bg/localgremlin/<gremlin-id>` (or `cp -a` copies the tree for non-git projects).
 2. Invokes `python -m gremlins.cli local` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
@@ -45,7 +45,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `localgremlin` kind argument:
 
 ```
-~/.claude/skills/_bg/launch.sh --description "<phrase>" localgremlin $ARGUMENTS
+python -m gremlins.cli launch --description "<phrase>" localgremlin $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
@@ -62,13 +62,13 @@ If the user already has an implementation plan, pass `--plan <path>` to skip
 the plan stage. The file's contents are copied into the gremlin's session as
 `plan.md` and the implement stage reads them as-is.
 
-- Mutually exclusive with the positional `<instructions>`. Pass exactly one.
+- Mutually exclusive with `--instructions`. Pass exactly one.
 - The path must point to a readable, non-empty file.
 - The gremlin's description defaults to the first `# heading` in the plan
   file unless `--description` is supplied explicitly.
-- Errors (file missing, file empty, both `--plan` and positional supplied,
-  neither supplied) are surfaced in `launch.sh` before the state directory
-  is created, so a bad invocation leaves no state-dir litter behind.
+- Errors (file missing, file empty, both `--plan` and `--instructions` supplied,
+  neither supplied) are surfaced in `python -m gremlins.cli launch` before the
+  state directory is created, so a bad invocation leaves no state-dir litter behind.
 
 ## Do not
 

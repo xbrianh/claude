@@ -123,10 +123,11 @@ def lenv(tmp_path, monkeypatch):
 def lenv_with_gh(tmp_path, monkeypatch, lenv):
     """Like lenv but also installs a fake `gh` binary and a bare origin."""
     _install_fake_bin(lenv.bin_dir, "gh", FAKE_GH)
-    # Re-init the repo with a bare origin
+    # Re-init the repo with a bare origin (deletes the old repo dir, so re-chdir).
     import shutil
     shutil.rmtree(lenv.repo, ignore_errors=True)
     _init_git_repo(lenv.repo, with_origin=True)
+    monkeypatch.chdir(lenv.repo)
     return lenv
 
 
@@ -456,3 +457,74 @@ def test_full_localgremlin_pipeline(lenv):
         assert "implement-local" in stages, stages
         assert "review" in stages, stages
         assert "address" in stages, stages
+
+
+# ---------------------------------------------------------------------------
+# ghgremlin launch (lenv_with_gh fixture)
+# ---------------------------------------------------------------------------
+
+def test_launch_ghgremlin_state_layout(lenv_with_gh):
+    """ghgremlin creates a detached worktree off origin/<default> with correct state."""
+    lenv = lenv_with_gh
+    launcher = _launcher()
+    gr_id = launcher.launch("ghgremlin", instructions="test gh launch")
+    state_dir = _gremlins_state_root(lenv) / gr_id
+    assert state_dir.is_dir()
+
+    state = _read_state(state_dir)
+    assert state["id"] == gr_id
+    assert state["kind"] == "ghgremlin"
+    assert state["setup_kind"] == "worktree", \
+        f"ghgremlin should use detached worktree, got: {state['setup_kind']!r}"
+    assert state["worktree_base"] == "origin/main", \
+        f"worktree_base should be origin/main, got: {state['worktree_base']!r}"
+    workdir = pathlib.Path(state["workdir"])
+    assert workdir.is_dir(), f"worktree directory should exist: {workdir}"
+
+    _wait_for_finished(state_dir, timeout=60)
+
+
+# ---------------------------------------------------------------------------
+# PYTHONSAFEPATH worktree-rename regression
+# ---------------------------------------------------------------------------
+
+def test_pipeline_survives_worktree_pipeline_rename(lenv, monkeypatch):
+    """Regression: pipeline completes even when implement renames worktree's gremlins/.
+
+    Without PYTHONSAFEPATH=1, python -m gremlins.cli imports from the worktree
+    (cwd). Renaming gremlins/ during implement then causes ImportError / FileNotFoundError
+    in later stages because PROMPTS_DIR is __file__-relative and the directory is gone.
+    With the fix, python loads gremlins from HOME/.claude/gremlins/ and the
+    worktree rename is harmless.
+    """
+    # Add a gremlins/ stub to the repo so the worktree shadows $HOME/.claude/gremlins/.
+    pipeline_stub = lenv.repo / "gremlins"
+    pipeline_stub.mkdir()
+    (pipeline_stub / "__init__.py").write_text("# stub\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(lenv.repo), "add", "gremlins"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(lenv.repo), "commit", "-m", "add gremlins stub"],
+        check=True, capture_output=True,
+    )
+
+    # FAKE_CLAUDE_RENAME_GREMLINS=1 triggers the rename inside handle_implement()
+    # (see fixtures/fake_claude.py). Set it in the current env so the spawned
+    # pipeline process inherits it via os.environ.copy() in _build_spawn_env().
+    monkeypatch.setenv("FAKE_CLAUDE_RENAME_GREMLINS", "1")
+
+    launcher = _launcher()
+    gr_id = launcher.launch("localgremlin", instructions="test gremlins rename regression")
+    state_dir = _gremlins_state_root(lenv) / gr_id
+    log_path = state_dir / "log"
+    assert _wait_for_finished(state_dir, timeout=120), (
+        f"pipeline did not finish; log:\n"
+        f"{log_path.read_text(errors='replace')[-2000:] if log_path.exists() else '<log missing>'}"
+    )
+    state = _read_state(state_dir)
+    assert state["exit_code"] == 0, (
+        f"expected exit 0; status={state.get('status')!r}; log tail:\n"
+        f"{log_path.read_text(errors='replace')[-2000:] if log_path.exists() else '<log missing>'}"
+    )

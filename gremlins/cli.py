@@ -83,14 +83,12 @@ def _launch_main(argv: List[str]) -> int:
     p.add_argument("--description", default=None)
     p.add_argument("--parent", dest="parent_id", default=None)
     p.add_argument("--print-id", action="store_true")
+    p.add_argument("--instructions", "-c", default=None,
+                   help="Instructions string (mutually exclusive with --plan).")
     args, rest = p.parse_known_args(argv)
 
-    # Separate trailing instructions positional from pipeline flags
-    instructions = None
+    instructions = args.instructions
     pipeline_flags = list(rest)
-    if pipeline_flags and not pipeline_flags[-1].startswith("-"):
-        instructions = pipeline_flags[-1]
-        pipeline_flags = pipeline_flags[:-1]
 
     try:
         gr_id = launch(

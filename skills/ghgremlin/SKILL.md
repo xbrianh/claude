@@ -1,11 +1,11 @@
 ---
 name: ghgremlin
-description: Run the end-to-end plan → implement → review → address workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them. The launcher returns immediately; you'll be notified when the gremlin finishes.
-argument-hint: [-r <ref>] [--plan <path|issue-ref> | <instructions>]
-allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
+description: Run the end-to-end plan → implement → review → address workflow in the background by invoking `python -m gremlins.cli launch`. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them. The launcher returns immediately; you'll be notified when the gremlin finishes.
+argument-hint: [-r <ref>] [--plan <path|issue-ref> | --instructions <instructions>]
+allowed-tools: Bash(python -m gremlins.cli launch:*)
 ---
 
-You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `~/.claude/skills/_bg/launch.sh`, which:
+You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `python -m gremlins.cli launch`, which:
 
 1. Creates an isolated git worktree of the current project (detached HEAD).
 2. Invokes `python -m gremlins.cli gh` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
@@ -38,7 +38,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `ghgremlin` kind argument:
 
 ```
-~/.claude/skills/_bg/launch.sh --description "<phrase>" ghgremlin $ARGUMENTS
+python -m gremlins.cli launch --description "<phrase>" ghgremlin $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
@@ -73,8 +73,8 @@ Rules:
 - Mutually exclusive with the positional `<instructions>`. Pass exactly one.
 - Files must be non-empty; issues must exist and have a non-empty body.
 - Failure modes split by where they fire:
-  - **Clean (no state dir):** mutex violations (`--plan` + positional, or
-    neither) and missing / empty local file are caught in `launch.sh`
+  - **Clean (no state dir):** mutex violations (`--plan` + `--instructions`, or
+    neither) and missing / empty local file are caught in `python -m gremlins.cli launch`
     before the state directory is created.
   - **Dirty (failed state dir left behind):** issue-ref errors (unreachable
     issue, unrecognized shape, empty issue body) fire in `ghgremlin.sh`
@@ -85,5 +85,5 @@ Rules:
 
 - Do not tail the log or block waiting for the gremlin to finish.
 - Do not pass extra flags the launcher doesn't accept.
-- Do not invoke the gremlin script (`ghgremlin.sh`) directly — always go through the launcher.
+- Do not invoke the gremlin script (`ghgremlin.sh`) directly — always go through `python -m gremlins.cli launch`.
 - Do not run the individual skills (`/ghplan`, `/ghreview`, `/ghaddress`) inline — the backgrounded gremlin already chains them.

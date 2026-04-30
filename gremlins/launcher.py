@@ -170,13 +170,17 @@ def _spawn_pipeline(
     gr_id: str,
     kind_subcommand: str,
     pipeline_args: list,
+    log_mode: str = "w",
 ) -> subprocess.Popen:
-    """Spawn the pipeline detached. Returns the Popen object (already running)."""
+    """Spawn the pipeline detached. Returns the Popen object (already running).
+
+    log_mode: "w" (truncate, default for first launch) or "a" (append, for resumes).
+    """
     cmd = [sys.executable, "-m", "gremlins.cli", "_run-pipeline",
            gr_id, kind_subcommand, *pipeline_args]
     env = _build_spawn_env(gr_id)
     log_path = state_dir / "log"
-    log_fh = open(log_path, "w")
+    log_fh = open(log_path, log_mode)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -341,7 +345,7 @@ def resume(gr_id: str) -> None:
     if kind == "ghgremlin" and shutil.which("gh") is None:
         raise RuntimeError("gh CLI not found on PATH (required for ghgremlin)")
 
-    if status == "running" and old_pid is not None and old_pid != "null":
+    if status == "running" and old_pid is not None:
         try:
             os.kill(int(old_pid), 0)
             raise RuntimeError(
@@ -408,7 +412,8 @@ def resume(gr_id: str) -> None:
             spawn_args.append(instructions)
 
     kind_subcommand = _KIND_SUBCOMMAND[kind]
-    proc = _spawn_pipeline(state_dir, workdir, gr_id, kind_subcommand, spawn_args)
+    proc = _spawn_pipeline(state_dir, workdir, gr_id, kind_subcommand, spawn_args,
+                           log_mode="a")
 
     (state_dir / "pid").write_text(str(proc.pid), encoding="utf-8")
     _patch_state(state_dir, pid=proc.pid)

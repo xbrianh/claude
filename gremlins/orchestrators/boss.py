@@ -354,6 +354,7 @@ def launch_child(gr_id: str, launch_kind: str, child_plan: str) -> str:
         die(f"launcher failed: {exc}")
 
     log(f"child launched: {child_id}")
+    check_stop()
     return child_id
 
 
