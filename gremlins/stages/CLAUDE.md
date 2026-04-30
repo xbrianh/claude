@@ -45,8 +45,9 @@ closure inside `../orchestrators/gh.py` rather than living here.
   resolves into `~/.claude/gremlins/...` regardless of the orchestrator's
   cwd.
 - Stages that should respect a bail marker (set by the agent via
-  `set-bail.sh`) call `check_bail(<phase-name>)` from `..state` after the
-  claude run. The runner inspects the bail and halts the pipeline.
+  `python -m gremlins.cli bail`) call `check_bail(<phase-name>)` from
+  `..state` after the claude run. The runner inspects the bail and
+  halts the pipeline.
 - Most stages return `None`. Stages that produce information the
   orchestrator needs (`implement.py` → `ImplStageResult`,
   `commit_pr.py` → PR URL string) return it; the orchestrator threads

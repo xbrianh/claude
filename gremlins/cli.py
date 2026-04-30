@@ -14,6 +14,7 @@ The first positional argument selects the subcommand:
 - ``launch``  — launch a new background gremlin (replaces launch.sh forward path)
 - ``resume``  — re-spawn an existing gremlin from its recorded stage (replaces
                 launch.sh --resume)
+- ``bail``    — mark the running gremlin as bailed (reads GR_ID from env)
 - ``_run-pipeline`` — internal spawn boundary; not for direct human use
 
 Remaining argv is forwarded to the chosen orchestrator entry point with
@@ -33,7 +34,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not argv:
         sys.stderr.write(
             "usage: python -m gremlins.cli "
-            "{local|review|address|gh|boss|fleet|handoff|launch|resume} [args...]\n"
+            "{local|review|address|gh|boss|fleet|handoff|launch|resume|bail} [args...]\n"
         )
         return 1
     sub = argv[0]
@@ -63,6 +64,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _launch_main(rest)
     if sub == "resume":
         return _resume_main(rest)
+    if sub == "bail":
+        return _bail_main(rest)
     if sub == "_run-pipeline":
         return _run_pipeline_main(rest)
     sys.stderr.write(f"unknown subcommand: {sub}\n")
@@ -169,6 +172,42 @@ def _run_pipeline_main(argv: List[str]) -> int:
         from .launcher import write_terminal_state
         write_terminal_state(gr_id, exit_code=rc)
     sys.exit(rc)
+
+
+def _bail_main(argv: List[str]) -> int:
+    """CLI front-end for state.emit_bail.
+
+    Reads GR_ID from env (set by the launcher when spawning the
+    pipeline). Returns 0 for valid invocations (including when GR_ID is
+    unset — emit_bail no-ops); invalid CLI usage is handled by argparse
+    and exits non-zero (typically 2). A typo like ``bail othr`` should
+    surface as an error rather than be silently swallowed.
+    """
+    import argparse
+    from .state import (
+        emit_bail,
+        BAIL_CLASS_REVIEWER_REQUESTED_CHANGES,
+        BAIL_CLASS_SECURITY,
+        BAIL_CLASS_SECRETS,
+        BAIL_CLASS_OTHER,
+    )
+
+    valid = {
+        BAIL_CLASS_REVIEWER_REQUESTED_CHANGES,
+        BAIL_CLASS_SECURITY,
+        BAIL_CLASS_SECRETS,
+        BAIL_CLASS_OTHER,
+    }
+    p = argparse.ArgumentParser(
+        prog="python -m gremlins.cli bail",
+        description="Mark the running gremlin as bailed.",
+    )
+    p.add_argument("bail_class", choices=sorted(valid))
+    p.add_argument("bail_detail", nargs="?", default="")
+    args = p.parse_args(argv)
+
+    emit_bail(args.bail_class, args.bail_detail)
+    return 0
 
 
 def _get_state_root():
