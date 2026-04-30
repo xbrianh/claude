@@ -134,7 +134,7 @@ Parent (boss) id: {parent_id or '(none)'}
      pre-fix base ref doesn't see. No change needed; rerunning the same stage
      as-is should succeed.
    - **structural**: the failure points at a real bug in the pipeline source
-     (`~/.claude/gremlins/*.py`) or in a sibling artifact (e.g. a malformed child plan
+     (`~/.claude/gremlins/`) or in a sibling artifact (e.g. a malformed child plan
      under the parent boss's state dir) that you recognize but cannot fix here.
      Use this when the remedy is "edit the pipeline" or "edit the child plan",
      not "tweak `state.json`". Articulate *what* in the pipeline / plan is wrong
