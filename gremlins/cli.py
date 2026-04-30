@@ -2,19 +2,20 @@
 
 The first positional argument selects the subcommand:
 
-- ``local``   — full plan → implement → review-code → address-code chain
-- ``review``  — review-code stage only (was ``localreview.py``)
-- ``address`` — address-code stage only (was ``localaddress.py``)
-- ``gh``      — full gh-issue-driven pipeline (Phase 3)
-- ``boss``    — chained serial workflow driven by a top-level spec (Phase 4)
-- ``fleet``   — fleet-manager subcommands (status / stop / rescue / land /
-                close / rm / log)
-- ``handoff`` — chain-step decision agent (next-plan / chain-done / bail)
-- ``launch``  — launch a new background gremlin (replaces launch.sh forward path)
-- ``resume``  — re-spawn an existing gremlin from its recorded stage (replaces
-                launch.sh --resume)
-- ``bail``    — mark the running gremlin as bailed (reads GR_ID from env)
-- ``_run-pipeline`` — internal spawn boundary; not for direct human use
+- ``local``           — full plan → implement → review-code → address-code chain
+- ``review``          — review-code stage only (was ``localreview.py``)
+- ``address``         — address-code stage only (was ``localaddress.py``)
+- ``gh``              — full gh-issue-driven pipeline (Phase 3)
+- ``boss``            — chained serial workflow driven by a top-level spec (Phase 4)
+- ``fleet``           — fleet-manager subcommands (status / stop / rescue / land /
+                        close / rm / log)
+- ``handoff``         — chain-step decision agent (next-plan / chain-done / bail)
+- ``launch``          — launch a new background gremlin (replaces launch.sh forward path)
+- ``resume``          — re-spawn an existing gremlin from its recorded stage (replaces
+                        launch.sh --resume)
+- ``bail``            — mark the running gremlin as bailed (reads GR_ID from env)
+- ``session-summary`` — SessionStart / UserPromptSubmit hook (replaces session-summary.sh)
+- ``_run-pipeline``   — internal spawn boundary; not for direct human use
 
 Remaining argv is forwarded to the chosen orchestrator entry point.
 """
@@ -32,7 +33,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not argv:
         sys.stderr.write(
             "usage: python -m gremlins.cli "
-            "{local|review|address|gh|boss|fleet|handoff|launch|resume|bail} [args...]\n"
+            "{local|review|address|gh|boss|fleet|handoff|launch|resume|bail|session-summary}"
+            " [args...]\n"
         )
         return 1
     sub = argv[0]
@@ -64,6 +66,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _resume_main(rest)
     if sub == "bail":
         return _bail_main(rest)
+    if sub == "session-summary":
+        from .fleet.session_summary import main as _session_summary_main
+        return _session_summary_main(rest)
     if sub == "_run-pipeline":
         return _run_pipeline_main(rest)
     sys.stderr.write(f"unknown subcommand: {sub}\n")
