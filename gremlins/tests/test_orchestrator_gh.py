@@ -749,7 +749,16 @@ def test_plan_file_path_includes_plan_title_cost_in_total(tmp_path, monkeypatch)
         ],
     }
 
-    client = _CommittingClient(git_dir=tmp_path, fixtures=fixtures)
+    # text_results provides a fallback for the plan-title label so that if
+    # production regresses to output_format != "stream-json", the pipeline
+    # still completes rather than raising KeyError.  The cost assertion then
+    # fails for the right reason: total_cost_usd is short by exactly 0.13
+    # because the text-mode path never accumulates plan-title's fixture cost.
+    client = _CommittingClient(
+        git_dir=tmp_path,
+        fixtures=fixtures,
+        text_results={"plan-title": "Feature: Do the thing"},
+    )
     result = gh_main(["--plan", str(plan_file)], client=client)
     assert result == 0
 
