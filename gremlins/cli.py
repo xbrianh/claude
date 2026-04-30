@@ -91,6 +91,8 @@ def _launch_main(argv: List[str]) -> int:
     p.add_argument("--print-id", action="store_true")
     p.add_argument("--instructions", "-c", default=None,
                    help="Instructions string (mutually exclusive with --plan).")
+    p.add_argument("--base-ref", default="HEAD",
+                   help="Git ref to branch child worktree from (default: HEAD).")
     args, rest = p.parse_known_args(argv)
 
     instructions = args.instructions
@@ -103,6 +105,7 @@ def _launch_main(argv: List[str]) -> int:
             plan=args.plan,
             description=args.description,
             parent_id=args.parent_id,
+            base_ref=args.base_ref,
             pipeline_args=tuple(pipeline_flags),
         )
     except (ValueError, RuntimeError) as exc:

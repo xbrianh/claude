@@ -30,6 +30,15 @@ def git_head() -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def git_head_of_workdir(workdir: str) -> str:
+    r = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=False,
+        cwd=workdir,
+    )
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
 # ---------------------------------------------------------------------------
 # ghgremlin impl-handoff branch lifecycle (Phase 3)
 # ---------------------------------------------------------------------------
@@ -218,9 +227,9 @@ def resolve_default_branch(project_root: str) -> str:
 
 
 def setup_worktree_branch(
-    project_root: str, gr_id: str, branch_prefix: str = "bg/localgremlin"
+    project_root: str, gr_id: str, base_ref: str = "HEAD", branch_prefix: str = "bg/localgremlin"
 ) -> tuple:
-    """Add a named-branch worktree at HEAD. Returns (workdir_path, branch_name).
+    """Add a named-branch worktree at base_ref. Returns (workdir_path, branch_name).
 
     Raises RuntimeError on failure.
     """
@@ -229,7 +238,7 @@ def setup_worktree_branch(
     os.rmdir(workdir)
     branch = f"{branch_prefix}/{gr_id}"
     r = _git(
-        ["worktree", "add", "-b", branch, workdir, "HEAD"],
+        ["worktree", "add", "-b", branch, workdir, base_ref],
         cwd=project_root, capture_output=True, text=True,
     )
     if r.returncode != 0:
