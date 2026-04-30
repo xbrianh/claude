@@ -1,4 +1,4 @@
-"""Tests for gremlins/handoff.py (formerly skills/handoff/handoff.py)."""
+"""Tests for gremlins/handoff.py."""
 
 import json
 import pathlib

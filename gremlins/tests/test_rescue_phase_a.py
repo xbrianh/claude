@@ -84,40 +84,6 @@ def _patch_state_root(gremlins_mod, state_root: pathlib.Path, monkeypatch):
     )
 
 
-def _install_stub_launcher(home: pathlib.Path) -> pathlib.Path:
-    """Replace fake_home/.claude/skills/_bg/launch.sh with a stub that records
-    its argv and exits 0. Returns the path to the recording file.
-
-    The default fake home symlinks ``~/.claude/skills`` straight at the repo's
-    ``skills/`` dir, so writing through that path would clobber the real
-    ``launch.sh`` on disk. Peel the symlink back into a real directory of
-    per-child symlinks so we can replace just ``_bg`` with a stub copy.
-    """
-    skills_dir = home / ".claude" / "skills"
-    if skills_dir.is_symlink():
-        # Peel: replace the symlink with a real directory of per-child links,
-        # then materialize a real `_bg` dir we can safely write into.
-        target = skills_dir.resolve()
-        skills_dir.unlink()
-        skills_dir.mkdir()
-        for child in target.iterdir():
-            (skills_dir / child.name).symlink_to(child)
-    bg = skills_dir / "_bg"
-    if bg.is_symlink():
-        bg.unlink()
-    bg.mkdir(parents=True, exist_ok=True)
-    record_file = home / "stub_launcher_calls.log"
-    record_file.write_text("", encoding="utf-8")
-    launcher = bg / "launch.sh"
-    launcher.write_text(
-        "#!/usr/bin/env bash\n"
-        f"echo \"$@\" >> '{record_file}'\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    launcher.chmod(0o755)
-    return record_file
-
 
 def test_rescue_diagnosis_runs_in_scratch_dir_not_worktree(tmp_path, monkeypatch):
     """The diagnosis agent's cwd is a /tmp scratch dir, not the gremlin's worktree."""

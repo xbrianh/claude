@@ -46,11 +46,11 @@ def install_fake_bin(bin_dir: pathlib.Path, name: str, target: pathlib.Path) -> 
 
 
 def setup_fake_home(home: pathlib.Path) -> None:
-    """Build a minimal ``$HOME/.claude/`` that launch.sh and the gremlins package can
-    resolve: skills/, gremlins/, agents/ symlink to the repo's source dirs."""
+    """Build a minimal ``$HOME/.claude/`` that the gremlins package can
+    resolve: gremlins/, agents/ symlink to the repo's source dirs."""
     claude_dir = home / ".claude"
     claude_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("skills", "gremlins", "agents"):
+    for name in ("gremlins", "agents"):
         link = claude_dir / name
         if link.is_symlink() or link.exists():
             continue
@@ -109,7 +109,7 @@ def setup_shell_env(
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
         "FAKE_CLAUDE_LOG": str(fake_claude_log),
         "FAKE_GH_LOG": str(fake_gh_log),
-        # Strip caller's PYTHONPATH; launch.sh will set its own.
+        # Strip caller's PYTHONPATH; the launcher will set its own.
     }
     env.pop("PYTHONPATH", None)
     # Disable git's optional locks to reduce lock contention across parallel
