@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
 import time
+
+from gremlins.fleet.state import liveness_of_state_file
 
 
 def main(argv) -> int:
@@ -71,7 +74,9 @@ def _read_stdin() -> dict:
         if not sys.stdin.isatty():
             raw = sys.stdin.read()
             if raw:
-                return json.loads(raw)
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    return parsed
     except Exception:
         pass
     return {}
@@ -98,8 +103,6 @@ def _collect_gremlins(state_root: str, project_root: str):
 
     Returns (running, finished, newly_summarized_dirs).
     """
-    from gremlins.fleet.state import liveness_of_state_file
-
     running = []
     finished = []
     newly_summarized_dirs = []
@@ -243,7 +246,7 @@ def _emit(hook_event: str, raw_summary: str) -> None:
 def _mark_summarized(state_dirs: list) -> None:
     for d in state_dirs:
         try:
-            open(os.path.join(d, "summarized"), "a").close()
+            pathlib.Path(d, "summarized").touch()
         except OSError:
             pass
 

@@ -4,7 +4,7 @@ description: Address review comments on a GitHub PR. Fixes issues raised by revi
 argument-hint: <pr-reference> [instructions]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh *) Bash(~/.claude/skills/_bg/set-bail.sh:*) Read Glob Grep Edit
+allowed-tools: Bash(gh *) Bash(PYTHONPATH=* python -m gremlins.cli bail *) Read Glob Grep Edit
 ---
 
 You are addressing review comments on a GitHub pull request. Your job is to fix the issues raised by reviewers and reply to each comment thread.
@@ -78,7 +78,7 @@ Use `gh issue create` with:
 - **Title**: a short distillation of the comment (no special prefix). Aim for a sentence fragment that names the defect, not the comment ID.
 - **Body**: must stand on its own — a reader should not need to chase the PR to understand the issue. Include:
   - A short summary of the defect in your own words.
-  - The reviewer's comment, quoted or summarized, so the original framing is preserved. **Before quoting, scan the comment text for secrets or sensitive data (credentials, API keys, tokens, internal URLs, customer data). If any are present, redact them in the issue body — replace with `[redacted]` — or if redaction isn't safe/clean, skip filing the issue and bail with `set-bail.sh "$GR_ID" secrets ...` instead. Issues are public and permanent; do not promote secrets from a review comment into a new issue.**
+  - The reviewer's comment, quoted or summarized, so the original framing is preserved. **Before quoting, scan the comment text for secrets or sensitive data (credentials, API keys, tokens, internal URLs, customer data). If any are present, redact them in the issue body — replace with `[redacted]` — or if redaction isn't safe/clean, skip filing the issue and bail with `PYTHONPATH=$HOME/.claude python -m gremlins.cli bail secrets "..."` instead. Issues are public and permanent; do not promote secrets from a review comment into a new issue.**
   - A PR cross-link. Use `Ref #<pr-number>` when filing in the same repo as the PR (the common case). Use `Ref <owner>/<repo>#<pr-number>` if you ever file cross-repo, since plain `#<n>` only autolinks within the same repo.
   - A permalink to the originating review comment (the comment's `html_url` from the API response).
 
@@ -121,13 +121,13 @@ Use the helper:
 - A comment touches **secrets** (credential management, API keys, encryption material) and you cannot safely make the requested change:
 
   ```
-  ~/.claude/skills/_bg/set-bail.sh "$GR_ID" secrets "<one-line reason>"
+  PYTHONPATH=$HOME/.claude python -m gremlins.cli bail secrets "<one-line reason>"
   ```
 
 - For any other reason you decline to proceed (ambiguous reviewer ask, conflicting comments, etc.):
 
   ```
-  ~/.claude/skills/_bg/set-bail.sh "$GR_ID" other "<one-line reason>"
+  PYTHONPATH=$HOME/.claude python -m gremlins.cli bail other "<one-line reason>"
   ```
 
 Note: out-of-scope comments are **not** a bail reason — they go through the *Out-of-scope triage* section above (file an issue or post a dismissal/failure-marker reply). A `gh issue create` failure is also not a bail reason; fall back per that section.
