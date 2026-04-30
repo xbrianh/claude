@@ -56,6 +56,9 @@ def _common_boss_patches(monkeypatch, tmp_path, gr_id):
     monkeypatch.setattr(boss_mod, "set_stage", lambda *a, **kw: None)
     monkeypatch.setattr(boss_mod, "get_head_ref", lambda p: "abc123def456abc1")
     monkeypatch.setattr(boss_mod, "get_current_branch", lambda p: "main")
+    # Stub git_head_of_workdir so tests don't need a real git worktree.
+    # Individual tests that care about specific SHA values can override this.
+    monkeypatch.setattr(git_mod, "git_head_of_workdir", lambda w: "aaaa1111bbbb2222cccc3333dddd4444eeee5555")
 
 
 # ---------------------------------------------------------------------------
@@ -1155,8 +1158,10 @@ def test_boss_records_current_head_after_land(tmp_path, monkeypatch):
     child_plan = tmp_path / "child-plan.md"
     child_plan.write_text("# Child plan\n")
 
+    initial_head = "inithead1234567890123456789012345678ab"
     expected_new_head = "newhead12345678901234567890abcdef123456"
-    monkeypatch.setattr(git_mod, "git_head_of_workdir", lambda w: expected_new_head)
+    head_sequence = iter([initial_head, expected_new_head])
+    monkeypatch.setattr(git_mod, "git_head_of_workdir", lambda w: next(head_sequence))
 
     patch_calls = []
     monkeypatch.setattr(boss_mod, "patch_state", lambda **kw: patch_calls.append(kw))
@@ -1199,6 +1204,13 @@ def test_boss_records_current_head_after_land(tmp_path, monkeypatch):
     assert result == 0
 
     current_head_calls = [c for c in patch_calls if "current_head" in c]
-    assert current_head_calls, "patch_state should have been called with current_head"
-    assert any(c["current_head"] == expected_new_head for c in current_head_calls), \
-        f"expected current_head={expected_new_head!r} in patch_calls, got: {current_head_calls}"
+    assert len(current_head_calls) == 2, (
+        f"expected exactly 2 patch_state(current_head=...) calls "
+        f"(chain-start + post-land), got: {current_head_calls}"
+    )
+    assert current_head_calls[0]["current_head"] == initial_head, (
+        f"chain-start current_head should be {initial_head!r}, got {current_head_calls[0]!r}"
+    )
+    assert current_head_calls[1]["current_head"] == expected_new_head, (
+        f"post-land current_head should be {expected_new_head!r}, got {current_head_calls[1]!r}"
+    )

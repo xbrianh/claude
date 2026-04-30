@@ -95,7 +95,6 @@ def _resolve_description_and_slug(
     return "", False, "gremlin"
 
 
-
 def _write_state(state_dir: pathlib.Path, data: dict) -> None:
     """Atomically write state.json."""
     sf = state_dir / "state.json"

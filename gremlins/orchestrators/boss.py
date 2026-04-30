@@ -663,11 +663,12 @@ def boss_main(argv: List[str]) -> int:
             issue_url=issue_url,
             issue_num=issue_num,
         )
-        # Record initial boss HEAD so children branch from the right commit.
-        if boss_workdir and os.path.isdir(boss_workdir):
+        # Record initial boss HEAD so local children branch from the right commit.
+        if chain_kind == "local" and boss_workdir and os.path.isdir(boss_workdir):
             initial_head = _git_mod.git_head_of_workdir(boss_workdir)
-            if initial_head:
-                patch_state(current_head=initial_head)
+            if not initial_head:
+                die(f"failed to resolve HEAD for boss workdir: {boss_workdir!r}")
+            patch_state(current_head=initial_head)
     else:
         boss_state = load_boss_state(state_dir)
         log(f"resuming chain: kind={chain_kind}, completed children: {len(boss_state['children'])}")
@@ -803,8 +804,13 @@ def boss_main(argv: List[str]) -> int:
                 if land_child(current_child_id, into_dir=into_dir):
                     if chain_kind == "local" and boss_workdir and os.path.isdir(boss_workdir):
                         new_head = _git_mod.git_head_of_workdir(boss_workdir)
-                        if new_head:
-                            patch_state(current_head=new_head)
+                        if not new_head:
+                            die(
+                                f"child {current_child_id} landed locally, but could not resolve "
+                                f"HEAD for boss workdir {boss_workdir!r}; refusing to continue "
+                                f"with a stale current_head."
+                            )
+                        patch_state(current_head=new_head)
                     outcome = "rescued-then-landed" if was_rescued else "landed"
                     log(f"child {current_child_id} {outcome}")
                     boss_state["children"].append({"id": current_child_id, "outcome": outcome})

@@ -92,7 +92,9 @@ def _launch_main(argv: List[str]) -> int:
     p.add_argument("--instructions", "-c", default=None,
                    help="Instructions string (mutually exclusive with --plan).")
     p.add_argument("--base-ref", default="HEAD",
-                   help="Git ref to branch child worktree from (default: HEAD).")
+                   help="Git ref to branch the worktree from (default: HEAD). "
+                        "Applies to local gremlins only; ignored for gh gremlins, "
+                        "which always anchor to origin/<default-branch>.")
     args, rest = p.parse_known_args(argv)
 
     instructions = args.instructions
