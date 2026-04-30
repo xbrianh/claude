@@ -8,12 +8,6 @@ GREMLIN_STAGES = {
     "bossgremlin": ["handoff", "waiting", "landing", "rescuing"],
 }
 
-GREMLIN_SCRIPTS = {
-    "localgremlin": "~/.claude/skills/localgremlin/localgremlin.py",
-    "ghgremlin": "~/.claude/skills/ghgremlin/ghgremlin.sh",
-    "bossgremlin": "~/.claude/skills/bossgremlin/bossgremlin.py",
-}
-
 
 def resolve_gremlin(target: str):
     """Resolve id prefix to a single (gr_id, sf, wdir) or print error and return None."""

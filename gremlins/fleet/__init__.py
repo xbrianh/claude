@@ -5,8 +5,7 @@ applies the shared liveness classifier inline, and prints one scannable line per
 gremlin. Subcommands (``stop``, ``rescue``, ``land``, ``rm``, ``close``, ``log``)
 operate on a single gremlin by id-prefix.
 
-Exposed via ``python -m gremlins.cli fleet`` (the ``skills/gremlins/gremlins.py``
-entrypoint is now a thin shim that execs into this module).
+Exposed via ``python -m gremlins.cli fleet``.
 
 Exit 0 on the listing path even on unexpected errors: same "never break a
 session" principle as the session-summary hook.
@@ -33,7 +32,7 @@ from gremlins.fleet.state import (
 )
 from gremlins.fleet.duration import parse_duration
 from gremlins.fleet.render import build_row, print_table
-from gremlins.fleet.resolve import GREMLIN_STAGES, GREMLIN_SCRIPTS, resolve_gremlin
+from gremlins.fleet.resolve import GREMLIN_STAGES, resolve_gremlin
 from gremlins.fleet.stop import do_stop
 from gremlins.fleet.rescue import (
     build_rescue_prompt,
@@ -95,7 +94,6 @@ __all__ = [
     "print_table",
     # resolve
     "GREMLIN_STAGES",
-    "GREMLIN_SCRIPTS",
     "resolve_gremlin",
     # stop
     "do_stop",

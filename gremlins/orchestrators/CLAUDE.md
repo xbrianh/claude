@@ -44,8 +44,7 @@ Per-pipeline orchestrator entry points. Each module owns one CLI subcommand
 - `boss.py` subprocesses out via `_gremlins_cli_cmd` / `_gremlins_cli_env`.
   The env helper sets `PYTHONSAFEPATH=1` and prepends the package's parent
   to `PYTHONPATH` so `python -m gremlins.cli` resolves to
-  `~/.claude/gremlins/` regardless of cwd (worktree-shadow protection — see
-  `skills/_bg/launch.sh`).
+  `~/.claude/gremlins/` regardless of cwd (worktree-shadow protection).
 - The `--resume-from` flag forwarded by `launch.sh --resume` is *ignored*:
   boss resumes from `boss_state.json`, not the runner's stage vocabulary.
 - `SIGTERM` is trapped to set `_stop_requested` and forward to the current

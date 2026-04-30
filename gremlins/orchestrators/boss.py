@@ -1,7 +1,7 @@
 """Orchestrator entry point for the boss pipeline.
 
-Port of ``skills/bossgremlin/bossgremlin.py``.  The boss_state.json schema is
-preserved byte-for-byte so in-flight chains work across the migration.
+Drives a chain of child gremlins serially, invoking handoff between each step.
+Chain state lives in boss_state.json.
 
 Receives pipeline args forwarded by the launcher:
   boss_main --plan <spec-path> --chain-kind local|gh [--model <model>]

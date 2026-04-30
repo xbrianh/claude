@@ -36,8 +36,7 @@ def build_rescue_prompt(state, log_tail, state_file_path, log_file_path,
     log_tail_safe = log_tail.replace("```", "` ` `")
 
     pipeline_paths = [
-        (f"~/.claude/skills/{kind}/", f"shell/python that drives the {kind} stages"),
-        ("~/.claude/skills/_bg/", "shared launcher, finish, set-stage, set-bail wrappers"),
+        ("~/.claude/gremlins/", "orchestrators, stages, state helpers, launcher — drives all gremlin kinds"),
     ]
     parent_state_dir = (
         os.path.join(_constants.STATE_ROOT, parent_id) if parent_id else ""
@@ -124,19 +123,18 @@ Parent (boss) id: {parent_id or '(none)'}
    could have continued.
    - **fixed**: you edited `state.json` (at `{state_file_path}`) or files inside
      the gremlin's worktree to resolve the failure; rerunning stage {stage} should
-     now succeed. **Do NOT edit pipeline source under `~/.claude/skills/`** —
+     now succeed. **Do NOT edit pipeline source under `~/.claude/gremlins/`** —
      those paths live outside the gremlin's worktree, so edits there cannot land
      in the PR diff, and may additionally be overwritten by future syncs from an
      upstream source repo. If the fix lives in pipeline source, choose
      `structural`.
    - **transient**: the failure was a flake (network, tool timeout, retriable
      infra) OR a fix has already landed elsewhere (e.g. in `main`, in a
-     `~/.claude/skills/` file outside the gremlin's worktree) that the chain's
+     `~/.claude/gremlins/` file outside the gremlin's worktree) that the chain's
      pre-fix base ref doesn't see. No change needed; rerunning the same stage
      as-is should succeed.
    - **structural**: the failure points at a real bug in the pipeline source
-     (`~/.claude/skills/<kind>/*.sh`, `~/.claude/skills/_bg/*.sh`, or the
-     associated python) or in a sibling artifact (e.g. a malformed child plan
+     (`~/.claude/gremlins/*.py`) or in a sibling artifact (e.g. a malformed child plan
      under the parent boss's state dir) that you recognize but cannot fix here.
      Use this when the remedy is "edit the pipeline" or "edit the child plan",
      not "tweak `state.json`". Articulate *what* in the pipeline / plan is wrong
@@ -174,7 +172,7 @@ Constraints:
 - Permitted edits: `state.json` at `{state_file_path}`{(", files inside the worktree at `" + workdir + "`") if workdir else ""}, the marker file at
   `{marker_path}` (you MUST write this — that's how the wrapper reads your
   verdict), and your scratch working directory.
-  Pipeline source under `~/.claude/skills/` is read-only for this rescue —
+  Pipeline source under `~/.claude/gremlins/` is read-only for this rescue —
   surface bugs there via `structural`.
 """
 
