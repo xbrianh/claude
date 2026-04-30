@@ -187,3 +187,92 @@ def sweep_stale_handoff_branches(handoff_branch: str, cwd: Optional[str] = None)
                 "(unique commits would be lost)\n"
             )
             sys.stderr.flush()
+
+
+def is_git_repo(path: str) -> bool:
+    """Return True if `path` is inside a git repository."""
+    r = subprocess.run(
+        ["git", "-C", path, "rev-parse", "--git-dir"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+    return r.returncode == 0
+
+
+def resolve_default_branch(project_root: str) -> str:
+    """Resolve origin's default branch via gh CLI. Raises RuntimeError on failure."""
+    try:
+        r = subprocess.run(
+            ["gh", "repo", "view", "--json", "defaultBranchRef",
+             "-q", ".defaultBranchRef.name"],
+            capture_output=True, text=True, cwd=project_root, timeout=30,
+        )
+    except FileNotFoundError:
+        raise RuntimeError("gh CLI not found on PATH")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("gh repo view timed out after 30s")
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RuntimeError(
+            f"gh repo view failed: {r.stderr.strip() or 'empty output'}"
+        )
+    return r.stdout.strip()
+
+
+def setup_worktree_branch(
+    project_root: str, gr_id: str, branch_prefix: str = "bg/localgremlin"
+) -> tuple:
+    """Add a named-branch worktree at HEAD. Returns (workdir_path, branch_name).
+
+    Raises RuntimeError on failure.
+    """
+    import tempfile as _tempfile
+    workdir = _tempfile.mkdtemp(prefix="aibg-localgremlin.")
+    os.rmdir(workdir)
+    branch = f"{branch_prefix}/{gr_id}"
+    r = _git(
+        ["worktree", "add", "-b", branch, workdir, "HEAD"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"git worktree add -b {branch!r} failed: {r.stderr.strip()}"
+        )
+    return workdir, branch
+
+
+def setup_detached_worktree(project_root: str, base_ref: str) -> str:
+    """Add a detached worktree at base_ref. Returns the worktree path.
+
+    Raises RuntimeError on failure.
+    """
+    import tempfile as _tempfile
+    workdir = _tempfile.mkdtemp(prefix="aibg-gremlin.")
+    os.rmdir(workdir)
+    r = _git(
+        ["worktree", "add", "--detach", workdir, base_ref],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"git worktree add --detach {base_ref!r} failed: {r.stderr.strip()}"
+        )
+    return workdir
+
+
+def setup_copy(project_root: str) -> str:
+    """Non-git fallback: copy project root into a fresh temp dir. Returns workdir path."""
+    import shutil as _shutil
+    import tempfile as _tempfile
+    workdir = _tempfile.mkdtemp(prefix="aibg-gremlin.")
+    _shutil.copytree(project_root, workdir, dirs_exist_ok=True)
+    return workdir
+
+
+def remove_worktree(project_root: str, workdir: str) -> None:
+    """Remove a git worktree and prune stale entries. Best-effort; never raises."""
+    try:
+        _git(["worktree", "remove", "--force", workdir],
+             cwd=project_root, capture_output=True, check=False)
+        _git(["worktree", "prune"],
+             cwd=project_root, capture_output=True, check=False)
+    except Exception:
+        pass

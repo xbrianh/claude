@@ -1,11 +1,11 @@
 ---
 name: bossgremlin
-description: Run the end-to-end chained gremlin workflow in the background by invoking ~/.claude/skills/_bg/launch.sh. Chains multiple child gremlins serially: the handoff agent decides what to implement next, each child runs plan→implement→review→address, and the boss lands each one before proceeding. The launcher returns immediately; you'll be notified when the chain finishes.
+description: Run the end-to-end chained gremlin workflow in the background by invoking `python -m gremlins.cli launch`. Chains multiple child gremlins serially: the handoff agent decides what to implement next, each child runs plan→implement→review→address, and the boss lands each one before proceeding. The launcher returns immediately; you'll be notified when the chain finishes.
 argument-hint: --plan <spec-path|issue-ref> --chain-kind local|gh [--model <model>]
-allowed-tools: Bash(~/.claude/skills/_bg/launch.sh:*)
+allowed-tools: Bash(python -m gremlins.cli launch:*)
 ---
 
-You are running the `bossgremlin` workflow **in the background**. The skill is a thin wrapper over `~/.claude/skills/_bg/launch.sh`, which:
+You are running the `bossgremlin` workflow **in the background**. The skill is a thin wrapper over `python -m gremlins.cli launch`, which:
 
 1. Creates an isolated git worktree (detached HEAD) of the current project.
 2. Spawns the real boss (`~/.claude/skills/bossgremlin/bossgremlin.py`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
@@ -27,7 +27,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `bossgremlin` kind argument:
 
 ```
-~/.claude/skills/_bg/launch.sh --description "<phrase>" bossgremlin --plan <spec-path|issue-ref> --chain-kind <local|gh> [--model <model>]
+python -m gremlins.cli launch --description "<phrase>" bossgremlin --plan <spec-path|issue-ref> --chain-kind <local|gh> [--model <model>]
 ```
 
 Flags:

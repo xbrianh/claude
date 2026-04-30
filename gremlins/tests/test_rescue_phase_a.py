@@ -216,16 +216,19 @@ def test_rescue_no_marker_records_diagnosis_no_marker(tmp_path, monkeypatch):
 
 
 def test_rescue_fixed_verdict_invokes_launcher_resume(tmp_path, monkeypatch):
-    """A ``fixed`` marker triggers ``launch.sh --resume <id>``.
+    """A ``fixed`` marker triggers ``launcher.resume(<id>)``.
 
-    Replaces the launcher with a recording stub so we don't actually fork a
+    Monkeypatches ``gremlins.launcher.resume`` so we don't actually fork a
     background pipeline; the test verifies the wrapper called it with the
-    right argv and reported relaunch_outcome=success.
+    right gremlin id and reported relaunch_outcome=success.
     """
     sh = setup_shell_env(tmp_path)
     state_dir = _make_failed_gremlin(sh.state_root, sh.repo)
 
-    record_file = _install_stub_launcher(sh.home)
+    resume_calls = []
+
+    import gremlins.launcher as _launcher_mod
+    monkeypatch.setattr(_launcher_mod, "resume", lambda gr_id: resume_calls.append(gr_id))
 
     sh.env["FAKE_CLAUDE_RESCUE_VERDICT"] = "fixed"
     sh.env["FAKE_CLAUDE_RESCUE_SUMMARY"] = "edited state.json"
@@ -238,10 +241,8 @@ def test_rescue_fixed_verdict_invokes_launcher_resume(tmp_path, monkeypatch):
     ok = gremlins_mod.do_rescue("victim-abcdef", headless=False)
     assert ok is True
 
-    recorded = record_file.read_text(encoding="utf-8").strip().splitlines()
-    assert len(recorded) == 1, recorded
-    assert "--resume" in recorded[0]
-    assert "victim-abcdef" in recorded[0]
+    assert len(resume_calls) == 1, resume_calls
+    assert resume_calls[0] == "victim-abcdef"
 
 
 def test_rescue_headless_excluded_class_refused(tmp_path, monkeypatch):
