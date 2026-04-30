@@ -1,12 +1,10 @@
 # `gremlins/`
 
-Shared plan / implement / review / address machinery extracted from
-`skills/{localgremlin,ghgremlin,bossgremlin}/`. The skill scripts under
-`skills/` are thin shims that exec into `python -m gremlins.cli`; this
-package owns the actual orchestration. [`DESIGN.md`](DESIGN.md) is the
-binding migration spec — load it for marker protocol, ghgremlin
-impl-handoff branch lifecycle, launcher contract, and per-phase rollout
-history.
+Orchestration package for background gremlins. Owns the plan / implement /
+review / address pipelines (`local`, `gh`, `boss`), the fleet manager
+(`fleet/`), the chain-step decision agent (`handoff.py`), and the launcher
+(`launcher.py`). [`DESIGN.md`](DESIGN.md) documents the marker protocol,
+ghgremlin branch lifecycle, launcher contract, and phase rollout history.
 
 ## Module layout
 
@@ -15,28 +13,28 @@ history.
 - `state.py` — session-dir resolution, `set_stage` / `emit_bail` / `patch_state` / `check_bail`.
 - `git.py` — `in_git_repo`, `git_head`, branch / worktree helpers.
 - `gh_utils.py` — `gh` CLI wrappers and stream-json URL extractors used by the gh orchestrator.
-- `fleet/` — fleet manager package: status listing + `stop` / `rescue` / `land` / `close` / `rm` / `log` subcommands. Implements the logic behind shim entrypoint `skills/gremlins/gremlins.py`. See [`fleet/CLAUDE.md`](fleet/CLAUDE.md) for the per-module breakdown.
-- `handoff.py` — chain-step decision agent (next-plan / chain-done / bail). Implements the logic behind shim entrypoint `skills/handoff/handoff.py`.
+- `fleet/` — fleet manager package: status listing + `stop` / `rescue` / `land` / `close` / `rm` / `log` subcommands. See [`fleet/CLAUDE.md`](fleet/CLAUDE.md) for the per-module breakdown.
+- `handoff.py` — chain-step decision agent (next-plan / chain-done / bail).
 - `clients/claude.py` — `ClaudeClient` Protocol + `SubprocessClaudeClient` (production).
 - `clients/fake.py` — `FakeClaudeClient` recording test double; replays canned stream-json from fixtures keyed by `label`.
 - `stages/` — per-stage bodies: `plan`, `implement`, `review_code`, `address_code`, `commit_pr`, `ghreview`, `ghaddress`, `wait_copilot`. (The `request-copilot` stage body is inlined as a closure in `orchestrators/gh.py`.)
-- `orchestrators/local.py` — `local_main`, `review_main`, `address_main`. Implements the logic behind shim entrypoint `skills/localgremlin/localgremlin.py`.
-- `orchestrators/gh.py` — `gh_main`. Implements the logic behind shim entrypoint `skills/ghgremlin/ghgremlin.sh`.
-- `orchestrators/boss.py` — `boss_main`. Implements the logic behind shim entrypoint `skills/bossgremlin/bossgremlin.py`. Subprocesses out to `python -m gremlins.cli handoff` and `python -m gremlins.cli fleet {stop,land,rescue}` between child gremlins.
+- `orchestrators/local.py` — `local_main`, `review_main`, `address_main`.
+- `orchestrators/gh.py` — `gh_main`. Drives the gh pipeline.
+- `orchestrators/boss.py` — `boss_main`. Subprocesses out to `python -m gremlins.cli handoff` and `python -m gremlins.cli fleet {stop,land,rescue}` between child gremlins.
 - `prompts/` — externalized prompt templates (plan, implement, review lenses, etc).
 - `tests/` — pytest suite; `claude` is always faked, but some tests still run local `git` subprocesses and typically stub `gh` at the `subprocess.run` level.
 
 ## Entry points
 
-| Subcommand | Module | Replaces |
-|---|---|---|
-| `local` | `orchestrators.local.local_main` | `skills/localgremlin/localgremlin.py` |
-| `review` | `orchestrators.local.review_main` | `localreview.py` |
-| `address` | `orchestrators.local.address_main` | `localaddress.py` |
-| `gh` | `orchestrators.gh.gh_main` | `skills/ghgremlin/ghgremlin.sh` |
-| `boss` | `orchestrators.boss.boss_main` | `skills/bossgremlin/bossgremlin.py` |
-| `fleet` | `fleet.main` | `skills/gremlins/gremlins.py` |
-| `handoff` | `handoff.main` | `skills/handoff/handoff.py` |
+| Subcommand | Module |
+|---|---|
+| `local` | `orchestrators.local.local_main` |
+| `review` | `orchestrators.local.review_main` |
+| `address` | `orchestrators.local.address_main` |
+| `gh` | `orchestrators.gh.gh_main` |
+| `boss` | `orchestrators.boss.boss_main` |
+| `fleet` | `fleet.main` |
+| `handoff` | `handoff.main` |
 
 ## Testability seam: `ClaudeClient`
 
@@ -62,8 +60,7 @@ protocol). Renaming any of them silently breaks cross-process
 consumers. Source of truth: bail-class constants live in
 [`state.py`](state.py); local / gh stage-name vocab is defined and
 validated in the orchestrators; marker-protocol bail reasons live in
-[`DESIGN.md`](DESIGN.md) (§Marker-protocol bail reasons) and the
-`skills/_bg/` scripts.
+[`DESIGN.md`](DESIGN.md) (§Marker-protocol bail reasons).
 
 - **Bail classes** (`state.json.bail_class`): `reviewer_requested_changes`, `security`, `secrets`, `other`.
 - **Local stage names**: `plan`, `implement`, `review-code`, `address-code`.
@@ -75,10 +72,6 @@ validated in the orchestrators; marker-protocol bail reasons live in
 `state.set_stage` and `state.emit_bail` write to `state.json` atomically
 in pure Python via `patch_state`. Both helpers no-op without `GR_ID` and
 never raise — stage / bail bookkeeping must not crash a running gremlin.
-The `~/.claude/skills/_bg/set-stage.sh` and `set-bail.sh` scripts are still
-present for non-gremlins writers (`session-summary.sh` hook, which sources
-`liveness.sh` for its at-startup gremlin summary), but `state.py` no longer
-shells out to them.
 
 ## Tests
 

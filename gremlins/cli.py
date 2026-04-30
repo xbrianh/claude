@@ -8,17 +8,15 @@ The first positional argument selects the subcommand:
 - ``gh``      — full gh-issue-driven pipeline (Phase 3)
 - ``boss``    — chained serial workflow driven by a top-level spec (Phase 4)
 - ``fleet``   — fleet-manager subcommands (status / stop / rescue / land /
-                close / rm / log) — was ``skills/gremlins/gremlins.py``
-- ``handoff`` — chain-step decision agent (next-plan / chain-done / bail) —
-                was ``skills/handoff/handoff.py``
+                close / rm / log)
+- ``handoff`` — chain-step decision agent (next-plan / chain-done / bail)
 - ``launch``  — launch a new background gremlin (replaces launch.sh forward path)
 - ``resume``  — re-spawn an existing gremlin from its recorded stage (replaces
                 launch.sh --resume)
 - ``bail``    — mark the running gremlin as bailed (reads GR_ID from env)
 - ``_run-pipeline`` — internal spawn boundary; not for direct human use
 
-Remaining argv is forwarded to the chosen orchestrator entry point with
-its own argparse contract preserved byte-stable from the old skill scripts.
+Remaining argv is forwarded to the chosen orchestrator entry point.
 """
 
 from __future__ import annotations

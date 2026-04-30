@@ -1,6 +1,6 @@
 """Orchestrator entry point for the gh pipeline.
 
-Ports skills/ghgremlin/ghgremlin.sh stage by stage.
+Drives the gh pipeline: plan → implement → commit-pr → request-copilot → ghreview → wait-copilot → ghaddress.
 
 Stage sequence (names byte-stable for --resume-from):
   plan → implement → commit-pr → request-copilot → ghreview → wait-copilot → ghaddress

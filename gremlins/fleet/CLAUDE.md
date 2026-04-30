@@ -10,7 +10,7 @@ Fleet manager package for background gremlins. Reads every `${XDG_STATE_HOME:-$H
 | `state.py` | `iso_to_epoch`, `humanize_age`, `display_id`, `render_sub_stage`, `liveness_of_state_file`, `iter_state_files`, `load_state`, `kind_short`, `git_toplevel` |
 | `duration.py` | `parse_duration` |
 | `render.py` | `build_row`, `print_table` |
-| `resolve.py` | `GREMLIN_STAGES`, `GREMLIN_SCRIPTS`, `resolve_gremlin` |
+| `resolve.py` | `GREMLIN_STAGES`, `resolve_gremlin` |
 | `stop.py` | `do_stop` |
 | `rescue.py` | `build_rescue_prompt`, `_atomic_patch_state`, `_write_bail`, `write_rescue_report`, `_read_rescue_marker`, `_run_headless_diagnosis`, `do_rescue` |
 | `log.py` | `do_log` |
