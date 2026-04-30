@@ -657,3 +657,114 @@ def test_resume_from_ghreview(tmp_path, monkeypatch):
     assert client.calls == []
     # ghreview was called with the correct PR URL
     assert ghreview_called == ["https://github.com/owner/repo/pull/200"]
+
+
+def test_plan_file_path_includes_plan_title_cost_in_total(tmp_path, monkeypatch):
+    """gh_main with --plan <file> aggregates plan-title's cost into the persisted total_cost_usd.
+
+    Regression guard for #157 (missing plan-title cost) and #164 (plan-title
+    moved to stream-json mode for cost capture). Reads total_cost_usd from the
+    on-disk state.json to verify the persistence step at gh.py:471-473.
+    """
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    plan_file = tmp_path / "my-plan.md"
+    plan_file.write_text("# Feature\nDo the thing.\n")
+
+    session_dir, state_file = _patch_common(monkeypatch, tmp_path)
+
+    # Override patch_state so it actually writes fields to state_file instead of no-op.
+    def writing_patch_state(_delete=(), **kw):
+        data = json.loads(state_file.read_text())
+        for key in _delete:
+            data.pop(key, None)
+        data.update(kw)
+        state_file.write_text(json.dumps(data))
+
+    monkeypatch.setattr("gremlins.orchestrators.gh.patch_state", writing_patch_state)
+
+    def fake_gh_run(cmd, *args, **kwargs):
+        prog = cmd[0] if cmd else ""
+        if prog != "gh":
+            return _real_subprocess_run(cmd, *args, **kwargs)
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "issue" and "create" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="https://github.com/owner/repo/issues/42\n", stderr=""
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_gh_run)
+
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_ghreview_stage", lambda **kw: None)
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_wait_copilot_stage", lambda **kw: "APPROVED")
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_request_copilot_stage", lambda **kw: None)
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_ghaddress_stage", lambda **kw: None)
+
+    # Each fixture carries a distinct non-zero cost so a regression that drops
+    # any one stage shows up as the total being short by exactly that amount.
+    fixtures = {
+        "plan-title": [
+            {"type": "system", "subtype": "init", "session_id": "session-title-1"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "Feature: Do the thing",
+                "total_cost_usd": 0.13,
+            },
+        ],
+        "implement": [
+            {"type": "system", "subtype": "init", "session_id": "session-impl-1"},
+            {"type": "result", "subtype": "success", "total_cost_usd": 0.07},
+        ],
+        "commit-pr": [
+            {"type": "system", "subtype": "init", "session_id": "session-commit-1"},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tu-pr-1",
+                            "name": "Bash",
+                            "input": {"command": "gh pr create --base main"},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu-pr-1",
+                            "content": "https://github.com/owner/repo/pull/101",
+                        }
+                    ]
+                },
+            },
+            {"type": "result", "subtype": "success", "total_cost_usd": 0.05},
+        ],
+    }
+
+    client = _CommittingClient(git_dir=tmp_path, fixtures=fixtures)
+    result = gh_main(["--plan", str(plan_file)], client=client)
+    assert result == 0
+
+    labels = [c.label for c in client.calls]
+    assert "plan-title" in labels
+    assert "implement" in labels
+    assert "commit-pr" in labels
+
+    # Read on-disk state.json — verifies both the accumulation and the persistence step.
+    state = json.loads(state_file.read_text())
+    assert "total_cost_usd" in state, "total_cost_usd was not persisted to state.json"
+
+    total = state["total_cost_usd"]
+    expected = 0.13 + 0.07 + 0.05
+    assert total == pytest.approx(expected), (
+        f"expected total {expected:.2f}, got {total:.4f}; "
+        f"a regression dropping plan-title cost (0.13) would show total ≈ {expected - 0.13:.2f}"
+    )
