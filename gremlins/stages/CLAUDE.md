@@ -11,14 +11,13 @@ sequencing logic of their own.
   `kind='gh'`). For gh: enforces the empty-implementation invariant,
   classifies the outcome (`HeadAdvanced` / `DirtyOnly` / `EmptyImpl` /
   `DivergentHead`), creates the impl-handoff branch, and returns an
-  `ImplStageResult` carrying `session_id` so commit-pr can resume the same
-  claude session.
+  `ImplStageResult` with the pre-impl state and classified outcome.
 - `review_code.py` — `run_review_code_stage`. Local pipeline only
   (single-detail-reviewer post-collapse).
 - `address_code.py` — `run_address_code_stage`. Local pipeline only.
-- `commit_pr.py` — `run_commit_pr_stage`. Gh pipeline. Resumes the
-  implement session (`claude --resume <session_id>`) so the same agent
-  that wrote the code creates the branch and opens the PR.
+- `commit_pr.py` — `run_commit_pr_stage`. Gh pipeline. Opens a fresh
+  claude session against the impl-handoff branch diff; no session_id
+  dependency, so `--resume-from commit-pr` works cleanly.
 - `ghreview.py` — `run_ghreview_stage`. Thin wrapper around `/ghreview
   <pr_url>` plus a `check_bail` call.
 - `ghaddress.py` — `run_ghaddress_stage`. Thin wrapper around `/ghaddress

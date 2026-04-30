@@ -3,12 +3,10 @@
 For ``kind='local'``: renders ``implement_local.md``, runs claude, enforces the
 empty-implementation invariant (spec: an empty impl must never flow into review).
 
-For ``kind='gh'``: renders ``implement_gh.md``, runs claude with
-``capture_events=True`` (so the caller gets the session_id for commit-pr's
-``--resume``), then runs the impl-handoff branch lifecycle from
-``gremlins/git.py``.  Returns an ``ImplStageResult`` with session_id, the
-pre-impl state snapshot, and the classified outcome.  Raises on
-``DivergentHead`` or ``EmptyImpl``.
+For ``kind='gh'``: renders ``implement_gh.md``, runs claude, then runs the
+impl-handoff branch lifecycle from ``gremlins/git.py``.  Returns an
+``ImplStageResult`` with the pre-impl state snapshot and classified outcome.
+Raises on ``DivergentHead`` or ``EmptyImpl``.
 """
 
 from __future__ import annotations
@@ -20,7 +18,7 @@ import subprocess
 import sys
 from typing import Optional
 
-from ..clients.claude import ClaudeClient, CompletedRun
+from ..clients.claude import ClaudeClient
 from ..git import (
     DirtyOnly,
     DivergentHead,
@@ -43,7 +41,6 @@ PROMPT_GH_PATH = pathlib.Path(__file__).resolve().parent.parent / "prompts" / "i
 @dataclasses.dataclass
 class ImplStageResult:
     """Returned by ``run_implement_stage`` when ``kind='gh'``."""
-    session_id: Optional[str]
     pre_state: PreImplState
     outcome: ImplOutcome
     handoff_branch: str  # empty string when outcome is DirtyOnly (no branch created)
@@ -193,7 +190,7 @@ def _run_implement_gh(
 
     pre_state = record_pre_impl_state(cwd=cwd)
 
-    completed: CompletedRun = client.run(
+    client.run(
         prompt,
         label="implement",
         model=impl_model,
@@ -212,12 +209,6 @@ def _run_implement_gh(
             "committed work to hand off"
         )
 
-    if completed.session_id is None:
-        raise RuntimeError(
-            "implement stage did not produce a session_id; "
-            "commit-pr cannot resume the session"
-        )
-
     handoff_branch = ""
     if isinstance(outcome, HeadAdvanced):
         handoff_branch = create_handoff_branch(pre_state, cwd=cwd)
@@ -232,7 +223,6 @@ def _run_implement_gh(
         sys.stdout.flush()
 
     return ImplStageResult(
-        session_id=completed.session_id,
         pre_state=pre_state,
         outcome=outcome,
         handoff_branch=handoff_branch,
