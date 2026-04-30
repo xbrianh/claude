@@ -310,22 +310,18 @@ def test_launch_concurrent_no_collision(lenv):
         _wait_for_finished(_gremlins_state_root(lenv) / gr_id, timeout=60)
 
 
-def test_launch_child_inherits_project_root(lenv):
-    """--parent causes the child to inherit project_root from the parent's state.json."""
+def test_launch_explicit_project_root(lenv):
+    """Explicit project_root param is used; parent_id is recorded in state.json."""
     launcher = _launcher()
     state_root = _gremlins_state_root(lenv)
     parent_id = "fake-parent-aabbcc"
-    parent_dir = state_root / parent_id
-    parent_dir.mkdir(parents=True)
-    (parent_dir / "state.json").write_text(
-        json.dumps({"id": parent_id, "project_root": str(lenv.repo)}),
-        encoding="utf-8",
-    )
     gr_id = launcher.launch(
-        "localgremlin", instructions="child test", parent_id=parent_id
+        "localgremlin", instructions="child test",
+        parent_id=parent_id, project_root=str(lenv.repo),
     )
     state = _read_state(state_root / gr_id)
     assert state["project_root"] == str(lenv.repo)
+    assert state["parent_id"] == parent_id
     _wait_for_finished(state_root / gr_id, timeout=60)
 
 
@@ -500,6 +496,35 @@ def test_launch_ghgremlin_state_layout(lenv_with_gh):
 # ---------------------------------------------------------------------------
 # PYTHONSAFEPATH worktree-rename regression
 # ---------------------------------------------------------------------------
+
+def test_launch_passes_base_ref_to_worktree_setup(lenv, monkeypatch):
+    """launch(base_ref=<sha>) calls setup_worktree_branch with base_ref=<sha>."""
+    from gremlins import git as git_mod
+
+    captured = {}
+    real_setup = git_mod.setup_worktree_branch
+
+    def fake_setup(project_root, gr_id, base_ref="HEAD", branch_prefix="bg/localgremlin"):
+        captured["base_ref"] = base_ref
+        return real_setup(project_root, gr_id, base_ref=base_ref, branch_prefix=branch_prefix)
+
+    monkeypatch.setattr(git_mod, "setup_worktree_branch", fake_setup)
+
+    launcher = _launcher()
+    # Use the actual HEAD SHA so worktree add succeeds.
+    r = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True, text=True, cwd=str(lenv.repo), check=True,
+    )
+    head_sha = r.stdout.strip()
+
+    gr_id = launcher.launch("localgremlin", instructions="base_ref test", base_ref=head_sha)
+    state_dir = _gremlins_state_root(lenv) / gr_id
+    _wait_for_finished(state_dir, timeout=60)
+
+    assert captured.get("base_ref") == head_sha, \
+        f"expected base_ref={head_sha!r}, got {captured.get('base_ref')!r}"
+
 
 def test_pipeline_survives_worktree_pipeline_rename(lenv, monkeypatch):
     """Regression: pipeline completes even when implement renames worktree's gremlins/.

@@ -2,7 +2,8 @@
 
 Public API:
     launch(kind, *, instructions=None, plan=None, description=None,
-           parent_id=None, pipeline_args=()) -> str
+           parent_id=None, project_root=None, base_ref="HEAD",
+           pipeline_args=()) -> str
     resume(gr_id) -> None
     write_terminal_state(gr_id, exit_code) -> None
 """
@@ -94,29 +95,6 @@ def _resolve_description_and_slug(
     return "", False, "gremlin"
 
 
-def _resolve_project_root(parent_id: Optional[str]) -> str:
-    """Return project root. Inherits from parent state when available."""
-    if parent_id:
-        parent_sf = _state_root() / parent_id / "state.json"
-        if parent_sf.is_file():
-            try:
-                data = json.loads(parent_sf.read_text(encoding="utf-8"))
-                pr = data.get("project_root", "")
-                if pr and os.path.isdir(pr):
-                    return pr
-            except Exception:
-                pass
-
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, check=False,
-    )
-    if r.returncode == 0 and r.stdout.strip():
-        return r.stdout.strip()
-
-    return os.getcwd()
-
-
 def _write_state(state_dir: pathlib.Path, data: dict) -> None:
     """Atomically write state.json."""
     sf = state_dir / "state.json"
@@ -203,6 +181,8 @@ def launch(
     plan: Optional[str] = None,
     description: Optional[str] = None,
     parent_id: Optional[str] = None,
+    project_root: Optional[str] = None,
+    base_ref: str = "HEAD",
     pipeline_args: tuple = (),
 ) -> str:
     """Set up state dir + worktree, spawn the pipeline detached, return gremlin id.
@@ -240,7 +220,15 @@ def launch(
     rand_hex = secrets.token_hex(3)
     gr_id = f"{slug}-{rand_hex}"
 
-    project_root = _resolve_project_root(parent_id)
+    if project_root is None:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            project_root = r.stdout.strip()
+        else:
+            project_root = os.getcwd()
 
     state_dir = _state_root() / gr_id
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -260,7 +248,7 @@ def launch(
     if _git_mod.is_git_repo(project_root):
         if kind == "localgremlin":
             setup_kind = "worktree-branch"
-            workdir, branch = _git_mod.setup_worktree_branch(project_root, gr_id)
+            workdir, branch = _git_mod.setup_worktree_branch(project_root, gr_id, base_ref=base_ref)
         elif kind == "ghgremlin":
             default_branch = _git_mod.resolve_default_branch(project_root)
             refspec = f"refs/heads/{default_branch}:refs/remotes/origin/{default_branch}"
@@ -277,7 +265,7 @@ def launch(
             workdir = _git_mod.setup_detached_worktree(project_root, worktree_base)
         else:  # bossgremlin
             setup_kind = "worktree"
-            workdir = _git_mod.setup_detached_worktree(project_root, "HEAD")
+            workdir = _git_mod.setup_detached_worktree(project_root, base_ref)
     else:
         setup_kind = "copy"
         workdir = _git_mod.setup_copy(project_root)

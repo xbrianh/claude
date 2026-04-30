@@ -28,6 +28,7 @@ from typing import List, Tuple
 
 from ..gh_utils import get_repo, parse_issue_ref, view_issue
 from ..state import patch_state, set_stage
+from .. import git as _git_mod
 
 STATE_ROOT = os.path.join(
     os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")),
@@ -347,9 +348,14 @@ def launch_child(gr_id: str, launch_kind: str, child_plan: str) -> str:
     """Launch a child gremlin via the Python launcher. Returns child gremlin ID."""
     from ..launcher import launch as _launch
 
-    log(f"launching child ({launch_kind}): {child_plan}")
+    gremlin_state = load_json(os.path.join(STATE_ROOT, gr_id, "state.json"))
+    project_root = gremlin_state.get("project_root") or None
+    base_ref = gremlin_state.get("current_head") or "HEAD"
+
+    log(f"launching child ({launch_kind}): {child_plan}, base={base_ref[:12]}")
     try:
-        child_id = _launch(launch_kind, plan=child_plan, parent_id=gr_id)
+        child_id = _launch(launch_kind, plan=child_plan, parent_id=gr_id,
+                           project_root=project_root, base_ref=base_ref)
     except (ValueError, RuntimeError) as exc:
         die(f"launcher failed: {exc}")
 
@@ -657,6 +663,12 @@ def boss_main(argv: List[str]) -> int:
             issue_url=issue_url,
             issue_num=issue_num,
         )
+        # Record initial boss HEAD so local children branch from the right commit.
+        if chain_kind == "local" and boss_workdir and os.path.isdir(boss_workdir):
+            initial_head = _git_mod.git_head_of_workdir(boss_workdir)
+            if not initial_head:
+                die(f"failed to resolve HEAD for boss workdir: {boss_workdir!r}")
+            patch_state(current_head=initial_head)
     else:
         boss_state = load_boss_state(state_dir)
         log(f"resuming chain: kind={chain_kind}, completed children: {len(boss_state['children'])}")
@@ -790,6 +802,15 @@ def boss_main(argv: List[str]) -> int:
                         die(f"boss workdir not usable for local land: {boss_workdir!r}")
                     into_dir = boss_workdir
                 if land_child(current_child_id, into_dir=into_dir):
+                    if chain_kind == "local" and boss_workdir and os.path.isdir(boss_workdir):
+                        new_head = _git_mod.git_head_of_workdir(boss_workdir)
+                        if not new_head:
+                            die(
+                                f"child {current_child_id} landed locally, but could not resolve "
+                                f"HEAD for boss workdir {boss_workdir!r}; refusing to continue "
+                                f"with a stale current_head."
+                            )
+                        patch_state(current_head=new_head)
                     outcome = "rescued-then-landed" if was_rescued else "landed"
                     log(f"child {current_child_id} {outcome}")
                     boss_state["children"].append({"id": current_child_id, "outcome": outcome})

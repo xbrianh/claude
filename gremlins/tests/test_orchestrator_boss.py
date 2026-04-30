@@ -7,6 +7,7 @@ import pathlib
 
 import pytest
 
+import gremlins.git as git_mod
 import gremlins.orchestrators.boss as boss_mod
 from gremlins.orchestrators.boss import (
     _resolve_plan_source,
@@ -55,6 +56,9 @@ def _common_boss_patches(monkeypatch, tmp_path, gr_id):
     monkeypatch.setattr(boss_mod, "set_stage", lambda *a, **kw: None)
     monkeypatch.setattr(boss_mod, "get_head_ref", lambda p: "abc123def456abc1")
     monkeypatch.setattr(boss_mod, "get_current_branch", lambda p: "main")
+    # Stub git_head_of_workdir so tests don't need a real git worktree.
+    # Individual tests that care about specific SHA values can override this.
+    monkeypatch.setattr(git_mod, "git_head_of_workdir", lambda w: "aaaa1111bbbb2222cccc3333dddd4444eeee5555")
 
 
 # ---------------------------------------------------------------------------
@@ -1104,3 +1108,109 @@ def test_land_child_no_into_dir_for_gh_chain(tmp_path, monkeypatch):
     assert len(land_calls) == 1
     _, landed_into = land_calls[0]
     assert landed_into == ""
+
+
+# ---------------------------------------------------------------------------
+# Boss base-ref: current_head tracking and child launch
+# ---------------------------------------------------------------------------
+
+def test_boss_launches_child_against_current_head(tmp_path, monkeypatch):
+    """launch_child passes current_head from state.json as base_ref to launcher.launch."""
+    import gremlins.launcher as launcher_mod
+
+    gr_id = "test-boss-basref-aa1122"
+    state_dir = tmp_path / gr_id
+    state_dir.mkdir()
+    expected_sha = "deadbeef12345678deadbeef12345678deadbeef"
+    project_root_path = str(tmp_path / "repo")
+    (state_dir / "state.json").write_text(json.dumps({
+        "id": gr_id,
+        "project_root": project_root_path,
+        "current_head": expected_sha,
+    }))
+
+    captured = {}
+
+    def fake_launch(kind, *, plan=None, parent_id=None, project_root=None,
+                    base_ref="HEAD", pipeline_args=(), **kw):
+        captured["base_ref"] = base_ref
+        captured["project_root"] = project_root
+        return "child-abc-123456"
+
+    monkeypatch.setattr(boss_mod, "STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(launcher_mod, "launch", fake_launch)
+
+    result = boss_mod.launch_child(gr_id, "localgremlin", "/tmp/child-plan.md")
+
+    assert result == "child-abc-123456"
+    assert captured["base_ref"] == expected_sha
+    assert captured["project_root"] == project_root_path
+
+
+def test_boss_records_current_head_after_land(tmp_path, monkeypatch):
+    """After land_child returns True, patch_state is called with the boss worktree's new HEAD."""
+    gr_id = "test-boss-head-bb2233"
+    state_dir, project_root, workdir = _make_gremlin_state(tmp_path, gr_id)
+    _common_boss_patches(monkeypatch, tmp_path, gr_id)
+
+    spec = tmp_path / "spec.md"
+    spec.write_text("# Spec\n")
+    child_plan = tmp_path / "child-plan.md"
+    child_plan.write_text("# Child plan\n")
+
+    initial_head = "inithead1234567890123456789012345678ab"
+    expected_new_head = "newhead12345678901234567890abcdef123456"
+    head_sequence = iter([initial_head, expected_new_head])
+    monkeypatch.setattr(git_mod, "git_head_of_workdir", lambda w: next(head_sequence))
+
+    patch_calls = []
+    monkeypatch.setattr(boss_mod, "patch_state", lambda **kw: patch_calls.append(kw))
+
+    handoff_results = iter([
+        ("next-plan", {"exit_state": "next-plan", "child_plan": str(child_plan), "operator_followups": []}),
+        ("chain-done", {"exit_state": "chain-done", "operator_followups": []}),
+    ])
+
+    def fake_run_handoff(gr_id, state_dir, boss_state, project_root, boss_workdir, model):
+        exit_state, sig = next(handoff_results)
+        n = boss_state["handoff_count"] + 1
+        out_path = os.path.join(state_dir, f"handoff-{n:03d}.md")
+        pathlib.Path(out_path).write_text(f"# Handoff {n}\n")
+        boss_state["handoff_count"] = n
+        boss_state["current_plan"] = out_path
+        boss_state["operator_followups"] = sig.get("operator_followups", [])
+        boss_state["handoff_records"].append({
+            "timestamp": "2026-01-01T00:00:00Z", "n": n,
+            "plan_in": boss_state["spec_path"], "plan_out": out_path,
+            "signal_file": "", "exit_state": exit_state,
+            "child_plan": sig.get("child_plan"), "bail_reason": None,
+            "operator_followups": sig.get("operator_followups", []),
+        })
+        return exit_state, sig
+
+    def fake_launch_child(gr_id, launch_kind, child_plan_path):
+        child_id = "child-land-test-cc4455"
+        child_dir = tmp_path / child_id
+        child_dir.mkdir(exist_ok=True)
+        (child_dir / "state.json").write_text(json.dumps({"exit_code": 0}))
+        (child_dir / "finished").write_text("")
+        return child_id
+
+    monkeypatch.setattr(boss_mod, "run_handoff", fake_run_handoff)
+    monkeypatch.setattr(boss_mod, "launch_child", fake_launch_child)
+    monkeypatch.setattr(boss_mod, "land_child", lambda cid, into_dir="": True)
+
+    result = boss_main(["--plan", str(spec), "--chain-kind", "local"])
+    assert result == 0
+
+    current_head_calls = [c for c in patch_calls if "current_head" in c]
+    assert len(current_head_calls) == 2, (
+        f"expected exactly 2 patch_state(current_head=...) calls "
+        f"(chain-start + post-land), got: {current_head_calls}"
+    )
+    assert current_head_calls[0]["current_head"] == initial_head, (
+        f"chain-start current_head should be {initial_head!r}, got {current_head_calls[0]!r}"
+    )
+    assert current_head_calls[1]["current_head"] == expected_new_head, (
+        f"post-land current_head should be {expected_new_head!r}, got {current_head_calls[1]!r}"
+    )
