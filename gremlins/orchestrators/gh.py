@@ -26,6 +26,7 @@ from typing import Dict, List, Optional
 
 from ..clients.claude import ClaudeClient, SubprocessClaudeClient
 from ..gh_utils import extract_gh_url, get_repo, parse_issue_ref, view_issue
+from ..git import DirtyOnly, HeadAdvanced
 from ..runner import install_signal_handlers, run_stages
 from ..stages.commit_pr import run_commit_pr_stage
 from ..stages.ghaddress import run_ghaddress_stage
@@ -90,15 +91,6 @@ def _parse_gh_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--model", dest="model", default=None)
     parser.add_argument("instructions", nargs="*")
     args = parser.parse_args(argv)
-
-    # --resume-from commit-pr: rewind to implement (IMPL_SESSION not persisted)
-    if args.resume_from == "commit-pr":
-        sys.stderr.write(
-            "    note: --resume-from commit-pr requires IMPL_SESSION which isn't "
-            "persisted; rewinding to implement\n"
-        )
-        sys.stderr.flush()
-        args.resume_from = "implement"
 
     if args.resume_from is not None and args.resume_from not in VALID_STAGES:
         die(
@@ -399,19 +391,49 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
             issue_num=issue_num,
         )
         impl_result_holder["result"] = result
+        # Persist for commit-pr resume: base_ref and handoff branch are all
+        # that's needed to reconstruct the diff and outcome on a fresh process.
+        patch_state(
+            impl_handoff_branch=result.handoff_branch,
+            impl_base_ref=result.pre_state.head,
+        )
 
     def stage_commit_pr() -> None:
         set_stage("commit-pr")
         print("==> [2b/6] committing + opening PR", flush=True)
-        result: ImplStageResult = impl_result_holder["result"]  # type: ignore[assignment]
+
+        if "result" in impl_result_holder:
+            result: ImplStageResult = impl_result_holder["result"]  # type: ignore[assignment]
+            impl_outcome = result.outcome
+            impl_handoff_branch = result.handoff_branch
+            base_ref = result.pre_state.head
+        else:
+            # Resuming at commit-pr: reconstruct from state.json
+            impl_handoff_branch = _read_state_field(state_file, "impl_handoff_branch")
+            base_ref = _read_state_field(state_file, "impl_base_ref")
+            if not base_ref:
+                die(
+                    "--resume-from commit-pr: no impl_base_ref in state.json "
+                    "(rewind to implement?)"
+                )
+            if impl_handoff_branch:
+                count_r = subprocess.run(
+                    ["git", "rev-list", "--count", f"{base_ref}..{impl_handoff_branch}"],
+                    capture_output=True, text=True, check=False,
+                )
+                commit_count = int(count_r.stdout.strip() or "0")
+                impl_outcome = HeadAdvanced(commit_count=commit_count)
+            else:
+                impl_outcome = DirtyOnly()
+
         pr_url = run_commit_pr_stage(
             client=client,
             model=model,
-            impl_session_id=result.session_id,
-            pre_state=result.pre_state,
-            outcome=result.outcome,
-            handoff_branch=result.handoff_branch,
-            issue_num=issue_num,
+            impl_outcome=impl_outcome,
+            impl_handoff_branch=impl_handoff_branch,
+            base_ref=base_ref,
+            issue_url=issue_url,
+            cwd=None,
             session_dir=session_dir,
         )
         pr_url_holder["url"] = pr_url

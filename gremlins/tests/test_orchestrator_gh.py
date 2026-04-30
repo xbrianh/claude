@@ -312,11 +312,11 @@ def test_parse_model():
     assert args.model == "claude-opus-4-7"
 
 
-def test_parse_resume_from_commit_pr_rewinds(capsys):
+def test_parse_resume_from_commit_pr(capsys):
     args = _parse_gh_args(["--plan", "42", "--resume-from", "commit-pr"])
-    assert args.resume_from == "implement"
+    assert args.resume_from == "commit-pr"
     captured = capsys.readouterr()
-    assert "rewinding to implement" in captured.err
+    assert "rewinding" not in captured.err
 
 
 def test_parse_plan_and_instructions_mutual_exclusion():
@@ -777,3 +777,76 @@ def test_plan_file_path_includes_plan_title_cost_in_total(tmp_path, monkeypatch)
         f"expected total {expected:.2f}, got {total:.4f}; "
         f"a regression dropping plan-title cost (0.13) would show total ≈ {expected - 0.13:.2f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: --resume-from commit-pr must not re-run implement
+# ---------------------------------------------------------------------------
+
+def test_resume_from_commit_pr_skips_implement(tmp_path, monkeypatch):
+    """--resume-from commit-pr picks up at commit-pr without re-running implement.
+
+    Regression guard for the bug where the orchestrator silently rewound
+    commit-pr → implement, which caused an EmptyImpl loop when the
+    impl-handoff branch was already present.
+    """
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    # Simulate a completed implement stage: one commit above the init commit.
+    (tmp_path / "impl.txt").write_text("impl content\n")
+    subprocess.run(["git", "add", "impl.txt"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: add impl.txt"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+
+    base_ref = subprocess.run(
+        ["git", "rev-parse", "HEAD~1"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    # Create the impl-handoff branch at the impl commit.
+    handoff_branch = "ghgremlin-impl-handoff-9999"
+    subprocess.run(["git", "branch", handoff_branch], cwd=tmp_path, check=True, capture_output=True)
+
+    session_dir, state_file = _patch_common(monkeypatch, tmp_path)
+
+    import gremlins.orchestrators.gh as _gh_mod
+
+    def _fake_read(sf, field):
+        if field == "issue_url":
+            return "https://github.com/owner/repo/issues/42"
+        if field == "issue_num":
+            return "42"
+        if field == "pr_url":
+            return ""
+        if field == "impl_handoff_branch":
+            return handoff_branch
+        if field == "impl_base_ref":
+            return base_ref
+        return ""
+
+    monkeypatch.setattr(_gh_mod, "_read_state_field", _fake_read)
+    monkeypatch.setattr(_gh_mod, "_fetch_issue_body", lambda num, repo: "# Plan\nDo stuff.\n")
+    monkeypatch.setattr(subprocess, "run", _make_gh_subprocess())
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_ghreview_stage", lambda **kw: None)
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_wait_copilot_stage", lambda **kw: "APPROVED")
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_request_copilot_stage", lambda **kw: None)
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_ghaddress_stage", lambda **kw: None)
+
+    client = FakeClaudeClient(fixtures={"commit-pr": _pr_events()})
+
+    result = gh_main(["--plan", "42", "--resume-from", "commit-pr"], client=client)
+    assert result == 0
+
+    labels = [c.label for c in client.calls]
+    assert "implement" not in labels, "implement must not run on commit-pr resume"
+    assert "commit-pr" in labels
+
+    # The commit-pr prompt must contain content from the impl diff.
+    commit_pr_call = next(c for c in client.calls if c.label == "commit-pr")
+    assert "impl content" in commit_pr_call.prompt or "impl.txt" in commit_pr_call.prompt
+
+    # No resume_session: commit-pr must open a fresh session.
+    assert commit_pr_call.resume_session is None
