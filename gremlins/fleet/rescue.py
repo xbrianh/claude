@@ -292,7 +292,7 @@ def write_rescue_report(wdir: str, report: dict) -> None:
             "# Rescue Attempt",
             "",
             f"- Timestamp: {ts_human}",
-            f"- Attempt: #{attempt} (pre-increment of rescue_count={prior}; launch.sh --resume bumps the counter on relaunch)",
+            f"- Attempt: #{attempt} (pre-increment of rescue_count={prior}; the launcher bumps the counter on relaunch)",
             f"- Mode: {'headless' if headless else 'interactive'}",
             "",
             "## Gremlin Context",
@@ -843,56 +843,25 @@ def do_rescue(target: str, headless: bool = False) -> bool:
             if scratch_dir is not None:
                 shutil.rmtree(scratch_dir, ignore_errors=True)
 
-        # Relaunch step: hand off to launch.sh --resume so the remaining stages run
-        # in the background under the same GR_ID. launch.sh patches state.json,
-        # clears the finished/summarized markers, increments rescue_count, and
-        # relaunches the pipeline with --resume-from <stage>.
-        launcher = os.path.expanduser("~/.claude/skills/_bg/launch.sh")
-        # os.access(..., X_OK) rather than os.path.isfile: an un-chmod'd launcher
-        # (e.g. after a manual edit) would pass the existence check and then fail
-        # with a PermissionError inside subprocess.run, which isn't caught by the
-        # FileNotFoundError handler below.
-        if not os.access(launcher, os.X_OK):
-            if headless:
-                _write_bail(sf, wdir, "relaunch_launcher_missing",
-                            f"launcher not executable at {launcher}")
-            print(f"error: launcher not executable at {launcher} — cannot resume in background")
-            report["relaunch_outcome"] = "failed"
-            report["relaunch_reason"] = f"launcher not executable at {launcher}"
-            return False
-
+        # Relaunch step: call the Python launcher's resume() to re-spawn the
+        # pipeline under the same GR_ID with --resume-from <stage>.
         print()
         print(f"Relaunch step: resuming gremlin {gr_id} in the background...")
-        # Flip relaunch_attempted before subprocess.run: even if the call
-        # raises FileNotFoundError or returns non-zero, we genuinely tried to
-        # spawn the launcher (vs. the preflight refusal path above, which
-        # short-circuits without ever invoking it).
         report["relaunch_attempted"] = True
         try:
-            resume_result = subprocess.run(
-                [launcher, "--resume", gr_id],
-                cwd=workdir,
-            )
-        except FileNotFoundError:
+            from gremlins.launcher import resume as _resume
+            _resume(gr_id)
+        except Exception as exc:
+            detail = str(exc)
             if headless:
-                _write_bail(sf, wdir, "relaunch_launcher_missing",
-                            f"could not exec launcher at {launcher}")
-            print(f"error: could not exec launcher at {launcher}")
+                _write_bail(sf, wdir, "relaunch_failed", detail)
+            print(f"error: background resume failed: {detail}")
             report["relaunch_outcome"] = "failed"
-            report["relaunch_reason"] = f"could not exec launcher at {launcher}"
-            return False
-
-        if resume_result.returncode != 0:
-            if headless:
-                _write_bail(sf, wdir, "relaunch_failed",
-                            f"launcher exit {resume_result.returncode}")
-            print(f"error: background resume failed (launcher exit {resume_result.returncode})")
-            report["relaunch_outcome"] = "failed"
-            report["relaunch_reason"] = f"launcher exit {resume_result.returncode}"
+            report["relaunch_reason"] = detail
             return False
 
         report["relaunch_outcome"] = "success"
-        report["relaunch_reason"] = "launcher exit 0"
+        report["relaunch_reason"] = "launcher resume() succeeded"
         return True
     finally:
         if not aborted[0]:

@@ -3,12 +3,12 @@
 Port of ``skills/bossgremlin/bossgremlin.py``.  The boss_state.json schema is
 preserved byte-for-byte so in-flight chains work across the migration.
 
-Receives pipeline args forwarded by launch.sh:
+Receives pipeline args forwarded by the launcher:
   boss_main --plan <spec-path> --chain-kind local|gh [--model <model>]
-  [--resume-from <stage>]    ← added by launch.sh --resume; ignored (we use
-                                boss_state.json for resumption)
+  [--resume-from <stage>]    ← added by the launcher resume path; ignored
+                                (we use boss_state.json for resumption)
 
-GR_ID env var is set by launch.sh.
+GR_ID env var is set by the launcher.
 """
 
 from __future__ import annotations
@@ -344,29 +344,14 @@ def run_handoff(gr_id: str, state_dir: str, boss_state: dict,
 
 
 def launch_child(gr_id: str, launch_kind: str, child_plan: str) -> str:
-    """Launch a child gremlin. Returns child gremlin ID."""
-    global _current_proc
-    launcher = os.path.expanduser("~/.claude/skills/_bg/launch.sh")
-    if not os.access(launcher, os.X_OK):
-        die(f"launch.sh not executable at {launcher}")
+    """Launch a child gremlin via the Python launcher. Returns child gremlin ID."""
+    from ..launcher import launch as _launch
 
-    cmd = [launcher, "--parent", gr_id, "--print-id", launch_kind, "--plan", child_plan]
     log(f"launching child ({launch_kind}): {child_plan}")
-
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
-    _current_proc = proc
     try:
-        stdout, _ = proc.communicate()
-    finally:
-        _current_proc = None
-    check_stop()
-
-    if proc.returncode != 0:
-        die(f"launch.sh exited {proc.returncode}")
-
-    child_id = stdout.strip()
-    if not child_id:
-        die("launch.sh --print-id produced no output")
+        child_id = _launch(launch_kind, plan=child_plan, parent_id=gr_id)
+    except (ValueError, RuntimeError) as exc:
+        die(f"launcher failed: {exc}")
 
     log(f"child launched: {child_id}")
     return child_id
