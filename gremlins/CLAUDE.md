@@ -70,18 +70,15 @@ validated in the orchestrators; marker-protocol bail reasons live in
 - **Gh stage names**: `plan`, `implement`, `commit-pr`, `request-copilot`, `ghreview`, `wait-copilot`, `ghaddress`.
 - **Marker-protocol bail reasons**: `diagnosis_no_marker`, `diagnosis_bad_marker`, `diagnosis_claude_error`, `diagnosis_timeout`, `excluded_class:<class>`, `attempts_exhausted`, `relaunch_launcher_missing`, `relaunch_failed`.
 
-## Bash-script carve-outs
+## Stage and bail bookkeeping
 
-`state.set_stage` and `state.emit_bail` shell out to
-`~/.claude/skills/_bg/set-stage.sh` and `set-bail.sh` rather than
-patching `state.json` in Python. Those scripts are **also** invoked by
-non-gremlins writers (`session-summary.sh` hook, which sources
-`liveness.sh` for its at-startup gremlin summary), so the bash scripts
-are the single source of truth for the on-disk format. Don't reimplement
-that bookkeeping in pure Python — forks would drift.
-
-Both helpers no-op without `GR_ID` and never raise: stage / bail
-bookkeeping must not crash a running gremlin.
+`state.set_stage` and `state.emit_bail` write to `state.json` atomically
+in pure Python via `patch_state`. Both helpers no-op without `GR_ID` and
+never raise — stage / bail bookkeeping must not crash a running gremlin.
+The `~/.claude/skills/_bg/set-stage.sh` and `set-bail.sh` scripts are still
+present for non-gremlins writers (`session-summary.sh` hook, which sources
+`liveness.sh` for its at-startup gremlin summary), but `state.py` no longer
+shells out to them.
 
 ## Tests
 

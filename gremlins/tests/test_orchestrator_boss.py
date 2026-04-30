@@ -49,6 +49,10 @@ def _common_boss_patches(monkeypatch, tmp_path, gr_id):
     monkeypatch.setenv("GR_ID", gr_id)
     monkeypatch.setattr(boss_mod, "STATE_ROOT", str(tmp_path))
     monkeypatch.setattr(boss_mod, "_stop_requested", False)
+    # Stub out set_stage so tests don't touch the developer's real ~/.local/state.
+    # (state.set_stage resolves XDG_STATE_HOME at call time; patching the name
+    # imported into boss_mod keeps all boss call-sites covered.)
+    monkeypatch.setattr(boss_mod, "set_stage", lambda *a, **kw: None)
     monkeypatch.setattr(boss_mod, "get_head_ref", lambda p: "abc123def456abc1")
     monkeypatch.setattr(boss_mod, "get_current_branch", lambda p: "main")
 

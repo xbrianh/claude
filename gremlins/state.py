@@ -27,17 +27,20 @@ BAIL_CLASS_OTHER = "other"
 
 
 def set_stage(stage: str, sub_stage=None) -> None:
-    """Write stage and stage_updated_at to state.json. No-op without GR_ID or missing state.json."""
-    if not os.environ.get("GR_ID"):
-        return
-    sf = resolve_state_file()
-    if sf is None or not sf.exists():
-        return
-    now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    if sub_stage is not None:
-        patch_state(stage=stage, stage_updated_at=now, sub_stage=sub_stage)
-    else:
-        patch_state(_delete=("sub_stage",), stage=stage, stage_updated_at=now)
+    """Write stage and stage_updated_at to state.json. No-op without GR_ID, empty stage, or missing state.json."""
+    try:
+        if not stage or not os.environ.get("GR_ID"):
+            return
+        sf = resolve_state_file()
+        if sf is None or not sf.exists():
+            return
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if sub_stage is not None:
+            patch_state(stage=stage, stage_updated_at=now, sub_stage=sub_stage)
+        else:
+            patch_state(_delete=("sub_stage",), stage=stage, stage_updated_at=now)
+    except Exception:
+        pass
 
 
 def resolve_session_dir() -> pathlib.Path:
@@ -71,15 +74,18 @@ def resolve_session_dir() -> pathlib.Path:
 
 def emit_bail(bail_class: str, bail_detail: str = "") -> None:
     """Write bail_class (and optional bail_detail) to state.json. No-op without GR_ID, empty bail_class, or missing state.json."""
-    if not os.environ.get("GR_ID") or not bail_class:
-        return
-    sf = resolve_state_file()
-    if sf is None or not sf.exists():
-        return
-    if bail_detail:
-        patch_state(bail_class=bail_class, bail_detail=bail_detail)
-    else:
-        patch_state(_delete=("bail_detail",), bail_class=bail_class)
+    try:
+        if not os.environ.get("GR_ID") or not bail_class:
+            return
+        sf = resolve_state_file()
+        if sf is None or not sf.exists():
+            return
+        if bail_detail:
+            patch_state(bail_class=bail_class, bail_detail=bail_detail)
+        else:
+            patch_state(_delete=("bail_detail",), bail_class=bail_class)
+    except Exception:
+        pass
 
 
 def resolve_state_file() -> "Optional[pathlib.Path]":
