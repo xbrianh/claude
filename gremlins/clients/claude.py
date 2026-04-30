@@ -16,6 +16,7 @@ same client without a second pass.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -303,11 +304,14 @@ class SubprocessClaudeClient:
         # or EOF, it doesn't block for the buffer to fill) and throughput
         # on the big implement-stage stream-json traces jumps by orders of
         # magnitude.
+        env = os.environ.copy()
+        env["GREMLIN_SKIP_SUMMARY"] = "1"
         p = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=None,
             start_new_session=False,
+            env=env,
         )
         self._track(p)
 
