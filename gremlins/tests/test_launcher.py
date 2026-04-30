@@ -78,6 +78,18 @@ def _wait_for_finished(state_dir: pathlib.Path, timeout: float = 60.0) -> bool:
     return False
 
 
+def _wait_for_workdir_removed(workdir: pathlib.Path, timeout: float = 30.0) -> bool:
+    # The `finished` marker is touched before worktree cleanup runs (the marker
+    # ordering suppresses session-summary's crashed-detection race), so a test
+    # that asserts on cleanup must wait for the workdir separately.
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not workdir.exists():
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def _read_state(state_dir: pathlib.Path) -> dict:
     return json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
 
@@ -430,7 +442,8 @@ def test_run_pipeline_cleans_up_worktree_on_success(lenv):
     assert _wait_for_finished(state_dir, timeout=120)
     final_state = _read_state(state_dir)
     if final_state["exit_code"] == 0:
-        assert not workdir.exists(), "worktree should be removed after successful completion"
+        assert _wait_for_workdir_removed(workdir, timeout=30), \
+            "worktree should be removed after successful completion"
 
 
 # ---------------------------------------------------------------------------
