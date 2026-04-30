@@ -421,7 +421,13 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
                     ["git", "rev-list", "--count", f"{base_ref}..{impl_handoff_branch}"],
                     capture_output=True, text=True, check=False,
                 )
-                commit_count = int(count_r.stdout.strip() or "0")
+                if count_r.returncode != 0:
+                    die(
+                        f"--resume-from commit-pr: impl_handoff_branch '{impl_handoff_branch}' "
+                        f"not found or base_ref invalid (rewind to implement?)\n"
+                        f"{count_r.stderr.strip()}"
+                    )
+                commit_count = int(count_r.stdout.strip())
                 impl_outcome = HeadAdvanced(commit_count=commit_count)
             else:
                 impl_outcome = DirtyOnly()

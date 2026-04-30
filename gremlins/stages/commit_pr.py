@@ -38,16 +38,19 @@ def _get_diff(
             ["git", "log", "--patch", f"{base_ref}..{impl_handoff_branch}"],
             **run_kw,
         )
-        diff = r.stdout.strip()
-        if not diff:
-            r = subprocess.run(
-                ["git", "diff", f"{base_ref}..{impl_handoff_branch}"],
-                **run_kw,
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"git log --patch {base_ref}..{impl_handoff_branch} failed "
+                f"(rc={r.returncode}): {r.stderr.strip()}"
             )
-            diff = r.stdout.strip()
+        diff = r.stdout.strip()
     else:
         # DirtyOnly: uncommitted changes relative to HEAD
         r = subprocess.run(["git", "diff", "HEAD"], **run_kw)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"git diff HEAD failed (rc={r.returncode}): {r.stderr.strip()}"
+            )
         diff = r.stdout.strip()
     return diff or "(no diff available)"
 
