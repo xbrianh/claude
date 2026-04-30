@@ -1,4 +1,4 @@
-"""Tests for gremlins/fleet.py (formerly skills/gremlins/gremlins.py)."""
+"""Tests for gremlins/fleet.py."""
 
 import json
 import os
