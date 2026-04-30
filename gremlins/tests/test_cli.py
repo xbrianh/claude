@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 
 import pytest
@@ -71,7 +70,7 @@ def test_bail_without_gr_id_exits_zero_no_write(tmp_path, monkeypatch):
     assert not (tmp_path / "claude-gremlins").exists()
 
 
-def test_bail_invalid_class_exits_nonzero(tmp_path, monkeypatch, capsys):
+def test_bail_invalid_class_exits_nonzero(tmp_path, monkeypatch):
     monkeypatch.setenv("GR_ID", "test-gremlin-003")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
 

@@ -175,9 +175,14 @@ def _run_pipeline_main(argv: List[str]) -> int:
 
 
 def _bail_main(argv: List[str]) -> int:
-    """CLI front-end for state.emit_bail. Reads GR_ID from env (set by
-    the launcher when spawning the pipeline). Exit 0 always — never
-    breaks the calling agent."""
+    """CLI front-end for state.emit_bail.
+
+    Reads GR_ID from env (set by the launcher when spawning the
+    pipeline). Returns 0 for valid invocations (including when GR_ID is
+    unset — emit_bail no-ops); invalid CLI usage is handled by argparse
+    and exits non-zero (typically 2). A typo like ``bail othr`` should
+    surface as an error rather than be silently swallowed.
+    """
     import argparse
     from .state import (
         emit_bail,
