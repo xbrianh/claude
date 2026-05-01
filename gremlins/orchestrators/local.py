@@ -83,7 +83,7 @@ def _parse_local_args(argv: List[str]) -> argparse.Namespace:
     usage = (
         'usage: gremlins.cli local [-p <plan-model>] [-i <impl-model>] '
         '[-x <address-model>] [-b <detail-review-model>] '
-        '[--resume-from <stage>] [--plan <path>] "<instructions>"'
+        '[--resume-from <stage>] [--plan <path>] [--spec <path>] "<instructions>"'
     )
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("-p", dest="plan_model", default="sonnet")
@@ -151,6 +151,9 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
 
     # --spec staging: snapshot into session_dir/spec.md on first launch.
     # On resume, reuse the existing snapshot (same rescue-determinism rule as --plan).
+    # launcher.py normalizes spec_path before spawning the subprocess, so the
+    # is_file / size checks below are only reachable on a direct (non-launcher)
+    # invocation of the orchestrator — they guard that path.
     spec_file = session_dir / "spec.md"
     if args.spec_path and not spec_file.exists():
         spec_src = pathlib.Path(args.spec_path)
@@ -230,7 +233,12 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
         # snapshot from disk rather than relying on in-memory state.
         plan_text = plan_file.read_text(encoding="utf-8")
         plan_text_holder["text"] = plan_text
-        spec_text = spec_file.read_text(encoding="utf-8") if spec_file.exists() else ""
+        spec_text = ""
+        if spec_file.exists():
+            try:
+                spec_text = spec_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"warning: could not read spec.md ({exc}); proceeding without north-star context", flush=True, file=sys.stderr)
         set_stage("implement")
         print(f"==> [2/4] implementing (model: {args.impl}, from {plan_file})", flush=True)
         run_implement_stage(

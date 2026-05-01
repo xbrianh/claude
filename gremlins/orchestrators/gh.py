@@ -82,7 +82,7 @@ def _load_core_principles() -> str:
 def _parse_gh_args(argv: List[str]) -> argparse.Namespace:
     usage = (
         'usage: gremlins.cli gh [-r <ref>] [--resume-from <stage>] '
-        '[--plan <path|issue-ref>] [--model <model>] "<instructions>"'
+        '[--plan <path|issue-ref>] [--spec <path>] [--model <model>] "<instructions>"'
     )
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("-r", dest="ref", default="")
@@ -291,6 +291,9 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
 
     # --spec staging: snapshot into session_dir/spec.md on first launch.
     # On resume, reuse the existing snapshot (rescue-determinism).
+    # launcher.py normalizes spec_path before spawning the subprocess, so the
+    # is_file / size checks below are only reachable on a direct (non-launcher)
+    # invocation of the orchestrator — they guard that path.
     if args.spec_path and not spec_file.exists():
         spec_src = pathlib.Path(args.spec_path)
         if not spec_src.is_file():
@@ -392,7 +395,12 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
     def stage_implement() -> None:
         set_stage("implement")
         print("==> [2a/6] implementing plan", flush=True)
-        spec_text = spec_file.read_text(encoding="utf-8") if spec_file.exists() else ""
+        spec_text = ""
+        if spec_file.exists():
+            try:
+                spec_text = spec_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"warning: could not read spec.md ({exc}); proceeding without north-star context", flush=True, file=sys.stderr)
         result = run_implement_stage(
             client=client,
             impl_model=model,

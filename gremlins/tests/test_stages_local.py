@@ -52,9 +52,20 @@ def test_render_spec_block_nonempty():
 def test_render_spec_block_truncates_at_50000():
     long_spec = "x" * 60000
     result = _render_spec_block(long_spec)
+    # no newlines → falls back to hard 50000-char cut
     assert "x" * 50000 in result
-    assert "truncated to 50000 chars" in result
+    assert "truncated" in result
     assert "60000 chars total" in result
+
+
+def test_render_spec_block_truncates_at_newline_boundary():
+    # 49990 x's, a newline, then a run of z's that push past the 50000 limit.
+    # Using 'z' avoids false positives from the header prose (which contains 'y').
+    long_spec = "x" * 49990 + "\n" + "z" * 10100
+    result = _render_spec_block(long_spec)
+    # cut at the newline before 50000 → no z's in the body
+    assert "z" not in result
+    assert "truncated" in result
 
 
 def test_render_spec_block_no_truncation_note_when_short():

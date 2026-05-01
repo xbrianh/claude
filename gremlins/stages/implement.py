@@ -79,10 +79,13 @@ def changes_outside_git(sentinel: pathlib.Path, session_dir: pathlib.Path) -> bo
 def _render_spec_block(spec_text: str) -> str:
     if not spec_text or not spec_text.strip():
         return ""
-    body = spec_text[:50000]
     trunc = ""
     if len(spec_text) > 50000:
-        trunc = f"\n(spec truncated to 50000 chars; {len(spec_text)} chars total)"
+        cut = spec_text.rfind('\n', 0, 50000)
+        body = spec_text[:cut] if cut > 0 else spec_text[:50000]
+        trunc = f"\n(spec truncated; {len(spec_text)} chars total)"
+    else:
+        body = spec_text
     return (
         "## Overarching goal (north star)\n\n"
         "This is the original chain spec. It is read-only context for\n"
