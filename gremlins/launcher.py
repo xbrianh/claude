@@ -132,7 +132,7 @@ def _extract_impl_model(pipeline_args: list, kind: str) -> str:
         for i, a in enumerate(args):
             if a == "--model" and i + 1 < len(args):
                 return args[i + 1]
-            if isinstance(a, str) and a.startswith("--model="):
+            if a.startswith("--model="):
                 return a[len("--model="):]
         return "sonnet"
 
