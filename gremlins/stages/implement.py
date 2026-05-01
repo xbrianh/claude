@@ -76,6 +76,27 @@ def changes_outside_git(sentinel: pathlib.Path, session_dir: pathlib.Path) -> bo
     return False
 
 
+def _render_spec_block(spec_text: str) -> str:
+    if not spec_text or not spec_text.strip():
+        return ""
+    trunc = ""
+    if len(spec_text) > 50000:
+        cut = spec_text.rfind('\n', 0, 50000)
+        body = spec_text[:cut] if cut > 0 else spec_text[:50000]
+        trunc = f"\n(spec truncated; {len(spec_text)} chars total)"
+    else:
+        body = spec_text
+    return (
+        "## Overarching goal (north star)\n\n"
+        "This is the original chain spec. It is read-only context for\n"
+        "understanding what the chain as a whole is working toward. Use\n"
+        "it to make coherent local decisions while implementing the plan\n"
+        "below — not as a task list. Do not expand scope beyond the\n"
+        "Tasks in the plan.\n\n"
+        f"~~~~\n{body}\n~~~~{trunc}\n\n"
+    )
+
+
 def run_implement_stage(
     *,
     client: ClaudeClient,
@@ -85,6 +106,7 @@ def run_implement_stage(
     session_dir: pathlib.Path,
     is_git: bool,
     kind: str = "local",
+    spec_text: str = "",
     # local-only (kept for API compatibility, not used in function body)
     plan_file: Optional[pathlib.Path] = None,
     # gh-only
@@ -105,6 +127,7 @@ def run_implement_stage(
             session_dir=session_dir,
             issue_num=issue_num,
             cwd=cwd,
+            spec_text=spec_text,
         )
 
     # --- local path ---
@@ -130,6 +153,7 @@ def run_implement_stage(
     template = PROMPT_LOCAL_PATH.read_text(encoding="utf-8")
     prompt = template.format(
         core_principles=core_principles,
+        spec_block=_render_spec_block(spec_text),
         plan_text=plan_text,
         impl_commit_instr=impl_commit_instr,
     )
@@ -165,6 +189,7 @@ def _run_implement_gh(
     session_dir: pathlib.Path,
     issue_num: str,
     cwd: Optional[str],
+    spec_text: str = "",
 ) -> ImplStageResult:
     """gh-specific implement: run claude, then orchestrate the handoff branch lifecycle."""
     if issue_num:
@@ -183,6 +208,7 @@ def _run_implement_gh(
     template = PROMPT_GH_PATH.read_text(encoding="utf-8")
     prompt = template.format(
         core_principles=core_principles,
+        spec_block=_render_spec_block(spec_text),
         plan_source_label=plan_source_label,
         issue_body=plan_text,
         plan_location_note=plan_location_note,

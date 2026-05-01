@@ -184,6 +184,7 @@ def launch(
     project_root: Optional[str] = None,
     base_ref: str = "HEAD",
     pipeline_args: tuple = (),
+    spec_path: Optional[str] = None,
 ) -> str:
     """Set up state dir + worktree, spawn the pipeline detached, return gremlin id.
 
@@ -210,6 +211,14 @@ def launch(
         if os.path.getsize(plan) == 0:
             raise ValueError(f"--plan: file is empty: {plan}")
 
+    # Validate and normalize spec_path to absolute
+    if spec_path is not None:
+        if not os.path.isfile(spec_path):
+            raise ValueError(f"--spec: file not found: {spec_path}")
+        if os.path.getsize(spec_path) == 0:
+            raise ValueError(f"--spec: file is empty: {spec_path}")
+        spec_path = str(pathlib.Path(spec_path).resolve())
+
     # Normalize plan path to absolute
     if plan and os.path.isfile(plan):
         plan = str(pathlib.Path(plan).resolve())
@@ -233,8 +242,10 @@ def launch(
     state_dir = _state_root() / gr_id
     state_dir.mkdir(parents=True, exist_ok=True)
 
-    # pipeline_args for state.json: includes --plan when plan is set
+    # pipeline_args for state.json: includes --plan and --spec when set
     stored_pipeline_args = list(pipeline_args)
+    if spec_path and "--spec" not in stored_pipeline_args:
+        stored_pipeline_args = ["--spec", spec_path] + stored_pipeline_args
     if plan and "--plan" not in stored_pipeline_args:
         stored_pipeline_args = ["--plan", plan] + stored_pipeline_args
 

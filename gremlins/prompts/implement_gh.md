@@ -2,7 +2,7 @@ When writing code, follow these principles:
 
 {core_principles}
 
-The following is the implementation plan {plan_source_label}:
+{spec_block}The following is the implementation plan {plan_source_label}:
 
 {issue_body}
 
