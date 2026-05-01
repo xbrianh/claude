@@ -116,6 +116,27 @@ def _patch_state(state_dir: pathlib.Path, **fields) -> None:
         pass
 
 
+def _extract_impl_model(pipeline_args: list, kind: str) -> str:
+    """Extract the implementation model alias from pipeline_args.
+
+    Returns the alias as passed (e.g. 'opus', 'sonnet') or 'sonnet' as the
+    default when no model flag is present — matching each orchestrator's default.
+    """
+    args = list(pipeline_args)
+    if kind == "localgremlin":
+        for i, a in enumerate(args):
+            if a == "-i" and i + 1 < len(args):
+                return args[i + 1]
+        return "sonnet"
+    else:  # ghgremlin, bossgremlin use --model
+        for i, a in enumerate(args):
+            if a == "--model" and i + 1 < len(args):
+                return args[i + 1]
+            if isinstance(a, str) and a.startswith("--model="):
+                return a[len("--model="):]
+        return "sonnet"
+
+
 def _delete_patch_state(state_dir: pathlib.Path, delete_keys: tuple, **fields) -> None:
     """Remove delete_keys and merge fields into state.json atomically. Best-effort."""
     sf = state_dir / "state.json"
@@ -286,6 +307,7 @@ def launch(
         "description_explicit": desc_explicit,
         "parent_id": parent_id or "",
         "pipeline_args": stored_pipeline_args,
+        "impl_model": _extract_impl_model(stored_pipeline_args, kind),
         "stage": "starting",
         "pid": None,
     }

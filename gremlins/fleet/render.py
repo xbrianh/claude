@@ -43,6 +43,9 @@ def build_row(gr_id, sf, wdir, state, live):
     parent_id = state.get("parent_id") or ""
     boss_disp = display_id(parent_id)[:20] if parent_id else ""
 
+    impl_model = state.get("impl_model") or state.get("model") or "—"
+    model_trim = impl_model[:10]
+
     return {
         "started_at": started_at,
         "kind": k,
@@ -52,6 +55,7 @@ def build_row(gr_id, sf, wdir, state, live):
         "live": live_trim,
         "live_full": live,
         "age": age,
+        "model": model_trim,
         "desc": desc_trim,
         "project_root": pr,
         "gr_id": gr_id,
@@ -63,6 +67,6 @@ def build_row(gr_id, sf, wdir, state, live):
 
 def print_table(rows):
     """Print header + rows using the fixed format string."""
-    print(FMT % ("KIND", "ID", "STAGE", "LIVENESS", "AGE", "BOSS", "DESCRIPTION"))
+    print(FMT % ("KIND", "ID", "STAGE", "LIVENESS", "AGE", "BOSS", "MODEL", "DESCRIPTION"))
     for r in rows:
-        print(FMT % (r["kind"], r["sid"], r["stage"], r["live"], r["age"], r["boss"], r["desc"]))
+        print(FMT % (r["kind"], r["sid"], r["stage"], r["live"], r["age"], r["boss"], r["model"], r["desc"]))
