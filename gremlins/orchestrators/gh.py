@@ -88,6 +88,7 @@ def _parse_gh_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("-r", dest="ref", default="")
     parser.add_argument("--resume-from", dest="resume_from", default=None)
     parser.add_argument("--plan", dest="plan_source", default=None)
+    parser.add_argument("--spec", dest="spec_path", default=None)
     parser.add_argument("--model", dest="model", default=None)
     parser.add_argument("instructions", nargs="*")
     args = parser.parse_args(argv)
@@ -284,8 +285,19 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
     session_dir = resolve_session_dir()
     state_file = resolve_state_file()
     plan_md = session_dir / "plan.md"
+    spec_file = session_dir / "spec.md"
 
     print(f"==> session: {session_dir}", flush=True)
+
+    # --spec staging: snapshot into session_dir/spec.md on first launch.
+    # On resume, reuse the existing snapshot (rescue-determinism).
+    if args.spec_path and not spec_file.exists():
+        spec_src = pathlib.Path(args.spec_path)
+        if not spec_src.is_file():
+            die(f"--spec: file not found: {args.spec_path}")
+        if spec_src.stat().st_size == 0:
+            die(f"--spec: file is empty: {args.spec_path}")
+        shutil.copyfile(spec_src, spec_file)
 
     # Restore model from state.json when --model not supplied (resume path),
     # then fall back to "sonnet" for fresh launches without an explicit --model.
@@ -380,6 +392,7 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
     def stage_implement() -> None:
         set_stage("implement")
         print("==> [2a/6] implementing plan", flush=True)
+        spec_text = spec_file.read_text(encoding="utf-8") if spec_file.exists() else ""
         result = run_implement_stage(
             client=client,
             impl_model=model,
@@ -389,6 +402,7 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
             is_git=True,
             kind="gh",
             issue_num=issue_num,
+            spec_text=spec_text,
         )
         impl_result_holder["result"] = result
         # Persist for commit-pr resume: base_ref and handoff branch are all

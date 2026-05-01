@@ -351,11 +351,14 @@ def launch_child(gr_id: str, launch_kind: str, child_plan: str) -> str:
     gremlin_state = load_json(os.path.join(STATE_ROOT, gr_id, "state.json"))
     project_root = gremlin_state.get("project_root") or None
     base_ref = gremlin_state.get("current_head") or "HEAD"
+    boss_state = load_boss_state(os.path.join(STATE_ROOT, gr_id))
+    spec_path = boss_state.get("spec_path") or None
 
     log(f"launching child ({launch_kind}): {child_plan}, base={base_ref[:12]}")
     try:
         child_id = _launch(launch_kind, plan=child_plan, parent_id=gr_id,
-                           project_root=project_root, base_ref=base_ref)
+                           project_root=project_root, base_ref=base_ref,
+                           spec_path=spec_path)
     except (ValueError, RuntimeError) as exc:
         die(f"launcher failed: {exc}")
 

@@ -566,3 +566,49 @@ def test_pipeline_survives_worktree_pipeline_rename(lenv, monkeypatch):
         f"expected exit 0; status={state.get('status')!r}; log tail:\n"
         f"{log_path.read_text(errors='replace')[-2000:] if log_path.exists() else '<log missing>'}"
     )
+
+
+# ---------------------------------------------------------------------------
+# spec_path forwarding
+# ---------------------------------------------------------------------------
+
+def test_launch_threads_spec_path_into_pipeline_args(lenv):
+    """launch(spec_path=<abs>) puts --spec <abs> into state.json pipeline_args."""
+    plan_file = lenv.repo / "plan.md"
+    plan_file.write_text("# Plan\n\nDo stuff.\n", encoding="utf-8")
+    spec_file = lenv.repo / "spec.md"
+    spec_file.write_text("the overall spec", encoding="utf-8")
+
+    launcher = _launcher()
+    gr_id = launcher.launch("localgremlin", plan=str(plan_file),
+                            spec_path=str(spec_file))
+    state = _read_state(_gremlins_state_root(lenv) / gr_id)
+    assert "--spec" in state["pipeline_args"]
+    idx = state["pipeline_args"].index("--spec")
+    assert state["pipeline_args"][idx + 1] == str(spec_file.resolve())
+    _wait_for_finished(_gremlins_state_root(lenv) / gr_id, timeout=60)
+
+
+def test_launch_rejects_missing_spec_path(lenv):
+    """spec_path that doesn't exist raises ValueError before any state-dir setup."""
+    plan_file = lenv.repo / "plan.md"
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    launcher = _launcher()
+    with pytest.raises(ValueError, match="--spec"):
+        launcher.launch("localgremlin", plan=str(plan_file),
+                        spec_path="/nonexistent/spec.md")
+    dirs = list(_gremlins_state_root(lenv).glob("*")) \
+        if _gremlins_state_root(lenv).exists() else []
+    assert dirs == [], f"missing-spec failure must not create state: {dirs}"
+
+
+def test_launch_rejects_empty_spec_path(lenv):
+    """spec_path pointing to an empty file raises ValueError."""
+    plan_file = lenv.repo / "plan.md"
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    spec_file = lenv.repo / "empty-spec.md"
+    spec_file.write_text("", encoding="utf-8")
+    launcher = _launcher()
+    with pytest.raises(ValueError, match="--spec"):
+        launcher.launch("localgremlin", plan=str(plan_file),
+                        spec_path=str(spec_file))

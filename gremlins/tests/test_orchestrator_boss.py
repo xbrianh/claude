@@ -1137,6 +1137,20 @@ def test_boss_launches_child_against_current_head(tmp_path, monkeypatch):
         captured["project_root"] = project_root
         return "child-abc-123456"
 
+    # boss_state.json required by launch_child to load spec_path
+    (state_dir / "boss_state.json").write_text(json.dumps({
+        "spec_path": "/some/spec.md",
+        "chain_kind": "local",
+        "chain_base_ref": expected_sha,
+        "target_branch": "main",
+        "current_plan": "/some/spec.md",
+        "handoff_count": 0,
+        "current_child_id": None,
+        "children": [],
+        "handoff_records": [],
+        "operator_followups": [],
+    }))
+
     monkeypatch.setattr(boss_mod, "STATE_ROOT", str(tmp_path))
     monkeypatch.setattr(launcher_mod, "launch", fake_launch)
 
@@ -1214,3 +1228,90 @@ def test_boss_records_current_head_after_land(tmp_path, monkeypatch):
     assert current_head_calls[1]["current_head"] == expected_new_head, (
         f"post-land current_head should be {expected_new_head!r}, got {current_head_calls[1]!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# launch_child spec_path passthrough
+# ---------------------------------------------------------------------------
+
+def test_launch_child_forwards_spec_path(tmp_path, monkeypatch):
+    """When boss_state has spec_path set, launch_child passes it as spec_path= to launcher.launch."""
+    import gremlins.launcher as launcher_mod
+
+    gr_id = "test-boss-spec-dd9900"
+    state_dir = tmp_path / gr_id
+    state_dir.mkdir()
+    spec_path = "/path/to/boss/spec.md"
+    (state_dir / "state.json").write_text(json.dumps({
+        "id": gr_id,
+        "project_root": str(tmp_path / "repo"),
+        "current_head": "abc123def456abc1",
+    }))
+    (state_dir / "boss_state.json").write_text(json.dumps({
+        "spec_path": spec_path,
+        "chain_kind": "local",
+        "chain_base_ref": "abc123def456abc1",
+        "target_branch": "main",
+        "current_plan": spec_path,
+        "handoff_count": 0,
+        "current_child_id": None,
+        "children": [],
+        "handoff_records": [],
+        "operator_followups": [],
+    }))
+
+    captured = {}
+
+    def fake_launch(kind, *, plan=None, parent_id=None, project_root=None,
+                    base_ref="HEAD", pipeline_args=(), **kw):
+        captured.update(kw)
+        captured["plan"] = plan
+        return "child-spec-ee1122"
+
+    monkeypatch.setattr(boss_mod, "STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(launcher_mod, "launch", fake_launch)
+
+    result = boss_mod.launch_child(gr_id, "localgremlin", "/tmp/child-plan.md")
+
+    assert result == "child-spec-ee1122"
+    assert captured.get("spec_path") == spec_path
+
+
+def test_launch_child_no_spec_path_when_absent(tmp_path, monkeypatch):
+    """When boss_state has no spec_path, launch_child passes spec_path=None."""
+    import gremlins.launcher as launcher_mod
+
+    gr_id = "test-boss-nospec-ff2233"
+    state_dir = tmp_path / gr_id
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text(json.dumps({
+        "id": gr_id,
+        "project_root": str(tmp_path / "repo"),
+        "current_head": "abc123def456abc1",
+    }))
+    (state_dir / "boss_state.json").write_text(json.dumps({
+        "spec_path": "",
+        "chain_kind": "local",
+        "chain_base_ref": "abc123def456abc1",
+        "target_branch": "main",
+        "current_plan": "",
+        "handoff_count": 0,
+        "current_child_id": None,
+        "children": [],
+        "handoff_records": [],
+        "operator_followups": [],
+    }))
+
+    captured = {}
+
+    def fake_launch(kind, *, plan=None, parent_id=None, project_root=None,
+                    base_ref="HEAD", pipeline_args=(), **kw):
+        captured.update(kw)
+        return "child-nospec-gg3344"
+
+    monkeypatch.setattr(boss_mod, "STATE_ROOT", str(tmp_path))
+    monkeypatch.setattr(launcher_mod, "launch", fake_launch)
+
+    boss_mod.launch_child(gr_id, "localgremlin", "/tmp/child-plan.md")
+
+    assert captured.get("spec_path") is None

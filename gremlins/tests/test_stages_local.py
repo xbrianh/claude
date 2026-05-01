@@ -6,7 +6,7 @@ import pytest
 from conftest import MINIMAL_EVENTS
 from gremlins.clients.fake import FakeClaudeClient
 from gremlins.stages.address_code import run_address_code_stage
-from gremlins.stages.implement import run_implement_stage
+from gremlins.stages.implement import _render_spec_block, run_implement_stage
 from gremlins.stages.plan import run_plan_stage
 
 
@@ -27,6 +27,105 @@ def _init_git_repo(path: pathlib.Path) -> None:
         ["git", "commit", "-m", "init"],
         cwd=path, check=True, capture_output=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# _render_spec_block
+# ---------------------------------------------------------------------------
+
+def test_render_spec_block_empty_string():
+    assert _render_spec_block("") == ""
+
+
+def test_render_spec_block_whitespace_only():
+    assert _render_spec_block("   \n  ") == ""
+
+
+def test_render_spec_block_nonempty():
+    result = _render_spec_block("my spec content")
+    assert "Overarching goal (north star)" in result
+    assert "my spec content" in result
+    assert "~~~~" in result
+    assert "read-only context" in result
+
+
+def test_render_spec_block_truncates_at_50000():
+    long_spec = "x" * 60000
+    result = _render_spec_block(long_spec)
+    assert "x" * 50000 in result
+    assert "truncated to 50000 chars" in result
+    assert "60000 chars total" in result
+
+
+def test_render_spec_block_no_truncation_note_when_short():
+    result = _render_spec_block("short spec")
+    assert "truncated" not in result
+
+
+# ---------------------------------------------------------------------------
+# implement stage spec_text rendering
+# ---------------------------------------------------------------------------
+
+def test_implement_renders_spec_block_when_present(tmp_path, monkeypatch):
+    git_dir = tmp_path / "repo"
+    git_dir.mkdir()
+    _init_git_repo(git_dir)
+    monkeypatch.chdir(git_dir)
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    class _CommittingClient(FakeClaudeClient):
+        def run(self, prompt, *, label, **kwargs):
+            (git_dir / "newfile.txt").write_text("change\n")
+            subprocess.run(["git", "add", "newfile.txt"], cwd=git_dir, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "implement"], cwd=git_dir, check=True, capture_output=True)
+            return super().run(prompt, label=label, **kwargs)
+
+    client = _CommittingClient(fixtures={"implement": MINIMAL_EVENTS})
+    run_implement_stage(
+        client=client,
+        impl_model="sonnet",
+        plan_text="task 1: do something",
+        core_principles="Be good.",
+        session_dir=session_dir,
+        is_git=True,
+        spec_text="overall spec body",
+    )
+    prompt = client.calls[0].prompt
+    assert "Overarching goal (north star)" in prompt
+    assert "overall spec body" in prompt
+    assert prompt.index("overall spec body") < prompt.index("task 1: do something")
+
+
+def test_implement_omits_spec_block_when_absent(tmp_path, monkeypatch):
+    git_dir = tmp_path / "repo"
+    git_dir.mkdir()
+    _init_git_repo(git_dir)
+    monkeypatch.chdir(git_dir)
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    class _CommittingClient(FakeClaudeClient):
+        def run(self, prompt, *, label, **kwargs):
+            (git_dir / "newfile.txt").write_text("change\n")
+            subprocess.run(["git", "add", "newfile.txt"], cwd=git_dir, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "implement"], cwd=git_dir, check=True, capture_output=True)
+            return super().run(prompt, label=label, **kwargs)
+
+    client = _CommittingClient(fixtures={"implement": MINIMAL_EVENTS})
+    run_implement_stage(
+        client=client,
+        impl_model="sonnet",
+        plan_text="task 1: do something",
+        core_principles="Be good.",
+        session_dir=session_dir,
+        is_git=True,
+        spec_text="",
+    )
+    prompt = client.calls[0].prompt
+    assert "Overarching goal" not in prompt
 
 
 # ---------------------------------------------------------------------------
