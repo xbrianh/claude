@@ -225,6 +225,59 @@ def test_launch_persists_pipeline_args(lenv):
     _wait_for_finished(_gremlins_state_root(lenv) / gr_id, timeout=60)
 
 
+def test_launch_persists_impl_model_explicit(lenv):
+    """impl_model is extracted from -i flag and stored in state.json."""
+    launcher = _launcher()
+    gr_id = launcher.launch(
+        "localgremlin",
+        pipeline_args=("-i", "opus"),
+        instructions="test impl model",
+    )
+    state = _read_state(_gremlins_state_root(lenv) / gr_id)
+    assert state["impl_model"] == "opus"
+    _wait_for_finished(_gremlins_state_root(lenv) / gr_id, timeout=60)
+
+
+def test_launch_persists_impl_model_default(lenv):
+    """impl_model defaults to 'sonnet' when no -i flag is supplied."""
+    launcher = _launcher()
+    gr_id = launcher.launch(
+        "localgremlin",
+        instructions="test impl model default",
+    )
+    state = _read_state(_gremlins_state_root(lenv) / gr_id)
+    assert state["impl_model"] == "sonnet"
+    _wait_for_finished(_gremlins_state_root(lenv) / gr_id, timeout=60)
+
+
+def test_launch_persists_impl_model_gh_space_form(lenv_with_gh):
+    """impl_model is extracted from space-separated --model flag for ghgremlin."""
+    lenv = lenv_with_gh
+    launcher = _launcher()
+    gr_id = launcher.launch(
+        "ghgremlin",
+        pipeline_args=("--model", "opus"),
+        instructions="test gh model space",
+    )
+    state = _read_state(_gremlins_state_root(lenv) / gr_id)
+    assert state["impl_model"] == "opus"
+    _wait_for_finished(_gremlins_state_root(lenv) / gr_id, timeout=60)
+
+
+def test_launch_persists_impl_model_gh_equals_form(lenv_with_gh):
+    """impl_model is extracted from --model=<value> flag for ghgremlin."""
+    lenv = lenv_with_gh
+    launcher = _launcher()
+    gr_id = launcher.launch(
+        "ghgremlin",
+        pipeline_args=("--model=haiku",),
+        instructions="test gh model equals",
+    )
+    state = _read_state(_gremlins_state_root(lenv) / gr_id)
+    assert state["impl_model"] == "haiku"
+    _wait_for_finished(_gremlins_state_root(lenv) / gr_id, timeout=60)
+
+
 def test_launch_plan_normalized_to_absolute(lenv):
     """A relative --plan path is resolved to absolute in state.json."""
     plan_file = lenv.repo / "my-plan.md"
