@@ -21,7 +21,7 @@ __claude_find_python() {
     )
     local p
     for p in "${candidates[@]}"; do
-        if [[ -x "$p" ]]; then
+        if [[ -x "$p" ]] && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
             echo "$p"
             return 0
         fi
