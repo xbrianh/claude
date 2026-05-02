@@ -227,6 +227,7 @@ def test_address_code_stage_calls_client_with_review_content(tmp_path):
         session_dir=session_dir,
         address_model="sonnet",
         is_git=False,
+        code_style="",
     )
 
     assert len(client.calls) == 1
@@ -270,12 +271,9 @@ def test_review_code_stage_includes_code_style(tmp_path):
     assert "Be good." in client.calls[0].prompt
 
 
-def test_address_code_stage_includes_code_style(tmp_path, monkeypatch):
+def test_address_code_stage_includes_code_style(tmp_path):
     (tmp_path / "review-code-detail-sonnet.md").write_text(
         "# Detail Review\n\n## Findings\nNone.\n"
-    )
-    monkeypatch.setattr(
-        "gremlins.stages.address_code.load_code_style", lambda: "Be good."
     )
     client = FakeClaudeClient(fixtures={"address-code": MINIMAL_EVENTS})
     run_address_code_stage(
@@ -283,5 +281,6 @@ def test_address_code_stage_includes_code_style(tmp_path, monkeypatch):
         session_dir=tmp_path,
         address_model="sonnet",
         is_git=False,
+        code_style="Be good.",
     )
     assert "Be good." in client.calls[0].prompt

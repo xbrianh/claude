@@ -251,6 +251,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
             session_dir=session_dir,
             address_model=args.address,
             is_git=is_git,
+            code_style=code_style,
         )
 
     stages = [
@@ -390,6 +391,7 @@ def address_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> i
         die(f"--dir does not exist: {session_dir}")
 
     is_git = in_git_repo()
+    code_style = load_code_style()
 
     print(f"==> addressing code reviews (model: {args.address})", flush=True)
     run_address_code_stage(
@@ -397,5 +399,6 @@ def address_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> i
         session_dir=session_dir,
         address_model=args.address,
         is_git=is_git,
+        code_style=code_style,
     )
     return 0

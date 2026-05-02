@@ -15,7 +15,6 @@ import pathlib
 import re
 
 from ..clients.claude import ClaudeClient
-from ..prompts import load_code_style
 from ..state import emit_bail
 
 MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -45,6 +44,7 @@ def run_address_code_stage(
     session_dir: pathlib.Path,
     address_model: str,
     is_git: bool,
+    code_style: str,
 ) -> None:
     """Execute the address-code stage. Emits bail_class=other on failure
     when running under a gremlin (no-op otherwise) — including failures
@@ -71,7 +71,6 @@ def run_address_code_stage(
 
         model = _model_from(review_file, "detail")
         text = review_file.read_text(encoding="utf-8")
-        code_style = load_code_style()
 
         address_commit_instr = ""
         if is_git:
