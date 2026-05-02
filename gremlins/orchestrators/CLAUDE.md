@@ -6,9 +6,10 @@ Per-pipeline orchestrator entry points. Each module owns one CLI subcommand
 
 ## Modules
 
-- `local.py` — `local_main` (full local chain), `review_main` (review-code
-  only), `address_main` (address-code only). Subcommands: `local`, `review`,
-  `address`.
+- `local.py` — `local_main` (full local chain: `plan → implement → review-code →
+  address-code → test`), `review_main` (review-code only), `address_main`
+  (address-code only). Subcommands: `local`, `review`, `address`. The `test`
+  stage is a no-op when `--test` is omitted.
 - `gh.py` — `gh_main`. Subcommand: `gh`. Drives the gh pipeline:
   `plan → implement → commit-pr → request-copilot → ghreview →
   wait-copilot → ghaddress`. The `request-copilot` stage body is inlined

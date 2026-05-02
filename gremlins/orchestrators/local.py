@@ -32,10 +32,11 @@ from ..stages.address_code import run_address_code_stage
 from ..stages.implement import run_implement_stage
 from ..stages.plan import run_plan_stage
 from ..stages.review_code import run_review_code_stage
+from ..stages.test import run_test_stage
 from ..state import patch_state, resolve_session_dir, set_stage
 
 MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-VALID_RESUME_STAGES = ["plan", "implement", "review-code", "address-code"]
+VALID_RESUME_STAGES = ["plan", "implement", "review-code", "address-code", "test"]
 
 
 def die(msg: str) -> None:
@@ -56,17 +57,23 @@ def _parse_local_args(argv: List[str]) -> argparse.Namespace:
     usage = (
         'usage: gremlins.cli local [-p <plan-model>] [-i <impl-model>] '
         '[-x <address-model>] [-b <detail-review-model>] '
-        '[--resume-from <stage>] [--plan <path>] [--spec <path>] "<instructions>"'
+        '[--resume-from <stage>] [--plan <path>] [--spec <path>] '
+        '[--test "<command>"] [--test-max-attempts <n>] [-t <test-fix-model>] '
+        '"<instructions>"'
     )
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("-p", dest="plan_model", default="sonnet")
     parser.add_argument("-i", dest="impl", default="sonnet")
     parser.add_argument("-x", dest="address", default="sonnet")
     parser.add_argument("-b", dest="detail", default="sonnet")
+    parser.add_argument("-t", dest="test_fix_model", default="sonnet")
     parser.add_argument("--resume-from", dest="resume_from", default=None,
                         choices=VALID_RESUME_STAGES)
     parser.add_argument("--plan", dest="plan_path", default=None)
     parser.add_argument("--spec", dest="spec_path", default=None)
+    parser.add_argument("--test", dest="test_cmd", default=None)
+    parser.add_argument("--test-max-attempts", dest="test_max_attempts",
+                        type=int, default=3)
     parser.add_argument("instructions", nargs="*")
     args = parser.parse_args(argv)
     # launch.sh resume may pass an empty-string positional when a --plan
@@ -82,9 +89,11 @@ def _parse_local_args(argv: List[str]) -> argparse.Namespace:
     else:
         if not args.instructions:
             die(usage)
-    for m in (args.plan_model, args.impl, args.address, args.detail):
+    for m in (args.plan_model, args.impl, args.address, args.detail, args.test_fix_model):
         if not MODEL_RE.match(m):
             die(f"invalid model: {m}")
+    if args.test_max_attempts <= 0:
+        die("--test-max-attempts must be a positive integer")
     return args
 
 
@@ -187,12 +196,12 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
     def stage_plan() -> None:
         if args.plan_path:
             if plan_copied_from_source:
-                print(f"==> [1/4] plan supplied via --plan (copied) -> {plan_file}", flush=True)
+                print(f"==> [1/5] plan supplied via --plan (copied) -> {plan_file}", flush=True)
             else:
-                print(f"==> [1/4] plan reused from snapshot -> {plan_file}", flush=True)
+                print(f"==> [1/5] plan reused from snapshot -> {plan_file}", flush=True)
         else:
             set_stage("plan")
-            print(f"==> [1/4] planning (model: {args.plan_model}) -> {plan_file}", flush=True)
+            print(f"==> [1/5] planning (model: {args.plan_model}) -> {plan_file}", flush=True)
             run_plan_stage(
                 client=client,
                 plan_model=args.plan_model,
@@ -214,7 +223,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
             except (OSError, UnicodeDecodeError) as exc:
                 print(f"warning: could not read spec.md ({exc}); proceeding without north-star context", flush=True, file=sys.stderr)
         set_stage("implement")
-        print(f"==> [2/4] implementing (model: {args.impl}, from {plan_file})", flush=True)
+        print(f"==> [2/5] implementing (model: {args.impl}, from {plan_file})", flush=True)
         run_implement_stage(
             client=client,
             impl_model=args.impl,
@@ -230,7 +239,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
         plan_text = plan_text_holder.get("text") or plan_file.read_text(encoding="utf-8")
         set_stage("review-code")
         print(
-            f"==> [3/4] reviewing code (model: {args.detail})",
+            f"==> [3/5] reviewing code (model: {args.detail})",
             flush=True,
         )
         review_file = run_review_code_stage(
@@ -245,7 +254,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
 
     def stage_address_code() -> None:
         set_stage("address-code")
-        print(f"==> [4/4] addressing code reviews (model: {args.address})", flush=True)
+        print(f"==> [4/5] addressing code reviews (model: {args.address})", flush=True)
         run_address_code_stage(
             client=client,
             session_dir=session_dir,
@@ -254,11 +263,32 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
             code_style=code_style,
         )
 
+    def stage_test() -> None:
+        set_stage("test")
+        if args.test_cmd:
+            print(
+                f"==> [5/5] running tests (cmd: {args.test_cmd!r}, "
+                f"max-attempts: {args.test_max_attempts}, model: {args.test_fix_model})",
+                flush=True,
+            )
+        cwd = pathlib.Path.cwd()
+        run_test_stage(
+            client=client,
+            session_dir=session_dir,
+            test_cmd=args.test_cmd,
+            max_attempts=args.test_max_attempts,
+            test_fix_model=args.test_fix_model,
+            is_git=is_git,
+            cwd=cwd,
+            code_style=code_style,
+        )
+
     stages = [
         ("plan", stage_plan),
         ("implement", stage_implement),
         ("review-code", stage_review_code),
         ("address-code", stage_address_code),
+        ("test", stage_test),
     ]
     run_stages(stages, resume_from=args.resume_from)
 
