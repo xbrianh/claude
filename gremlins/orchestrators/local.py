@@ -94,6 +94,8 @@ def _parse_local_args(argv: List[str]) -> argparse.Namespace:
             die(f"invalid model: {m}")
     if args.test_max_attempts <= 0:
         die("--test-max-attempts must be a positive integer")
+    if args.test_cmd is not None and not args.test_cmd.strip():
+        die("--test: command must be a non-empty string")
     return args
 
 

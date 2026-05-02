@@ -1,6 +1,5 @@
 """Tests for gremlins.stages.test."""
 import json
-import pathlib
 
 import pytest
 

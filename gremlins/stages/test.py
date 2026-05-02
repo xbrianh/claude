@@ -12,7 +12,7 @@ import pathlib
 import subprocess
 
 from ..clients.claude import ClaudeClient
-from ..state import emit_bail
+from ..state import check_bail, emit_bail
 
 PROMPT_TEMPLATE_PATH = pathlib.Path(__file__).resolve().parent.parent / "prompts" / "test_fix.md"
 
@@ -59,7 +59,7 @@ def run_test_stage(
     commit_instr = ""
     if is_git:
         commit_instr = (
-            "After fixing, stage the changed files by name and create a single git "
+            "- After fixing, stage the changed files by name and create a single git "
             "commit titled 'Fix failing tests'. Do not push."
         )
 
@@ -75,6 +75,7 @@ def run_test_stage(
     template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
 
     _exhausted = False
+    _agent_bailed = False
     try:
         for attempt in range(1, max_attempts + 1):
             log_file = session_dir / f"test-attempt-{attempt}.log"
@@ -96,10 +97,10 @@ def run_test_stage(
             diff = _diff_text(is_git, cwd)
             test_output = log_file.read_text(encoding="utf-8")
             fix_prompt = template.format(
-                code_style=code_style,
-                test_cmd=_escape_fmt(test_cmd),
-                test_output=_escape_fmt(test_output),
-                diff_text=_escape_fmt(diff),
+                code_style=_escape_fmt(code_style),
+                test_cmd=test_cmd,
+                test_output=test_output,
+                diff_text=diff,
                 commit_instr=commit_instr,
                 bail_section=bail_section,
             )
@@ -109,11 +110,16 @@ def run_test_stage(
                 model=test_fix_model,
                 raw_path=session_dir / f"stream-test-{attempt}.jsonl",
             )
+            # Propagate immediately if the agent wrote a bail marker; don't
+            # overwrite it by running another test attempt or exhaustion bail.
+            _agent_bailed = True
+            check_bail(f"test-fix-{attempt}")
+            _agent_bailed = False
 
         _exhausted = True
         emit_bail("other", f"tests failed after {max_attempts} attempts")
         raise RuntimeError(f"test stage exhausted {max_attempts} attempts")
     except (SystemExit, Exception) as exc:
-        if not _exhausted:
+        if not _exhausted and not _agent_bailed:
             emit_bail("other", f"test stage failed: {exc}"[:200])
         raise
