@@ -15,10 +15,12 @@ def run_ghreview_stage(
     model: Optional[str],
     pr_url: str,
     artifacts_dir: pathlib.Path,
+    code_style: str,
 ) -> None:
     """Run /ghreview. Calls check_bail after completion."""
+    prompt = f"## Coding style\n\n{code_style}\n\n/ghreview {pr_url}"
     client.run(
-        f"/ghreview {pr_url}",
+        prompt,
         label="ghreview",
         model=model,
         raw_path=artifacts_dir / "stream-ghreview.jsonl",
