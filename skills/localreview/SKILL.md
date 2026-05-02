@@ -2,7 +2,7 @@
 name: localreview
 description: Run the detail code review over local changes without the full gremlin pipeline. Writes review-code-detail-*.md into --dir (cwd by default). Foreground, not backgrounded.
 argument-hint: [--dir <path>] [--plan <path>] [-b <detail-model>]
-allowed-tools: Bash(~/.claude/skills/localgremlin/localreview.py:*)
+allowed-tools: Bash(~/.claude/skills/localgremlin/localreview.sh:*)
 ---
 
 Run a code review on the current local changes using the same detail reviewer as `/localgremlin`'s review-code stage, without planning or implementing anything.
@@ -29,7 +29,7 @@ $ARGUMENTS
 Forward them verbatim to the script:
 
 ```
-~/.claude/skills/localgremlin/localreview.py $ARGUMENTS
+~/.claude/skills/localgremlin/localreview.sh $ARGUMENTS
 ```
 
 Flags:

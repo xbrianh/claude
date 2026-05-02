@@ -2,7 +2,7 @@
 name: gremlins
 description: On-demand status of background gremlins launched by /localgremlin and /ghgremlin. Reads every ~/.local/state/claude-gremlins/<id>/state.json on the machine and prints one line per active gremlin with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed gremlins, close finished ones, stop a running gremlin, rescue a dead/stalled one, or land a finished gremlin onto its target branch. Not a project filter by default — set --here to restrict to the current repo.
 argument-hint: [stop|rescue [--headless]|rm|close|log|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh|boss] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
-allowed-tools: Bash(~/.claude/skills/gremlins/gremlins.py:*)
+allowed-tools: Bash(~/.claude/skills/gremlins/gremlins.sh:*)
 ---
 
 You are running the `gremlins` status command. It reads the persistent state under `~/.local/state/claude-gremlins/` (or `$XDG_STATE_HOME/claude-gremlins/` if `XDG_STATE_HOME` is set) and summarizes every active (not-yet-closed) background gremlin across every project on this machine.
@@ -12,7 +12,7 @@ You are running the `gremlins` status command. It reads the persistent state und
 Run the script and print its output verbatim to the user — do not paraphrase or summarize. The entry point is a thin shim that execs into `python -m gremlins.cli fleet`; the fleet-manager logic lives in `gremlins/fleet.py`:
 
 ```
-~/.claude/skills/gremlins/gremlins.py $ARGUMENTS
+~/.claude/skills/gremlins/gremlins.sh $ARGUMENTS
 ```
 
 The script produces a small table. Each row is one gremlin:

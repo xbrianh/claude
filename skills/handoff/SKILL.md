@@ -2,7 +2,7 @@
 name: handoff
 description: Reads the current plan document and the diff accumulated on the branch, decides whether the chain is complete or a next step is needed, and writes an updated plan plus (on next-plan) a child plan suitable for launch.sh --plan. Foreground, not backgrounded.
 argument-hint: --plan <path> [--spec <path>] [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]
-allowed-tools: Bash(~/.claude/skills/handoff/handoff.py:*)
+allowed-tools: Bash(~/.claude/skills/handoff/handoff.sh:*)
 ---
 
 You are running the `handoff` chain-step decision agent. It reads the current plan, compares it against the diff that has landed on the branch since the chain started, and decides what to do next.
@@ -61,7 +61,7 @@ $ARGUMENTS
 Forward them verbatim to the script. The entry point is a thin shim that execs into `python -m gremlins.cli handoff`; the handoff agent lives in `gremlins/handoff.py`:
 
 ```
-~/.claude/skills/handoff/handoff.py $ARGUMENTS
+~/.claude/skills/handoff/handoff.sh $ARGUMENTS
 ```
 
 Flags:

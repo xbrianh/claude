@@ -2,7 +2,7 @@
 name: localaddress
 description: Address findings from a set of `review-code-{holistic,detail,scope}-*.md` files in --dir, deduping overlaps and fixing actionable items. In a git repo, creates a single 'Address review feedback' commit (no push). Foreground, not backgrounded.
 argument-hint: [--dir <path>] [-x <address-model>]
-allowed-tools: Bash(~/.claude/skills/localgremlin/localaddress.py:*)
+allowed-tools: Bash(~/.claude/skills/localgremlin/localaddress.sh:*)
 ---
 
 Read the three `review-code-{holistic,detail,scope}-*.md` review files from `--dir` and fix the actionable findings in the local code, using the same prompt and behavior as `/localgremlin`'s address-code stage.
@@ -33,7 +33,7 @@ $ARGUMENTS
 Forward them verbatim to the script:
 
 ```
-~/.claude/skills/localgremlin/localaddress.py $ARGUMENTS
+~/.claude/skills/localgremlin/localaddress.sh $ARGUMENTS
 ```
 
 Flags:

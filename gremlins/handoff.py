@@ -302,7 +302,7 @@ def sanitize_rolling_plan(out_path: pathlib.Path, timeout: Optional[int]) -> Non
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    usage = "usage: handoff.py --plan <path> [--spec <path>] [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]"
+    usage = "usage: handoff.sh --plan <path> [--spec <path>] [--out <path>] [--base <ref>] [--model <model>] [--timeout <secs>]"
     parser = argparse.ArgumentParser(add_help=False, usage=usage)
     parser.add_argument("--plan", dest="plan", required=True)
     parser.add_argument("--spec", dest="spec", default=None,
