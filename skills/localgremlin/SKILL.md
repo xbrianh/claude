@@ -1,7 +1,7 @@
 ---
 name: localgremlin
-description: Run the end-to-end plan → implement → review-code → address-code workflow in the background by invoking `python -m gremlins.cli launch`. Plan and code review land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); a single detail review is produced. The launcher returns immediately; you'll be notified when the gremlin finishes.
-argument-hint: [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-b <detail-review-model>] [--plan <path> | --instructions <instructions>]
+description: Run the end-to-end plan → implement → review-code → address-code → test workflow in the background by invoking `python -m gremlins.cli launch`. Plan and code review land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); a single detail review is produced. The launcher returns immediately; you'll be notified when the gremlin finishes.
+argument-hint: [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-b <detail-review-model>] [--test "<command>"] [--test-max-attempts <n>] [-t <test-fix-model>] [--plan <path> | --instructions <instructions>]
 allowed-tools: Bash(python -m gremlins.cli launch:*)
 ---
 
@@ -25,7 +25,7 @@ Plan and code-review artifacts live outside the product branch — they are scaf
 - `~/.local/state/claude-gremlins/<gremlin-id>/state.json` — gremlin status, exit code, workdir path, branch name.
 - `bg/localgremlin/<gremlin-id>` — durable branch with **only** the code changes (no scaffolding). From the main working tree: `git checkout bg/localgremlin/<gremlin-id>` to inspect, merge, or discard. A squash-merge pulls in product code cleanly.
 
-Commits on the branch, in order: implementation → "Address review feedback" (absent if reviewers found nothing).
+Commits on the branch, in order: implementation → "Address review feedback" (absent if reviewers found nothing) → "Fix failing tests" (one per test-fix attempt, absent if `--test` was not supplied or tests passed on first try).
 
 On success the isolated worktree is removed — `state.json`'s `workdir` field will point to a nonexistent path, which is expected (the branch is the durable code record; the artifacts directory is the durable review record). On failure the worktree is preserved for debugging at the path still recorded in `state.json`.
 
@@ -69,6 +69,19 @@ the plan stage. The file's contents are copied into the gremlin's session as
 - Errors (file missing, file empty, both `--plan` and `--instructions` supplied,
   neither supplied) are surfaced in `python -m gremlins.cli launch` before the
   state directory is created, so a bad invocation leaves no state-dir litter behind.
+
+## `--test "<command>"`
+
+Optional. When supplied, adds a final **test** stage after address-code that runs
+the command in a loop until it exits 0 or the attempt cap is hit:
+
+- `--test "pytest -x"` — run pytest; fix and retry on failure.
+- `--test "npm test && npm run lint"` — chain commands with `&&`.
+- `--test-max-attempts <n>` — cap the fix loop (default: 3).
+- `-t <model>` — model for test-fix claude calls (default: sonnet).
+
+If `--test` is omitted, the test stage is a no-op and the pipeline behaves
+exactly as before.
 
 ## Do not
 

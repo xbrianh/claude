@@ -199,7 +199,9 @@ def get_remote_branch_sha(project_root: str, branch: str) -> str:
 
 def init_boss_state(spec_path: str, chain_kind: str, chain_base_ref: str,
                     target_branch: str, state_dir: str,
-                    issue_url: str = "", issue_num: str = "") -> dict:
+                    issue_url: str = "", issue_num: str = "",
+                    test_cmd: str = "", test_max_attempts: int = 3,
+                    test_fix_model: str = "") -> dict:
     boss_state = {
         "spec_path": spec_path,
         "chain_kind": chain_kind,
@@ -220,6 +222,11 @@ def init_boss_state(spec_path: str, chain_kind: str, chain_base_ref: str,
         # agent produced, so by chain-done it holds the final list of
         # operator tasks the human still owes between phase landings.
         "operator_followups": [],
+        # Test command forwarded to every child local gremlin. Persisted so
+        # a rescued boss continues forwarding the same command after a crash.
+        "test_cmd": test_cmd,
+        "test_max_attempts": test_max_attempts,
+        "test_fix_model": test_fix_model,
     }
     save_json(os.path.join(state_dir, "boss_state.json"), boss_state)
     return boss_state
@@ -354,11 +361,22 @@ def launch_child(gr_id: str, launch_kind: str, child_plan: str) -> str:
     boss_state = load_boss_state(os.path.join(STATE_ROOT, gr_id))
     spec_path = boss_state.get("spec_path") or None
 
+    test_cmd = boss_state.get("test_cmd") or None
+    test_max = boss_state.get("test_max_attempts")
+    test_model = boss_state.get("test_fix_model") or None
+    extra: list = []
+    if test_cmd:
+        extra += ["--test", test_cmd]
+        if test_max is not None:
+            extra += ["--test-max-attempts", str(test_max)]
+        if test_model:
+            extra += ["-t", test_model]
+
     log(f"launching child ({launch_kind}): {child_plan}, base={base_ref[:12]}")
     try:
         child_id = _launch(launch_kind, plan=child_plan, parent_id=gr_id,
                            project_root=project_root, base_ref=base_ref,
-                           spec_path=spec_path)
+                           spec_path=spec_path, pipeline_args=tuple(extra))
     except (ValueError, RuntimeError) as exc:
         die(f"launcher failed: {exc}")
 
@@ -478,6 +496,9 @@ def _parse_boss_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--chain-kind", required=True, choices=["local", "gh"])
     p.add_argument("--model", default="sonnet")
     p.add_argument("--resume-from", default=None)
+    p.add_argument("--test", dest="test_cmd", default=None)
+    p.add_argument("--test-max-attempts", dest="test_max_attempts", type=int, default=3)
+    p.add_argument("-t", dest="test_fix_model", default="sonnet")
     args, _ = p.parse_known_args(argv)
     return args
 
@@ -640,6 +661,11 @@ def boss_main(argv: List[str]) -> int:
         # input cannot perturb later handoffs. For issue refs, the fetch
         # happens here (after launch.sh has detached) so a transient GitHub
         # outage is reported in the boss log instead of failing the launch.
+        if args.test_cmd and chain_kind == "gh":
+            die(
+                "--test is not supported for --chain-kind gh "
+                "(gh pipeline test integration is a separate plan)"
+            )
         spec_path, issue_url, issue_num = _resolve_plan_source(args.plan, state_dir)
         if issue_url:
             log(f"chain start: kind={chain_kind}, spec={spec_path}, issue={issue_url}")
@@ -665,6 +691,9 @@ def boss_main(argv: List[str]) -> int:
             state_dir=state_dir,
             issue_url=issue_url,
             issue_num=issue_num,
+            test_cmd=args.test_cmd or "",
+            test_max_attempts=args.test_max_attempts,
+            test_fix_model=args.test_fix_model,
         )
         # Record initial boss HEAD so local children branch from the right commit.
         if chain_kind == "local" and boss_workdir and os.path.isdir(boss_workdir):

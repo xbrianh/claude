@@ -41,6 +41,9 @@ Flags:
   At chain start, the boss snapshots the spec into `<state-dir>/spec.md` and reads only the snapshot for the rest of the chain. The original input is never re-read, so a deleted file or mutated GitHub issue cannot perturb a running chain. On rescue, the snapshot is authoritative — no re-fetch.
 - `--chain-kind local|gh` — (required) whether children are `localgremlin` (local branch, squash-merged) or `ghgremlin` (GitHub PR, squash-merged to main). A chain is homogeneous — all children are the same kind.
 - `--model <model>` — model to use for handoff agent calls (default: `sonnet`).
+- `--test "<command>"` — optional test command forwarded to every child local gremlin (e.g. `--test "pytest -x"`). Each child runs it after address-code and loops on failure. Only supported for `--chain-kind local`; rejected for `--chain-kind gh`.
+- `--test-max-attempts <n>` — cap the per-child test fix loop (default: 3).
+- `-t <model>` — model for per-child test-fix claude calls (default: `sonnet`).
 
 ## Where artifacts go
 

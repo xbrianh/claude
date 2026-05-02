@@ -17,7 +17,7 @@ ghgremlin branch lifecycle, launcher contract, and phase rollout history.
 - `handoff.py` — chain-step decision agent (next-plan / chain-done / bail).
 - `clients/claude.py` — `ClaudeClient` Protocol + `SubprocessClaudeClient` (production).
 - `clients/fake.py` — `FakeClaudeClient` recording test double; replays canned stream-json from fixtures keyed by `label`.
-- `stages/` — per-stage bodies: `plan`, `implement`, `review_code`, `address_code`, `commit_pr`, `ghreview`, `ghaddress`, `wait_copilot`. (The `request-copilot` stage body is inlined as a closure in `orchestrators/gh.py`.)
+- `stages/` — per-stage bodies: `plan`, `implement`, `review_code`, `address_code`, `test`, `commit_pr`, `ghreview`, `ghaddress`, `wait_copilot`. (The `request-copilot` stage body is inlined as a closure in `orchestrators/gh.py`.)
 - `orchestrators/local.py` — `local_main`, `review_main`, `address_main`.
 - `orchestrators/gh.py` — `gh_main`. Drives the gh pipeline.
 - `orchestrators/boss.py` — `boss_main`. Subprocesses out to `python -m gremlins.cli handoff` and `python -m gremlins.cli fleet {stop,land,rescue}` between child gremlins.
@@ -63,7 +63,7 @@ validated in the orchestrators; marker-protocol bail reasons live in
 [`DESIGN.md`](DESIGN.md) (§Marker-protocol bail reasons).
 
 - **Bail classes** (`state.json.bail_class`): `reviewer_requested_changes`, `security`, `secrets`, `other`.
-- **Local stage names**: `plan`, `implement`, `review-code`, `address-code`.
+- **Local stage names**: `plan`, `implement`, `review-code`, `address-code`, `test`.
 - **Gh stage names**: `plan`, `implement`, `commit-pr`, `request-copilot`, `ghreview`, `wait-copilot`, `ghaddress`.
 - **Marker-protocol bail reasons**: `diagnosis_no_marker`, `diagnosis_bad_marker`, `diagnosis_claude_error`, `diagnosis_timeout`, `excluded_class:<class>`, `attempts_exhausted`, `relaunch_launcher_missing`, `relaunch_failed`.
 
