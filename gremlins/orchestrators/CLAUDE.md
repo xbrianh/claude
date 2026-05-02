@@ -33,11 +33,11 @@ Per-pipeline orchestrator entry points. Each module owns one CLI subcommand
 - Stage-name vocabulary per orchestrator is byte-stable (see parent
   CLAUDE.md §"Byte-stable strings"). `VALID_RESUME_STAGES` /
   `VALID_STAGES` constants are the source of truth.
-- `AGENT_FILE` in `local.py` and `gh.py` resolves
-  `agents/pragmatic-developer.md` via three `parent`s up from `__file__`.
-  This works because the package lives at `~/.claude/gremlins/` and the
-  agents dir is its sibling. If you move this directory deeper, update the
-  parent count.
+- Both `local.py` and `gh.py` call `load_code_style()` from
+  `gremlins.prompts`, which reads `gremlins/prompts/code_style.md` via a
+  `pathlib.Path(__file__)` resolve in `prompts/__init__.py`. This is the
+  canonical coding-style doc for all gremlin pipeline stages; edit it there
+  rather than touching `agents/pragmatic-developer.md`.
 
 ## Boss-specific notes
 

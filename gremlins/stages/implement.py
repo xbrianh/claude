@@ -102,7 +102,7 @@ def run_implement_stage(
     client: ClaudeClient,
     impl_model: Optional[str],
     plan_text: str,
-    core_principles: str,
+    code_style: str,
     session_dir: pathlib.Path,
     is_git: bool,
     kind: str = "local",
@@ -123,7 +123,7 @@ def run_implement_stage(
             client=client,
             impl_model=impl_model,
             plan_text=plan_text,
-            core_principles=core_principles,
+            code_style=code_style,
             session_dir=session_dir,
             issue_num=issue_num,
             cwd=cwd,
@@ -152,7 +152,7 @@ def run_implement_stage(
 
     template = PROMPT_LOCAL_PATH.read_text(encoding="utf-8")
     prompt = template.format(
-        core_principles=core_principles,
+        code_style=code_style,
         spec_block=_render_spec_block(spec_text),
         plan_text=plan_text,
         impl_commit_instr=impl_commit_instr,
@@ -185,7 +185,7 @@ def _run_implement_gh(
     client: ClaudeClient,
     impl_model: Optional[str],
     plan_text: str,
-    core_principles: str,
+    code_style: str,
     session_dir: pathlib.Path,
     issue_num: str,
     cwd: Optional[str],
@@ -207,7 +207,7 @@ def _run_implement_gh(
 
     template = PROMPT_GH_PATH.read_text(encoding="utf-8")
     prompt = template.format(
-        core_principles=core_principles,
+        code_style=code_style,
         spec_block=_render_spec_block(spec_text),
         plan_source_label=plan_source_label,
         issue_body=plan_text,

@@ -44,6 +44,7 @@ def run_address_code_stage(
     session_dir: pathlib.Path,
     address_model: str,
     is_git: bool,
+    code_style: str,
 ) -> None:
     """Execute the address-code stage. Emits bail_class=other on failure
     when running under a gremlin (no-op otherwise) — including failures
@@ -94,6 +95,7 @@ Do not call this helper if you successfully addressed every actionable finding.
 
         template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
         address_prompt = template.format(
+            code_style=code_style,
             model=model,
             text=text,
             address_commit_instr=address_commit_instr,

@@ -27,6 +27,7 @@ from typing import Dict, List, Optional
 from ..clients.claude import ClaudeClient, SubprocessClaudeClient
 from ..gh_utils import extract_gh_url, get_repo, parse_issue_ref, view_issue
 from ..git import DirtyOnly, HeadAdvanced
+from ..prompts import load_code_style
 from ..runner import install_signal_handlers, run_stages
 from ..stages.commit_pr import run_commit_pr_stage
 from ..stages.ghaddress import run_ghaddress_stage
@@ -48,35 +49,11 @@ VALID_STAGES = [
     "ghaddress",
 ]
 
-AGENT_FILE = (
-    pathlib.Path(__file__).resolve().parent.parent.parent
-    / "agents"
-    / "pragmatic-developer.md"
-)
-
 
 def die(msg: str) -> None:
     sys.stderr.write(f"error: {msg}\n")
     sys.stderr.flush()
     sys.exit(1)
-
-
-def _load_core_principles() -> str:
-    if not AGENT_FILE.exists():
-        die(f"missing agent file: {AGENT_FILE}")
-    text = AGENT_FILE.read_text(encoding="utf-8")
-    in_section = False
-    lines: list = []
-    for line in text.splitlines(keepends=True):
-        if line.startswith("## Core Principles"):
-            in_section = True
-        elif in_section and line.startswith("## "):
-            break
-        elif in_section:
-            lines.append(line)
-    if not lines:
-        die("could not find '## Core Principles' section in pragmatic-developer.md")
-    return "".join(lines).rstrip()
 
 
 def _parse_gh_args(argv: List[str]) -> argparse.Namespace:
@@ -344,7 +321,7 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
         print(f"    resumed issue: {issue_url}", flush=True)
         issue_body = _fetch_issue_body(issue_num, repo)
 
-    core_principles = _load_core_principles()
+    code_style = load_code_style()
 
     # pr_url populated by stage_commit_pr; later stages read it here.
     pr_url_holder: Dict[str, str] = {}
@@ -405,7 +382,7 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
             client=client,
             impl_model=model,
             plan_text=issue_body,
-            core_principles=core_principles,
+            code_style=code_style,
             session_dir=session_dir,
             is_git=True,
             kind="gh",
