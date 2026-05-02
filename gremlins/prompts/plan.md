@@ -1,3 +1,7 @@
+When writing code, follow these principles:
+
+{code_style}
+
 Create a detailed implementation plan for the following task and write it to the file `{plan_file}`. Use this structure:
 
 ## Context

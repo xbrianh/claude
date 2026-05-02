@@ -32,6 +32,7 @@ def run_review(
     out_file: pathlib.Path,
     focus: str,
     context: str,
+    code_style: str,
     where_field: str,
     label: str,
     raw_path: pathlib.Path,
@@ -39,7 +40,16 @@ def run_review(
     """Invoke the reviewer. CONTEXT describes what is being reviewed;
     FOCUS is the lens prose; WHERE_FIELD is the field label used to cite
     findings (e.g. `**File:** path:line` for code reviews)."""
-    prompt = f"""Read surrounding code as needed — don't review in isolation.
+    style_preamble = ""
+    if code_style:
+        style_preamble = (
+            "Follow these coding-style rules and flag violations — long functions, "
+            "inheritance where functions suffice, dead comments, speculative "
+            "abstractions — alongside the correctness, security, and performance "
+            "findings in the focus section below:\n\n"
+            f"{code_style}\n\n"
+        )
+    prompt = f"""{style_preamble}Read surrounding code as needed — don't review in isolation.
 
 {context}
 
@@ -75,6 +85,7 @@ def run_review_code_stage(
     plan_text: str,
     detail: str,
     is_git: bool,
+    code_style: str,
 ) -> pathlib.Path:
     """Execute the review-code stage: load the detail lens, run one reviewer,
     and return the output path. Emits bail_class=other on failure when
@@ -131,6 +142,7 @@ def run_review_code_stage(
             out_file=review_code,
             focus=focus,
             context=code_review_context,
+            code_style=code_style,
             where_field="**File:** `path/to/file.ext:<line>`",
             label=f"review-code:detail:{detail}",
             raw_path=session_dir / f"stream-review-code-detail-{detail}.jsonl",

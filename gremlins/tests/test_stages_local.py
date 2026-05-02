@@ -3,11 +3,12 @@ import subprocess
 
 import pytest
 
-from conftest import MINIMAL_EVENTS
+from conftest import MINIMAL_EVENTS, ReviewCreatingClient
 from gremlins.clients.fake import FakeClaudeClient
 from gremlins.stages.address_code import run_address_code_stage
 from gremlins.stages.implement import _render_spec_block, run_implement_stage
 from gremlins.stages.plan import run_plan_stage
+from gremlins.stages.review_code import run_review_code_stage
 
 
 def _init_git_repo(path: pathlib.Path) -> None:
@@ -98,7 +99,7 @@ def test_implement_renders_spec_block_when_present(tmp_path, monkeypatch):
         client=client,
         impl_model="sonnet",
         plan_text="task 1: do something",
-        core_principles="Be good.",
+        code_style="Be good.",
         session_dir=session_dir,
         is_git=True,
         spec_text="overall spec body",
@@ -130,7 +131,7 @@ def test_implement_omits_spec_block_when_absent(tmp_path, monkeypatch):
         client=client,
         impl_model="sonnet",
         plan_text="task 1: do something",
-        core_principles="Be good.",
+        code_style="Be good.",
         session_dir=session_dir,
         is_git=True,
         spec_text="",
@@ -154,6 +155,7 @@ def test_plan_stage_raises_when_file_absent(tmp_path):
             plan_file=plan_file,
             instructions="do stuff",
             raw_path=tmp_path / "stream-plan.jsonl",
+            code_style="Be good.",
         )
     assert len(client.calls) == 1
     assert client.calls[0].label == "plan"
@@ -175,6 +177,7 @@ def test_plan_stage_succeeds_when_file_exists(tmp_path):
         plan_file=plan_file,
         instructions="do stuff",
         raw_path=tmp_path / "stream-plan.jsonl",
+        code_style="Be good.",
     )
     assert plan_file.exists()
     assert client.calls[0].label == "plan"
@@ -201,7 +204,7 @@ def test_implement_stage_raises_on_empty_diff(tmp_path, monkeypatch):
             impl_model="sonnet",
             plan_file=session_dir / "plan.md",
             plan_text="# Plan\nDo stuff.\n",
-            core_principles="Be good.",
+            code_style="Be good.",
             session_dir=session_dir,
             is_git=True,
         )
@@ -231,3 +234,54 @@ def test_address_code_stage_calls_client_with_review_content(tmp_path):
     assert call.label == "address-code"
     assert call.model == "sonnet"
     assert "Detail Review" in call.prompt
+
+
+# ---------------------------------------------------------------------------
+# code_style block appears in plan, review, and address prompts
+# ---------------------------------------------------------------------------
+
+def test_plan_stage_includes_code_style(tmp_path):
+    client = FakeClaudeClient(fixtures={"plan": MINIMAL_EVENTS})
+    plan_file = tmp_path / "plan.md"
+    with pytest.raises(RuntimeError, match="plan stage did not produce"):
+        run_plan_stage(
+            client=client,
+            plan_model="sonnet",
+            plan_file=plan_file,
+            instructions="do stuff",
+            raw_path=tmp_path / "stream.jsonl",
+            code_style="Be good.",
+        )
+    assert "Be good." in client.calls[0].prompt
+
+
+def test_review_code_stage_includes_code_style(tmp_path):
+    client = ReviewCreatingClient(
+        fixtures={"review-code:detail:sonnet": MINIMAL_EVENTS}
+    )
+    run_review_code_stage(
+        client=client,
+        session_dir=tmp_path,
+        plan_text="",
+        detail="sonnet",
+        is_git=False,
+        code_style="Be good.",
+    )
+    assert "Be good." in client.calls[0].prompt
+
+
+def test_address_code_stage_includes_code_style(tmp_path, monkeypatch):
+    (tmp_path / "review-code-detail-sonnet.md").write_text(
+        "# Detail Review\n\n## Findings\nNone.\n"
+    )
+    monkeypatch.setattr(
+        "gremlins.stages.address_code.load_code_style", lambda: "Be good."
+    )
+    client = FakeClaudeClient(fixtures={"address-code": MINIMAL_EVENTS})
+    run_address_code_stage(
+        client=client,
+        session_dir=tmp_path,
+        address_model="sonnet",
+        is_git=False,
+    )
+    assert "Be good." in client.calls[0].prompt

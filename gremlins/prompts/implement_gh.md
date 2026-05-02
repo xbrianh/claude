@@ -1,6 +1,6 @@
 When writing code, follow these principles:
 
-{core_principles}
+{code_style}
 
 {spec_block}The following is the implementation plan {plan_source_label}:
 

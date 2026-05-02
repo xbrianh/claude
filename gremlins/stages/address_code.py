@@ -15,6 +15,7 @@ import pathlib
 import re
 
 from ..clients.claude import ClaudeClient
+from ..prompts import load_code_style
 from ..state import emit_bail
 
 MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -70,6 +71,7 @@ def run_address_code_stage(
 
         model = _model_from(review_file, "detail")
         text = review_file.read_text(encoding="utf-8")
+        code_style = load_code_style()
 
         address_commit_instr = ""
         if is_git:
@@ -94,6 +96,7 @@ Do not call this helper if you successfully addressed every actionable finding.
 
         template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
         address_prompt = template.format(
+            code_style=code_style,
             model=model,
             text=text,
             address_commit_instr=address_commit_instr,

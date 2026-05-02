@@ -20,6 +20,8 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from gremlins.prompts import load_code_style
+
 
 CLAUDE_FLAGS = [
     "--permission-mode", "bypassPermissions",
@@ -105,6 +107,7 @@ def build_prompt(
     child_plan_path: pathlib.Path,
     signal_path: pathlib.Path,
     spec_text: Optional[str] = None,
+    code_style: str = "",
 ) -> str:
     diff_body = git_diff[:50000] if git_diff else "(empty — no changes yet)"
     diff_trunc = f"\n(diff truncated to 50000 chars; {len(git_diff)} chars total)" if len(git_diff) > 50000 else ""
@@ -124,9 +127,19 @@ This is the original chain spec. It does not change between handoffs and is read
 
 """
 
+    style_section = ""
+    if code_style:
+        style_section = f"""## Coding style
+
+Respect these principles when writing child plans. Avoid proposing architectures that violate them — e.g. multi-level class hierarchies, factories where a function suffices, speculative abstractions:
+
+{code_style}
+
+"""
+
     return f"""You are a chain-manager agent. Inspect the plan document and the work that has landed on the current branch, then decide whether the chain is complete or a next step is needed.
 
-{spec_section}## Input plan
+{spec_section}{style_section}## Input plan
 
 ~~~~
 {plan_text}
@@ -379,6 +392,7 @@ def main(argv: List[str]) -> int:
     except Exception as exc:
         die(f"git context collection failed: {exc}")
 
+    code_style = load_code_style()
     prompt = build_prompt(
         plan_text=plan_text,
         branch=branch,
@@ -388,6 +402,7 @@ def main(argv: List[str]) -> int:
         child_plan_path=child_plan_path,
         signal_path=signal_path,
         spec_text=spec_text,
+        code_style=code_style,
     )
 
     cmd = ["claude", "-p", "--model", args.model, *CLAUDE_FLAGS, prompt]

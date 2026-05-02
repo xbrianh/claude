@@ -26,6 +26,7 @@ from typing import List, Optional
 
 from ..clients.claude import ClaudeClient, SubprocessClaudeClient
 from ..git import in_git_repo
+from ..prompts import load_code_style
 from ..runner import install_signal_handlers, run_stages
 from ..stages.address_code import run_address_code_stage
 from ..stages.implement import run_implement_stage
@@ -36,39 +37,11 @@ from ..state import patch_state, resolve_session_dir, set_stage
 MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 VALID_RESUME_STAGES = ["plan", "implement", "review-code", "address-code"]
 
-# `pragmatic-developer.md` is sourced from the synced agents/ dir under
-# ~/.claude. The package lives at ~/.claude/gremlins/, so the agent file
-# is three parents up from this module's location:
-# local.py → orchestrators/ → gremlins/ → ~/.claude/
-AGENT_FILE = (
-    pathlib.Path(__file__).resolve().parent.parent.parent
-    / "agents"
-    / "pragmatic-developer.md"
-)
-
 
 def die(msg: str) -> None:
     sys.stderr.write(f"error: {msg}\n")
     sys.stderr.flush()
     sys.exit(1)
-
-
-def _load_core_principles() -> str:
-    if not AGENT_FILE.exists():
-        die(f"missing agent file: {AGENT_FILE}")
-    text = AGENT_FILE.read_text(encoding="utf-8")
-    in_section = False
-    section_lines: list[str] = []
-    for line in text.splitlines(keepends=True):
-        if line.startswith("## Core Principles"):
-            in_section = True
-        elif in_section and line.startswith("## "):
-            break
-        elif in_section:
-            section_lines.append(line)
-    if not section_lines:
-        die("could not find '## Core Principles' section in pragmatic-developer.md")
-    return "".join(section_lines).rstrip()
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +137,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
         shutil.copyfile(spec_src, spec_file)
 
     is_git = in_git_repo()
-    core_principles = _load_core_principles()
+    code_style = load_code_style()
 
     # Resume preconditions
     start_idx = 0
@@ -226,6 +199,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
                 plan_file=plan_file,
                 instructions=instructions,
                 raw_path=session_dir / "stream-plan.jsonl",
+                code_style=code_style,
             )
 
     def stage_implement() -> None:
@@ -246,7 +220,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
             impl_model=args.impl,
             plan_file=plan_file,
             plan_text=plan_text,
-            core_principles=core_principles,
+            code_style=code_style,
             session_dir=session_dir,
             is_git=is_git,
             spec_text=spec_text,
@@ -265,6 +239,7 @@ def local_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int
             plan_text=plan_text,
             detail=args.detail,
             is_git=is_git,
+            code_style=code_style,
         )
         print(f"    detail code review ({args.detail}): {review_file}", flush=True)
 
@@ -346,6 +321,7 @@ def review_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> in
             die(f"failed to read --plan {plan_path}: {exc}")
 
     is_git = in_git_repo()
+    code_style = load_code_style()
     if is_git:
         # Refuse to spawn three reviewers on an empty diff. HEAD~1 may not
         # exist (initial commit); in that case we require dirty tree to have
@@ -379,6 +355,7 @@ def review_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> in
         plan_text=plan_text,
         detail=args.detail,
         is_git=is_git,
+        code_style=code_style,
     )
     print(f"    detail code review ({args.detail}): {review_file}", flush=True)
     return 0
