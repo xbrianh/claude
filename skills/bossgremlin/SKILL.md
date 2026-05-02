@@ -8,7 +8,7 @@ allowed-tools: Bash(python -m gremlins.cli launch:*)
 You are running the `bossgremlin` workflow **in the background**. The skill is a thin wrapper over `python -m gremlins.cli launch`, which:
 
 1. Creates an isolated git worktree (detached HEAD) of the current project.
-2. Spawns the real boss (`~/.claude/skills/bossgremlin/bossgremlin.py`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+2. Spawns the real boss (`~/.claude/skills/bossgremlin/bossgremlin.sh`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-gremlin state under `~/.local/state/claude-gremlins/<gremlin-id>/` — `state.json`, `boss_state.json`, per-handoff plan files, combined `log`.
 4. Returns within ~1s.
 
@@ -73,5 +73,5 @@ Both halt the chain, but `structural` is a "fix and resume" signal and `unsalvag
 ## Do not
 
 - Do not tail the log or block waiting for the chain to finish.
-- Do not invoke `bossgremlin.py` directly — always go through the launcher.
+- Do not invoke `bossgremlin.sh` directly — always go through the launcher.
 - Do not use `bossgremlin` for single-step tasks — use `/localgremlin` or `/ghgremlin`.

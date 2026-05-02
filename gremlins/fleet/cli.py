@@ -19,7 +19,7 @@ from gremlins.fleet.views import do_drill_in, do_recent, do_list
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        prog="gremlins.py",
+        prog="gremlins.sh",
         description="On-demand status of background gremlins.",
         epilog=(
             "Subcommands (positional, before flags):\n"
