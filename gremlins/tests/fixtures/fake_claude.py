@@ -247,9 +247,9 @@ def classify_stage(prompt: str) -> str:
         return "plan-title"
     if "Print ONLY the PR URL on the final line" in prompt:
         return "commit-pr"
-    if prompt.startswith("/ghreview "):
+    if "/ghreview " in prompt:
         return "ghreview"
-    if prompt.startswith("/ghaddress "):
+    if "/ghaddress " in prompt:
         return "ghaddress"
     if prompt.startswith("/ghplan") or "/ghplan" in prompt[:20]:
         return "ghplan"

@@ -783,6 +783,46 @@ def test_plan_file_path_includes_plan_title_cost_in_total(tmp_path, monkeypatch)
 # Regression: --resume-from commit-pr must not re-run implement
 # ---------------------------------------------------------------------------
 
+def test_code_style_forwarded_to_ghreview_and_ghaddress(tmp_path, monkeypatch):
+    """code_style is threaded into run_ghreview_stage and run_ghaddress_stage."""
+    _init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    session_dir, state_file = _patch_common(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        subprocess, "run",
+        _make_gh_subprocess(issue_body="# Plan\nDo stuff.\n"),
+    )
+
+    captured = {}
+
+    def record_ghreview(**kw):
+        captured["ghreview"] = kw
+
+    def record_ghaddress(**kw):
+        captured["ghaddress"] = kw
+
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_ghreview_stage", record_ghreview)
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_wait_copilot_stage", lambda **kw: "APPROVED")
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_request_copilot_stage", lambda **kw: None)
+    monkeypatch.setattr("gremlins.orchestrators.gh.run_ghaddress_stage", record_ghaddress)
+
+    client = _CommittingClient(
+        git_dir=tmp_path,
+        fixtures={
+            "implement": IMPL_EVENTS,
+            "commit-pr": _pr_events(),
+        },
+    )
+
+    result = gh_main(["--plan", "42"], client=client)
+    assert result == 0
+
+    assert captured["ghreview"]["code_style"] == "Be good."
+    assert captured["ghaddress"]["code_style"] == "Be good."
+
+
 def test_resume_from_commit_pr_skips_implement(tmp_path, monkeypatch):
     """--resume-from commit-pr picks up at commit-pr without re-running implement.
 

@@ -461,6 +461,7 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
             model=model,
             pr_url=pr_url_holder["url"],
             artifacts_dir=session_dir,
+            code_style=code_style,
         )
 
     def stage_wait_copilot() -> None:
@@ -482,6 +483,7 @@ def gh_main(argv: List[str], *, client: Optional[ClaudeClient] = None) -> int:
             model=model,
             pr_url=pr_url_holder["url"],
             artifacts_dir=session_dir,
+            code_style=code_style,
         )
 
     stages = [

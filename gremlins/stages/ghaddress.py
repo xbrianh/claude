@@ -15,10 +15,12 @@ def run_ghaddress_stage(
     model: Optional[str],
     pr_url: str,
     artifacts_dir: pathlib.Path,
+    code_style: str,
 ) -> None:
     """Run /ghaddress on the PR. Calls check_bail after completion."""
+    prompt = f"## Coding style\n\n{code_style}\n\n/ghaddress {pr_url}"
     client.run(
-        f"/ghaddress {pr_url}",
+        prompt,
         label="ghaddress",
         model=model,
         raw_path=artifacts_dir / "stream-ghaddress.jsonl",
