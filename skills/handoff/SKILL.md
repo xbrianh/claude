@@ -58,7 +58,7 @@ Spec authors should label genuinely operator-level acceptance criteria explicitl
 
 $ARGUMENTS
 
-Forward them verbatim to the script. The entry point is a thin shim that execs into `python -m gremlins.cli handoff`; the handoff agent lives in `gremlins/handoff.py`:
+Forward them verbatim to the script. The entry point is a thin shim that execs into `gremlins handoff`:
 
 ```
 ~/.claude/skills/handoff/handoff.sh $ARGUMENTS
