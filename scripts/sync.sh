@@ -23,7 +23,6 @@ DIR_PAIRS=(
     "skills:$CLAUDE_DIR/skills"
     "agents:$CLAUDE_DIR/agents"
     "commands:$CLAUDE_DIR/commands"
-    "gremlins:$CLAUDE_DIR/gremlins"
 )
 
 help_text() {
