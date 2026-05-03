@@ -9,7 +9,6 @@ CLAUDE.md             # repo-level doc for Claude, loaded when cwd is this repo 
 home/CLAUDE.md        # global preferences, synced to ~/.claude/CLAUDE.md
 settings.json         # harness settings: hooks, permissions, plugins
 skills/
-  _bg/                # background-gremlin scripts: finish.sh, launch.sh
   design/             # /design: chat-driven spec writer; produces /tmp/design-<slug>.md
   ghplan/             # /ghplan: draft a plan, post it as a GitHub issue
   ghgremlin/          # /ghgremlin: run the full gremlin in the background via gremlins launch

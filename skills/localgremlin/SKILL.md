@@ -1,14 +1,14 @@
 ---
 name: localgremlin
-description: Run the end-to-end plan → implement → review-code → address-code → test workflow in the background by invoking `python -m gremlins.cli launch`. Plan and code review land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); a single detail review is produced. The launcher returns immediately; you'll be notified when the gremlin finishes.
+description: Run the end-to-end plan → implement → review-code → address-code → test workflow in the background by invoking `gremlins launch`. Plan and code review land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); a single detail review is produced. The launcher returns immediately; you'll be notified when the gremlin finishes.
 argument-hint: [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-b <detail-review-model>] [--test "<command>"] [--test-max-attempts <n>] [-t <test-fix-model>] [--plan <path> | --instructions <instructions>]
-allowed-tools: Bash(python -m gremlins.cli launch:*)
+allowed-tools: Bash(gremlins launch:*)
 ---
 
-You are running the `localgremlin` workflow **in the background**. The skill is a thin wrapper over `python -m gremlins.cli launch`, which:
+You are running the `localgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
 
 1. Creates an isolated git worktree of the current project on a fresh branch named `bg/localgremlin/<gremlin-id>` (or `cp -a` copies the tree for non-git projects).
-2. Invokes `python -m gremlins.cli local` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+2. Invokes `gremlins local` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-gremlin state under `~/.local/state/claude-gremlins/<gremlin-id>/` (or `$XDG_STATE_HOME/claude-gremlins/<gremlin-id>/` if `XDG_STATE_HOME` is set) — `state.json`, combined `log`, markers.
 4. Returns within ~1s.
 
@@ -45,7 +45,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `localgremlin` kind argument:
 
 ```
-python -m gremlins.cli launch --description "<phrase>" localgremlin $ARGUMENTS
+gremlins launch --description "<phrase>" localgremlin $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
@@ -67,7 +67,7 @@ the plan stage. The file's contents are copied into the gremlin's session as
 - The gremlin's description defaults to the first `# heading` in the plan
   file unless `--description` is supplied explicitly.
 - Errors (file missing, file empty, both `--plan` and `--instructions` supplied,
-  neither supplied) are surfaced in `python -m gremlins.cli launch` before the
+  neither supplied) are surfaced in `gremlins launch` before the
   state directory is created, so a bad invocation leaves no state-dir litter behind.
 
 ## `--test "<command>"`
@@ -87,5 +87,5 @@ exactly as before.
 
 - Do not tail the log or block waiting for the gremlin to finish.
 - Do not pass extra flags the launcher doesn't accept.
-- Do not invoke `gremlins.cli local` directly — always go through the launcher.
+- Do not invoke `gremlins local` directly — always go through the launcher.
 - Do not run the individual stages inline.

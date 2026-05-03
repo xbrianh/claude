@@ -1,14 +1,14 @@
 ---
 name: ghgremlin
-description: Run the end-to-end plan → implement → review → address workflow in the background by invoking `python -m gremlins.cli launch`. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them. The launcher returns immediately; you'll be notified when the gremlin finishes.
+description: Run the end-to-end plan → implement → review → address workflow in the background by invoking `gremlins launch`. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them. The launcher returns immediately; you'll be notified when the gremlin finishes.
 argument-hint: [-r <ref>] [--plan <path|issue-ref> | --instructions <instructions>]
-allowed-tools: Bash(python -m gremlins.cli launch:*)
+allowed-tools: Bash(gremlins launch:*)
 ---
 
-You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `python -m gremlins.cli launch`, which:
+You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
 
 1. Creates an isolated git worktree of the current project (detached HEAD).
-2. Invokes `python -m gremlins.cli gh` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+2. Invokes `gremlins gh` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-gremlin state under `~/.local/state/claude-gremlins/<gremlin-id>/` (or `$XDG_STATE_HOME/claude-gremlins/<gremlin-id>/` if `XDG_STATE_HOME` is set) — `state.json`, combined `log`, markers.
 4. Returns within ~1s.
 
@@ -38,7 +38,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `ghgremlin` kind argument:
 
 ```
-python -m gremlins.cli launch --description "<phrase>" ghgremlin $ARGUMENTS
+gremlins launch --description "<phrase>" ghgremlin $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
@@ -74,7 +74,7 @@ Rules:
 - Files must be non-empty; issues must exist and have a non-empty body.
 - Failure modes split by where they fire:
   - **Clean (no state dir):** mutex violations (`--plan` + `--instructions`, or
-    neither) and missing / empty local file are caught in `python -m gremlins.cli launch`
+    neither) and missing / empty local file are caught in `gremlins launch`
     before the state directory is created.
   - **Dirty (failed state dir left behind):** issue-ref errors (unreachable
     issue, unrecognized shape, empty issue body) fire in `ghgremlin.sh`
@@ -85,5 +85,5 @@ Rules:
 
 - Do not tail the log or block waiting for the gremlin to finish.
 - Do not pass extra flags the launcher doesn't accept.
-- Do not invoke the gremlin script (`ghgremlin.sh`) directly — always go through `python -m gremlins.cli launch`.
+- Do not invoke the gremlin script (`ghgremlin.sh`) directly — always go through `gremlins launch`.
 - Do not run the individual skills (`/ghplan`, `/ghreview`, `/ghaddress`) inline — the backgrounded gremlin already chains them.

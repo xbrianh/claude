@@ -2,7 +2,7 @@
 # Bidirectional sync between the user's home config and this repo.
 # Tracks:
 #   ~/.claude/CLAUDE.md, ~/.claude/settings.json
-#   ~/.claude/skills/, ~/.claude/agents/, ~/.claude/commands/, ~/.claude/gremlins/
+#   ~/.claude/skills/, ~/.claude/agents/, ~/.claude/commands/
 # Excludes: settings.local.json (local-only)
 
 set -euo pipefail
