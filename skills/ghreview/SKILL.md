@@ -3,7 +3,7 @@ name: ghreview
 description: Review a GitHub PR and post the review with inline comments. Takes a PR number or URL as argument.
 disable-model-invocation: true
 argument-hint: [pr-number-or-url]
-allowed-tools: Bash(gh *), Bash(gremlins bail *), Read, Grep, Glob
+allowed-tools: Bash(gh *), Bash($HOME/.claude/.venv/bin/python -m gremlins.bail *), Read, Grep, Glob
 ---
 
 # Review a GitHub PR and post inline comments
@@ -76,13 +76,13 @@ If the env var `GR_ID` is set, you are running inside a background gremlin pipel
 - **Security-related blocker** (auth gaps, injection, credential exposure, OWASP top 10 issues): the review identified one or more blocker-severity findings that are security-related. Run:
 
   ```
-  gremlins bail security "<one-line summary>"
+  "$HOME/.claude/.venv/bin/python" -m gremlins.bail security "<one-line summary>"
   ```
 
 - **Other blocker-severity findings** (correctness, design, anything else a human should weigh in on): run:
 
   ```
-  gremlins bail reviewer_requested_changes "<one-line summary>"
+  "$HOME/.claude/.venv/bin/python" -m gremlins.bail reviewer_requested_changes "<one-line summary>"
   ```
 
 If the review has no blocker-severity findings (or `GR_ID` is unset because this is a direct human invocation), do not run the helper — exit normally.

@@ -5,10 +5,10 @@ argument-hint: [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-b <det
 allowed-tools: Bash("$HOME/.claude/.venv/bin/gremlins" launch:*)
 ---
 
-You are running the `localgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
+You are running the `localgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch local`, which:
 
 1. Creates an isolated git worktree of the current project on a fresh branch named `bg/localgremlin/<gremlin-id>` (or `cp -a` copies the tree for non-git projects).
-2. Invokes `gremlins local` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+2. Runs the local pipeline (plan → implement → review-code → address-code → test) in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-gremlin state under `~/.local/state/claude-gremlins/<gremlin-id>/` (or `$XDG_STATE_HOME/claude-gremlins/<gremlin-id>/` if `XDG_STATE_HOME` is set) — `state.json`, combined `log`, markers.
 4. Returns within ~1s.
 
@@ -42,10 +42,10 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 - task "add a /gremlins skill that prints status of background gremlins" → `"add /gremlins status command"`
 - task "fix the off-by-one in the review-code stage exit path" → `"fix review-code stage exit bug"`
 
-Pass it as `--description "<phrase>"` before the `localgremlin` kind argument:
+Pass it as `--description "<phrase>"` after the `local` kind argument:
 
 ```
-"$HOME/.claude/.venv/bin/gremlins" launch --description "<phrase>" localgremlin $ARGUMENTS
+"$HOME/.claude/.venv/bin/gremlins" launch local --description "<phrase>" $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
@@ -87,5 +87,4 @@ exactly as before.
 
 - Do not tail the log or block waiting for the gremlin to finish.
 - Do not pass extra flags the launcher doesn't accept.
-- Do not invoke `gremlins local` directly — always go through the launcher.
 - Do not run the individual stages inline.

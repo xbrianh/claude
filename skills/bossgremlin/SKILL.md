@@ -5,10 +5,10 @@ argument-hint: --plan <spec-path|issue-ref> --chain-kind local|gh [--model <mode
 allowed-tools: Bash("$HOME/.claude/.venv/bin/gremlins" launch:*)
 ---
 
-You are running the `bossgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
+You are running the `bossgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch boss`, which:
 
 1. Creates an isolated git worktree (detached HEAD) of the current project.
-2. Spawns the real boss (`~/.claude/skills/bossgremlin/bossgremlin.sh`) detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+2. Spawns the boss orchestrator detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-gremlin state under `~/.local/state/claude-gremlins/<gremlin-id>/` — `state.json`, `boss_state.json`, per-handoff plan files, combined `log`.
 4. Returns within ~1s.
 
@@ -24,10 +24,10 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 
 - "refactor API then migrate callers then update docs" → `"api refactor + caller migration + docs"`
 
-Pass it as `--description "<phrase>"` before the `bossgremlin` kind argument:
+Pass it as `--description "<phrase>"` after the `boss` kind argument:
 
 ```
-"$HOME/.claude/.venv/bin/gremlins" launch --description "<phrase>" bossgremlin --plan <spec-path|issue-ref> --chain-kind <local|gh> [--model <model>]
+"$HOME/.claude/.venv/bin/gremlins" launch boss --description "<phrase>" --plan <spec-path|issue-ref> --chain-kind <local|gh> [--model <model>]
 ```
 
 Flags:
@@ -76,5 +76,4 @@ Both halt the chain, but `structural` is a "fix and resume" signal and `unsalvag
 ## Do not
 
 - Do not tail the log or block waiting for the chain to finish.
-- Do not invoke `bossgremlin.sh` directly — always go through `gremlins launch`.
 - Do not use `bossgremlin` for single-step tasks — use `/localgremlin` or `/ghgremlin`.

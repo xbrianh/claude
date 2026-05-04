@@ -1,7 +1,7 @@
 ---
 name: gremlins
 description: On-demand status of background gremlins launched by /localgremlin and /ghgremlin. Reads every ~/.local/state/claude-gremlins/<id>/state.json on the machine and prints one line per active gremlin with its kind, current stage, liveness (running / stalled / dead), description, and age. Use to check progress, spot crashed gremlins, close finished ones, stop a running gremlin, rescue a dead/stalled one, or land a finished gremlin onto its target branch. Not a project filter by default — set --here to restrict to the current repo.
-argument-hint: [stop|rescue [--headless]|rm|close|log|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh|boss] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
+argument-hint: [stop|rescue [--headless]|resume|rm|close|log|land [--squash|--ff] <id>] [--here] [--running] [--dead] [--stalled] [--kind local|gh|boss] [--since <dur>] [--recent [N]] [--watch [sec]] [<id-prefix>]
 allowed-tools: Bash(~/.claude/skills/gremlins/gremlins.sh:*)
 ---
 
@@ -9,7 +9,7 @@ You are running the `gremlins` status command. It reads the persistent state und
 
 ## What to do
 
-Run the script and print its output verbatim to the user — do not paraphrase or summarize. The entry point is a thin shim that execs into `gremlins fleet`:
+Run the script and print its output verbatim to the user — do not paraphrase or summarize. The entry point is a thin shim that execs into the bare `gremlins` CLI (which prints fleet status by default):
 
 ```
 ~/.claude/skills/gremlins/gremlins.sh $ARGUMENTS
@@ -31,12 +31,13 @@ The script produces a small table. Each row is one gremlin:
 - `--running`: show only gremlins whose liveness is `running` (the pre-change default view, for when you only want live processes).
 - `--dead`: show only gremlins whose liveness starts with `dead:`.
 - `--stalled`: show only gremlins whose liveness starts with `stalled:`.
-- `--kind local|gh`: filter to a specific gremlin kind (`local` from `/localgremlin`, `gh` from `/ghgremlin`). Composable with all other list flags.
+- `--kind local|gh|boss`: filter to a specific gremlin kind (`local` from `/localgremlin`, `gh` from `/ghgremlin`, `boss` from `/bossgremlin`). Composable with all other list flags.
 - `--since <duration>`: show only gremlins started within the given duration of now. Duration format: integer followed by `s`, `m`, `h`, or `d` (e.g. `30m`, `2h`, `1d`). Composable with all other list flags.
 - `--recent [N]`: show recently-finished (`dead:*`) gremlins started within N hours (default 24), including closed ones (marked with `[closed]`). Mutually exclusive with `--running`/`--stalled`. Composes with `--here`, `--dead`, and `--kind`.
 - `--watch [sec]`: refresh the view every `sec` seconds (default 2). Press Ctrl-C to stop cleanly. Mutually exclusive with the `<id-prefix>` positional argument. Composable with all listing flags and `--recent`.
 - `<id-prefix>`: substring to drill into a single gremlin — prints every field from `state.json` plus computed liveness, age, and local start time. Mutually exclusive with `--watch`.
 - `stop <id>`: send SIGTERM to a running (or stalled) gremlin's process group and wait up to 6 seconds for it to exit cleanly. If the process doesn't exit in time, marks it stopped manually. Use when you want to cancel an in-progress gremlin.
+- `resume <id>`: re-spawn an existing gremlin from the stage recorded in its `state.json`. No diagnosis step (unlike `rescue`) — use this when you stopped a gremlin manually and just want it to pick up where it left off, or when relaunching a finished gremlin against a different base.
 - `rescue <id>` (interactive, default): two-step diagnose-then-resume for a dead or stalled gremlin. **Diagnosis step (foreground):** reads the failure log and existing artifacts from the gremlin, then spawns a `claude -p` agent in a separate scratch working directory to diagnose and fix the underlying issue. Do not assume rescue-created or rescue-modified files will appear only in the gremlin's worktree; the diagnosis step may write in that scratch directory as part of the rescue process. The agent's prompt requires it to write a marker file at `<state-dir>/artifacts/rescue-<ts>-<pid>.done` (the `<pid>`-qualified suffix keeps back-to-back rescue invocations from colliding) containing `{"status": "fixed" | "transient" | "structural" | "unsalvageable", "summary": "..."}` before exiting — this is the agent → wrapper handoff signal, used by both interactive and headless rescue. The four verdicts are deliberately separate; the wrapper acts on each:
   - `fixed` → the agent edited `state.json` and/or files inside the gremlin's worktree to address the root cause; proceed to the relaunch step. Pipeline source under `~/.claude/skills/` is read-only for rescues (it lives outside the gremlin's worktree, so edits there can't land in the PR diff, and may also be overwritten by future syncs from its upstream source repo); fixes that belong there must come back as `structural` instead.
   - `transient` → no edits needed; the failure was a flake (network, tool timeout, retriable infra) or a fix has already landed elsewhere (in `main`, in a `~/.claude/skills/` file outside the gremlin's worktree) that the chain's pre-fix base ref doesn't see. Proceed to the relaunch step as a relaunch-only attempt.

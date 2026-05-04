@@ -5,10 +5,10 @@ argument-hint: [-r <ref>] [--plan <path|issue-ref> | --instructions <instruction
 allowed-tools: Bash("$HOME/.claude/.venv/bin/gremlins" launch:*)
 ---
 
-You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
+You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch gh`, which:
 
 1. Creates an isolated git worktree of the current project (detached HEAD).
-2. Invokes `gremlins gh` in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
+2. Runs the gh pipeline (plan → implement → PR open → review → address → wait-CI) in the isolated worktree, detached from this session — it survives Ctrl-C, shell exit, and Claude Code quitting.
 3. Records per-gremlin state under `~/.local/state/claude-gremlins/<gremlin-id>/` (or `$XDG_STATE_HOME/claude-gremlins/<gremlin-id>/` if `XDG_STATE_HOME` is set) — `state.json`, combined `log`, markers.
 4. Returns within ~1s.
 
@@ -35,10 +35,10 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 - task "refactor the auth middleware to drop the session-token caching layer" → `"drop auth middleware session caching"`
 - task "fix regression where empty PRs pass review" → `"fix empty-PR review regression"`
 
-Pass it as `--description "<phrase>"` before the `ghgremlin` kind argument:
+Pass it as `--description "<phrase>"` after the `gh` kind argument:
 
 ```
-"$HOME/.claude/.venv/bin/gremlins" launch --description "<phrase>" ghgremlin $ARGUMENTS
+"$HOME/.claude/.venv/bin/gremlins" launch gh --description "<phrase>" $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
@@ -77,13 +77,12 @@ Rules:
     neither) and missing / empty local file are caught in `gremlins launch`
     before the state directory is created.
   - **Dirty (failed state dir left behind):** issue-ref errors (unreachable
-    issue, unrecognized shape, empty issue body) fire in `ghgremlin.sh`
-    after the state dir has already been created. Use `/gremlins rm <id>`
-    to clean up.
+    issue, unrecognized shape, empty issue body) fire inside the gh
+    orchestrator after the state dir has already been created. Use
+    `/gremlins rm <id>` to clean up.
 
 ## Do not
 
 - Do not tail the log or block waiting for the gremlin to finish.
 - Do not pass extra flags the launcher doesn't accept.
-- Do not invoke the gremlin script (`ghgremlin.sh`) directly — always go through `gremlins launch`.
 - Do not run the individual skills (`/ghplan`, `/ghreview`, `/ghaddress`) inline — the backgrounded gremlin already chains them.
