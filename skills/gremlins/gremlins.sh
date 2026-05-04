@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exec "$HOME/.claude/.venv/bin/gremlins" fleet "$@"
+exec "$HOME/.claude/.venv/bin/gremlins" "$@"
