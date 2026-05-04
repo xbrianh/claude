@@ -3,7 +3,7 @@ name: ghreview
 description: Review a GitHub PR and post the review with inline comments. Takes a PR number or URL as argument.
 disable-model-invocation: true
 argument-hint: [pr-number-or-url]
-allowed-tools: Bash(gh *), Bash($HOME/.claude/.venv/bin/python -m gremlins.bail *), Read, Grep, Glob
+allowed-tools: Bash(gh *), Bash("$HOME/.claude/.venv/bin/python" -m gremlins.bail *), Read, Grep, Glob
 ---
 
 # Review a GitHub PR and post inline comments

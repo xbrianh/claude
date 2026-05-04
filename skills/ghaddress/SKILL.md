@@ -4,7 +4,7 @@ description: Address review comments on a GitHub PR. Fixes issues raised by revi
 argument-hint: <pr-reference> [instructions]
 context: fork
 agent: general-purpose
-allowed-tools: Bash(gh *) Bash($HOME/.claude/.venv/bin/python -m gremlins.bail *) Read Glob Grep Edit
+allowed-tools: Bash(gh *) Bash("$HOME/.claude/.venv/bin/python" -m gremlins.bail *) Read Glob Grep Edit
 ---
 
 You are addressing review comments on a GitHub pull request. Your job is to fix the issues raised by reviewers and reply to each comment thread.

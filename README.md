@@ -72,7 +72,7 @@ Both `/ghgremlin` and `/localgremlin` run **in the background**. Their SKILL.md 
 
 `/localgremlin` artifacts under `~/.local/state/claude-gremlins/<id>/artifacts/`: `plan.md`, `review-code-detail-<model>.md`. If a spec file is passed as the first positional argument, it is also copied there as `spec.md`.
 
-A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes `python -m gremlins.session_summary`, which reports running and newly-finished gremlins for the current project so you're notified the next time you open Claude Code in that tree. Closed state dirs older than 14 days are pruned on the next hook firing.
+A pair of hooks (`SessionStart` + `UserPromptSubmit`, wired in [`settings.json`](settings.json)) invokes `"$HOME/.claude/.venv/bin/python" -m gremlins.session_summary` (the venv interpreter, since `gremlins` is installed there), which reports running and newly-finished gremlins for the current project so you're notified the next time you open Claude Code in that tree. Closed state dirs older than 14 days are pruned on the next hook firing.
 
 ## Getting started
 
