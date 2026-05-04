@@ -2,7 +2,7 @@
 name: bossgremlin
 description: Run the end-to-end chained gremlin workflow in the background by invoking `gremlins launch`. Chains multiple child gremlins serially: the handoff agent decides what to implement next, each child runs plan→implement→review→address, and the boss lands each one before proceeding. The launcher returns immediately; you'll be notified when the chain finishes.
 argument-hint: --plan <spec-path|issue-ref> --chain-kind local|gh [--model <model>]
-allowed-tools: Bash(gremlins launch:*)
+allowed-tools: Bash("$HOME/.claude/.venv/bin/gremlins" launch:*)
 ---
 
 You are running the `bossgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
@@ -27,7 +27,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `bossgremlin` kind argument:
 
 ```
-gremlins launch --description "<phrase>" bossgremlin --plan <spec-path|issue-ref> --chain-kind <local|gh> [--model <model>]
+"$HOME/.claude/.venv/bin/gremlins" launch --description "<phrase>" bossgremlin --plan <spec-path|issue-ref> --chain-kind <local|gh> [--model <model>]
 ```
 
 Flags:

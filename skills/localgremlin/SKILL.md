@@ -2,7 +2,7 @@
 name: localgremlin
 description: Run the end-to-end plan → implement → review-code → address-code → test workflow in the background by invoking `gremlins launch`. Plan and code review land in `~/.local/state/claude-gremlins/<gremlin-id>/artifacts/` alongside the run log (kept off the product branch); a single detail review is produced. The launcher returns immediately; you'll be notified when the gremlin finishes.
 argument-hint: [-p <plan-model>] [-i <impl-model>] [-x <address-model>] [-b <detail-review-model>] [--test "<command>"] [--test-max-attempts <n>] [-t <test-fix-model>] [--plan <path> | --instructions <instructions>]
-allowed-tools: Bash(gremlins launch:*)
+allowed-tools: Bash("$HOME/.claude/.venv/bin/gremlins" launch:*)
 ---
 
 You are running the `localgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
@@ -45,7 +45,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `localgremlin` kind argument:
 
 ```
-gremlins launch --description "<phrase>" localgremlin $ARGUMENTS
+"$HOME/.claude/.venv/bin/gremlins" launch --description "<phrase>" localgremlin $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.

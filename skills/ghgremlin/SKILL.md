@@ -2,7 +2,7 @@
 name: ghgremlin
 description: Run the end-to-end plan → implement → review → address workflow in the background by invoking `gremlins launch`. Creates a GitHub issue, opens a PR implementing it, collects Copilot + Claude reviews, and addresses them. The launcher returns immediately; you'll be notified when the gremlin finishes.
 argument-hint: [-r <ref>] [--plan <path|issue-ref> | --instructions <instructions>]
-allowed-tools: Bash(gremlins launch:*)
+allowed-tools: Bash("$HOME/.claude/.venv/bin/gremlins" launch:*)
 ---
 
 You are running the `ghgremlin` workflow **in the background**. The skill is a thin wrapper over `gremlins launch`, which:
@@ -38,7 +38,7 @@ Before invoking the launcher, compose a short (≤60 characters) human-readable 
 Pass it as `--description "<phrase>"` before the `ghgremlin` kind argument:
 
 ```
-gremlins launch --description "<phrase>" ghgremlin $ARGUMENTS
+"$HOME/.claude/.venv/bin/gremlins" launch --description "<phrase>" ghgremlin $ARGUMENTS
 ```
 
 If $ARGUMENTS is so terse that a distilled phrase wouldn't add anything, you may omit `--description` — the launcher falls back to the first 60 chars of the instructions.
