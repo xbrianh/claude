@@ -56,26 +56,6 @@
           }
         ]
       }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$HOME/.claude/.venv/bin/python\" -m gremlins.session_summary"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$HOME/.claude/.venv/bin/python\" -m gremlins.session_summary"
-          }
-        ]
-      }
     ]
   },
   "enabledPlugins": {
@@ -83,5 +63,13 @@
     "github@claude-plugins-official": true,
     "pyright-lsp@claude-plugins-official": true
   },
-  "skipAutoPermissionPrompt": true
+  "effortLevel": "medium",
+  "voice": {
+    "enabled": false,
+    "mode": "hold"
+  },
+  "editorMode": "vim",
+  "skipAutoPermissionPrompt": true,
+  "voiceEnabled": false,
+  "agentPushNotifEnabled": true
 }
