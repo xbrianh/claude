@@ -1,0 +1,16 @@
+name: local-terse
+default_client: xai:grok-4
+base_ref: current
+prompt_dir: prompts
+
+prompts:
+  code-style: gremlins:code_style.md
+  terse: terse_no_backward.md
+  verify: [gremlins:verify_fix.md, gremlins:bail_section_fix.md]
+
+stages:
+  - { name: plan,         type: plan,         prompt: [code-style, gremlins:plan.md, terse] }
+  - { name: implement,    type: implement,    prompt: [code-style, gremlins:implement_local.md, terse] }
+  - { name: review-code,  type: review-code,  prompt: [code-style, gremlins:review/detail.md, terse] }
+  - { name: address-code, type: address-code, prompt: [code-style, gremlins:address.md, gremlins:bail_section.md, terse] }
+  - { name: verify,       type: verify,       prompt: verify }

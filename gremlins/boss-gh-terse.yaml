@@ -1,0 +1,22 @@
+name: boss-gh-terse
+default_client: claude:sonnet
+prompt_dir: prompts
+
+prompts:
+  code-style: gremlins:code_style.md
+  terse: terse_no_backward.md
+
+stages:
+  - { name: plan, type: plan, prompt: [code-style, gremlins:plan_gh.md, terse] }
+
+  - name: chain
+    type: loop
+    options:
+      max_iterations: 15
+    body:
+      - { name: handoff, type: handoff }
+      - { include: gh-terse }
+
+  - { name: review-chain,  type: review-code,  prompt: [code-style, gremlins:review/chain.md] }
+  - { name: address-chain, type: address-code, prompt: [code-style, gremlins:address.md, gremlins:bail_section.md] }
+  - { name: ci-gate,       type: github-wait-ci, prompt: [gremlins:ci_fix.md, gremlins:bail_section_fix.md] }
